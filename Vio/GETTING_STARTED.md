@@ -259,20 +259,137 @@ active, root login off, fail2ban running).
 
 ---
 
-## Phase 6 — STOP HERE and share results
+## Phase 6 — Install Vio skills (10 minutes)
 
-Don't install Vio yet. Send me:
-1. The output of `/tmp/vio-discovery-2.txt`.
-2. Confirmation: do you have a domain name pointed at the VPS IP?
-   (e.g. an A record `vio.example.com → {{YOUR_VPS_IP}}`.)
-3. Your preferred LLM provider:
-   - **Anthropic (Claude)** — recommended, I can tune prompts best
-   - **OpenAI** — also fine
-   - **Local model via Ollama** — only if you picked KVM 4 (16 GB)
+This phase is already done if you ran `install-vio.sh`. Skip to Phase 7
+if Vio is already responding at your openclaw URL.
 
-With those three I'll give you the exact Phase 7 install plan (Docker
-or systemd, Caddy reverse proxy, OpenWebUI or LibreChat as the
-front-end, and the memory store from `MEMORY_ARCHITECTURE.md`).
+If starting fresh:
+
+```
+curl -fsSL https://raw.githubusercontent.com/Mazin129/Mazin/claude/enhance-vio-agent-ny2BM/Vio/scripts/install-vio.sh -o /tmp/install-vio.sh
+sudo bash /tmp/install-vio.sh
+```
+
+Type `apply` when prompted. The script clones the repo, links skills,
+updates the openclaw config, and restarts the container.
+
+Verify at: https://openclaw-5sds.srv1671720.hstgr.cloud/
+
+Test: ask Vio "what is your management subnet?" — it should answer
+`192.168.100.0/24` from memory.
+
+---
+
+## Phase 7 — Security hardening (20 minutes)
+
+This phase covers three important items. Run them now.
+
+### 7a — Rotate leaked device identity
+
+The openclaw device identity files were accidentally exposed. Delete
+them so openclaw regenerates fresh credentials:
+
+```
+curl -fsSL https://raw.githubusercontent.com/Mazin129/Mazin/claude/enhance-vio-agent-ny2BM/Vio/scripts/harden-vps.sh -o /tmp/harden-vps.sh
+sudo bash /tmp/harden-vps.sh identity
+```
+
+Type `apply` when prompted. openclaw will restart and pair with new
+credentials. Log in at your openclaw URL and confirm it still works.
+
+### 7b — SSH key login (stop using passwords)
+
+**In MobaXterm (on your Windows PC):**
+
+1. Click **Tools** → **MobaKeyGen**
+2. Click **Generate**, move your mouse to create randomness
+3. Key type: Ed25519 (preferred) or RSA 4096
+4. Set a **Key passphrase** — write it down
+5. Click **Save private key** → save as `mazin-vps.ppk`
+6. **Copy** the text in the "Public key for pasting into OpenSSH" box
+   at the top (starts with `ssh-ed25519 …`)
+
+**On the VPS terminal:**
+
+```
+sudo bash /tmp/harden-vps.sh sshkey
+```
+
+When prompted, paste your public key (the line you copied from
+MobaKeyGen). Then the script will ask you to confirm it works before
+disabling password login.
+
+**⚠ Always test key login in a NEW MobaXterm tab before closing the
+password-based tab. Locking yourself out requires using Hostinger's
+browser console to fix.**
+
+### 7c — Fix server timezone
+
+```
+sudo bash /tmp/harden-vps.sh timezone
+```
+
+Type `apply`. This sets the server clock to Asia/Riyadh (UTC+3) so
+cron jobs and logs show the correct local time.
+
+### 7d — Rotate external API keys
+
+⚠ **Critical**: The following keys were accidentally shown in a
+terminal paste earlier in this session. Rotate them immediately:
+
+| Service | Where to rotate |
+|---------|-----------------|
+| **OpenAI** | https://platform.openai.com → API keys → Delete old → Create new |
+| **Gemini** | https://aistudio.google.com → Get API key → Delete old |
+| **Telegram Bot** | Talk to @BotFather → `/revoke` → get new token |
+| **Oxylabs** | Oxylabs dashboard → Credentials → Reset |
+| **Nexos** | Nexos dashboard → API keys → Regenerate |
+
+After rotating, update each key in the Hostinger hPanel:
+`VPS → Manage → Environment Variables` (or `docker-compose.yaml` env
+section) — then restart the openclaw container:
+
+```
+sudo docker restart openclaw-5sds-openclaw-1
+```
+
+---
+
+## Phase 8 — Proactive morning brief (10 minutes)
+
+Vio can send you a daily Telegram message with open follow-ups.
+
+Requirements:
+1. A Telegram bot token (ask @BotFather for `/newbot` — keep the new
+   token after rotating the old one in Phase 7d)
+2. Your personal Telegram Chat ID (send `/start` to your bot, then
+   visit `https://api.telegram.org/bot{{TOKEN}}/getUpdates` to find
+   your `chat.id`)
+
+Then run:
+
+```
+sudo TELEGRAM_BOT_TOKEN={{YOUR_NEW_TOKEN}} TELEGRAM_CHAT_ID={{YOUR_CHAT_ID}} bash /tmp/setup-cron.sh
+```
+
+Or download the script first:
+
+```
+curl -fsSL https://raw.githubusercontent.com/Mazin129/Mazin/claude/enhance-vio-agent-ny2BM/Vio/scripts/setup-cron.sh -o /tmp/setup-cron.sh
+sudo bash /tmp/setup-cron.sh
+```
+
+Type `apply` when prompted. This installs three cron jobs:
+- Daily 07:00 Arabia time — morning brief to Telegram
+- Every Friday 22:00 — memory file cleanup
+- Daily 03:00 — auto-pull latest Vio skills from GitHub
+
+Test the morning brief immediately:
+```
+sudo bash /data/.openclaw/scripts/morning-brief.sh
+```
+Check your Telegram for the message.
 
 ---
 
