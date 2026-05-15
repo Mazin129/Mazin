@@ -1,183 +1,209 @@
-# Vio — Long-term Memory
+# Vio — Long-term Memory (Node.js)
 
-> Load this skill whenever you need to **recall** what you've stored
-> about Mazin (his network, his family, his work, his preferences) or
-> **store** something new that should outlive this session.
+> Load this skill whenever you need to **recall** what you know about
+> Mazin (network, family, work, preferences) or **store** something new
+> that should survive across sessions.
 
 ---
 
-## Where memory lives
-
-Single SQLite file:
+## Memory file location
 
 ```
-/data/.openclaw/workspace/vio-memory/memory.db
+/data/.openclaw/workspace/vio-memory/memory.json
 ```
 
-If the file does not exist yet, **create it on first use**:
+Node.js 24 is always available. Use it for all memory operations — no
+other tools required.
+
+---
+
+## Read memory before answering
+
+At the start of every non-trivial turn, check what's relevant:
+
+### Read all active facts
 
 ```bash
-mkdir -p /data/.openclaw/workspace/vio-memory
-sqlite3 /data/.openclaw/workspace/vio-memory/memory.db <<'SQL'
-CREATE TABLE IF NOT EXISTS facts (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  subject   TEXT NOT NULL,
-  predicate TEXT NOT NULL,
-  object    TEXT NOT NULL,
-  tags      TEXT NOT NULL,
-  confidence REAL NOT NULL DEFAULT 0.8,
-  superseded_by INTEGER,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  expires_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_facts_subject ON facts(subject);
-CREATE INDEX IF NOT EXISTS idx_facts_tags ON facts(tags);
-CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(superseded_by) WHERE superseded_by IS NULL;
-
-CREATE TABLE IF NOT EXISTS followups (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  description TEXT NOT NULL,
-  due_at TEXT,
-  done_at TEXT,
-  priority INTEGER NOT NULL DEFAULT 3,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_followups_open ON followups(done_at, due_at);
-SQL
-chmod 600 /data/.openclaw/workspace/vio-memory/memory.db
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+try {
+  const m=JSON.parse(fs.readFileSync(p,'utf8'));
+  const active=m.facts.filter(f=>!f.supersededBy);
+  console.log(JSON.stringify(active,null,2));
+} catch(e) { console.log('memory empty'); }
+"
 ```
 
-## Reading before answering
-
-At the start of every non-trivial turn, recall what's relevant:
+### Read facts filtered by tag
 
 ```bash
-# By tag (most common path)
-sqlite3 -separator '|' /data/.openclaw/workspace/vio-memory/memory.db \
-  "SELECT id, subject, predicate, object, confidence
-   FROM facts
-   WHERE superseded_by IS NULL
-     AND tags LIKE '%TAG%'
-   ORDER BY created_at DESC LIMIT 25;"
-
-# By keyword in the object field
-sqlite3 -separator '|' /data/.openclaw/workspace/vio-memory/memory.db \
-  "SELECT id, subject, predicate, object
-   FROM facts
-   WHERE superseded_by IS NULL
-     AND object LIKE '%KEYWORD%'
-   ORDER BY created_at DESC LIMIT 25;"
-
-# Open follow-ups due this week
-sqlite3 -separator '|' /data/.openclaw/workspace/vio-memory/memory.db \
-  "SELECT id, priority, description, due_at
-   FROM followups
-   WHERE done_at IS NULL
-     AND (due_at IS NULL OR due_at <= datetime('now','+7 days'))
-   ORDER BY priority, due_at LIMIT 10;"
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+try {
+  const m=JSON.parse(fs.readFileSync(p,'utf8'));
+  m.facts
+    .filter(f=>!f.supersededBy && f.tags.includes('TAG'))
+    .forEach(f=>console.log(f.subject, '|', f.predicate, '|', f.object));
+} catch(e) { console.log('nothing found'); }
+"
 ```
 
-Inject what you find into your reasoning silently. Only mention it to
-Mazin if he asks "what do you know about X" or if the recall is the
-reason you're recommending something.
+Replace `TAG` with one of: `network`, `family`, `study`, `work`,
+`preference`, `incident`.
 
-## Writing memory
-
-A **good fact** looks like (subject, predicate, object):
-
-✅ `('Mazin', 'studies', 'NSE7 Enterprise FW')` tags=`study,work`
-✅ `('home_network', 'mgmt_subnet', '10.10.17.0/24')` tags=`network`
-✅ `('Mazin', 'prefers_language', 'ar')` tags=`preference`
-✅ `('bill:internet', 'due_day', '12')` tags=`family,bill`
-
-A **bad fact** (don't write these):
-
-❌ `('Mazin','said','hi')` — noise
-❌ `('Mazin','ip','82.x.x.x')` — PII, stale within hours
-❌ `('child:<name>','condition','asthma')` — medical, child PII
-
-Write with:
+### Read open follow-ups
 
 ```bash
-sqlite3 /data/.openclaw/workspace/vio-memory/memory.db \
-  "INSERT INTO facts (subject, predicate, object, tags, confidence)
-   VALUES ('SUBJECT','PREDICATE','OBJECT','TAG1,TAG2',0.9);"
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+try {
+  const m=JSON.parse(fs.readFileSync(p,'utf8'));
+  const open=m.followups.filter(f=>!f.doneAt);
+  open.forEach(f=>console.log('[P'+f.priority+']',f.description,'due:',f.dueAt||'anytime'));
+} catch(e) { console.log('no followups'); }
+"
 ```
 
-**Supersede** an old fact rather than deleting it:
+---
+
+## Write a new fact
+
+Use this when Mazin states a new fact, makes a decision, or expresses a
+preference. Replace the SUBJECT/PREDICATE/OBJECT/TAGS values:
 
 ```bash
-sqlite3 /data/.openclaw/workspace/vio-memory/memory.db <<'SQL'
-INSERT INTO facts (subject, predicate, object, tags, confidence)
-  VALUES ('SUBJECT','PREDICATE','NEW_OBJECT','TAG1,TAG2',0.9);
-UPDATE facts SET superseded_by = last_insert_rowid()
-  WHERE id = OLD_ID_HERE;
-SQL
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+let m={facts:[],followups:[]};
+try{m=JSON.parse(fs.readFileSync(p,'utf8'))}catch(e){}
+const fact={
+  id: Date.now(),
+  subject: 'SUBJECT',
+  predicate: 'PREDICATE',
+  object: 'OBJECT',
+  tags: 'TAG1,TAG2',
+  confidence: 0.9,
+  created: new Date().toISOString()
+};
+m.facts.push(fact);
+fs.writeFileSync(p,JSON.stringify(m,null,2));
+console.log('saved:', fact.subject, fact.predicate, fact.object);
+"
 ```
 
-## Follow-ups
+Good fact examples:
 
-Add a follow-up when Mazin says "remind me", "next week", "ask me again
-later", or when you make a promise:
+| subject | predicate | object | tags |
+|---------|-----------|--------|------|
+| `home_network` | `mgmt_subnet` | `192.168.100.0/24` | `network` |
+| `Mazin` | `studies` | `NSE7 Enterprise FW` | `study,work` |
+| `Mazin` | `prefers_language` | `ar` | `preference` |
+| `bill:internet` | `due_day` | `12` | `family,bill` |
+
+Bad facts — do NOT write these:
+- Passwords, MFA codes, full card numbers, government IDs
+- Exact home address
+- Child medical diagnoses
+- API keys or tokens
+
+## Update (supersede) an existing fact
+
+When a fact changes (e.g. subnet changes), supersede the old one:
 
 ```bash
-sqlite3 /data/.openclaw/workspace/vio-memory/memory.db \
-  "INSERT INTO followups (description, due_at, priority)
-   VALUES ('DESCRIPTION', datetime('now','+N days'), PRIORITY);"
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+let m=JSON.parse(fs.readFileSync(p,'utf8'));
+const newFact={
+  id: Date.now(),
+  subject: 'SUBJECT',
+  predicate: 'PREDICATE',
+  object: 'NEW_OBJECT',
+  tags: 'TAGS',
+  confidence: 0.9,
+  created: new Date().toISOString()
+};
+const old=m.facts.find(f=>!f.supersededBy && f.subject==='SUBJECT' && f.predicate==='PREDICATE');
+if(old) old.supersededBy=newFact.id;
+m.facts.push(newFact);
+fs.writeFileSync(p,JSON.stringify(m,null,2));
+console.log('updated:', newFact.object);
+"
 ```
 
-Priority: 1 (now) … 5 (someday).
+## Add a follow-up
 
-Close one:
+When Mazin says "remind me", "ask me later", or you make a promise:
+
 ```bash
-sqlite3 /data/.openclaw/workspace/vio-memory/memory.db \
-  "UPDATE followups SET done_at = datetime('now') WHERE id = ID;"
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+let m=JSON.parse(fs.readFileSync(p,'utf8'));
+m.followups.push({
+  id: Date.now(),
+  description: 'DESCRIPTION',
+  dueAt: 'YYYY-MM-DD',
+  priority: 3,
+  created: new Date().toISOString()
+});
+fs.writeFileSync(p,JSON.stringify(m,null,2));
+console.log('followup added');
+"
 ```
 
-## Never store
+Priority: 1=urgent, 3=normal, 5=someday.
 
-- Passwords, MFA codes, full card numbers, government IDs.
-- Plaintext private keys.
-- Exact home address.
-- Child medical diagnoses.
-- API keys or service tokens — those go in environment variables, not
-  here.
+## Close a follow-up
+
+```bash
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+let m=JSON.parse(fs.readFileSync(p,'utf8'));
+const f=m.followups.find(f=>f.id===FOLLOWUP_ID);
+if(f) f.doneAt=new Date().toISOString();
+fs.writeFileSync(p,JSON.stringify(m,null,2));
+console.log('closed');
+"
+```
+
+## Tag taxonomy
+
+```
+network                      home/work network facts
+network,fortigate
+study,fortinet,nse6
+study,fortinet,nse7
+study,weakness               topic missed twice
+family
+family,child:<name>
+family,bill
+family,appointment
+family,travel
+work
+preference
+incident
+```
 
 ## Weekly hygiene (run every Friday)
 
 ```bash
-sqlite3 /data/.openclaw/workspace/vio-memory/memory.db <<'SQL'
--- Mark low-confidence aging facts for review
-UPDATE facts SET expires_at = datetime('now','+7 days')
-WHERE confidence < 0.5
-  AND created_at < datetime('now','-60 days')
-  AND expires_at IS NULL;
-
--- Hard-delete what expired
-DELETE FROM facts WHERE expires_at IS NOT NULL
-  AND expires_at < datetime('now');
-
--- Compact superseded chains older than 30 days
-DELETE FROM facts WHERE superseded_by IS NOT NULL
-  AND created_at < datetime('now','-30 days');
-SQL
-```
-
-## Tag taxonomy (use these, don't invent new ones casually)
-
-```
-network                      home/work network facts
-network,fortigate            FortiGate-specific
-network,fortiswitch
-network,fortiap
-study,fortinet,nse6          NSE6 study
-study,fortinet,nse7          NSE7 study
-study,weakness               topic missed twice
-family                       family-scoped
-family,spouse / family,child:<name> / family,parent:<name>
-family,bill / family,appointment / family,travel
-work                         employer/customer matters
-preference                   Mazin's stated likes/dislikes
-incident                     SOC/incident notes
-followup                     points to a followups row
+node -e "
+const fs=require('fs');
+const p='/data/.openclaw/workspace/vio-memory/memory.json';
+let m=JSON.parse(fs.readFileSync(p,'utf8'));
+const cutoff=new Date(Date.now()-30*24*60*60*1000).toISOString();
+// Remove superseded facts older than 30 days
+m.facts=m.facts.filter(f=>!(f.supersededBy && f.created<cutoff));
+// Remove completed followups older than 30 days
+m.followups=m.followups.filter(f=>!(f.doneAt && f.doneAt<cutoff));
+fs.writeFileSync(p,JSON.stringify(m,null,2));
+console.log('cleaned. facts:',m.facts.length,'followups:',m.followups.length);
+"
 ```
