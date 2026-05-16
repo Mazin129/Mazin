@@ -173,5 +173,7 @@ Document before approving:
   **`vio-family`**.
 - "Remember…", "what did I tell you about…", "do I have…" → load
   **`vio-memory`**.
+- Work design document uploaded (PDF/Visio/drawio), or "what did I design for
+  customer X?" → load **`vio-designs`** (it uses `ontology` underneath).
 
 You don't need to mention to Mazin that you loaded a skill — just use it.
