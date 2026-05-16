@@ -86,17 +86,35 @@ Ask Mazin to confirm or correct before committing.
 
 ## Workflow when Mazin asks about a past project
 
+### IMPORTANT: always cd to the workspace first
+
+The ontology script enforces path safety — it rejects paths outside the
+current working directory. **Always `cd /data/.openclaw/workspace`** before
+running any ontology query, and use the relative graph path
+`memory/ontology/graph.jsonl`.
+
 ### Lookup commands
 
 ```bash
+cd /data/.openclaw/workspace
+
 # All projects
-python3 .../ontology.py list --type Project
+python3 /data/.openclaw/skills/ontology/scripts/ontology.py list \
+  --type Project --graph memory/ontology/graph.jsonl
 
-# All devices in a project
-python3 .../ontology.py query --type Device --where '{"project":"<project-key>"}'
+# All entities linked to a project (find project id first, then query)
+PROJ_ID=$(python3 /data/.openclaw/skills/ontology/scripts/ontology.py query \
+  --type Project --where '{"name":"EALZ"}' --graph memory/ontology/graph.jsonl \
+  | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
 
-# Or via relation
-python3 .../ontology.py related --id <project-id> --rel belongs_to --dir incoming
+python3 /data/.openclaw/skills/ontology/scripts/ontology.py related \
+  --id "$PROJ_ID" --rel belongs_to --dir incoming \
+  --graph memory/ontology/graph.jsonl
+
+# All FortiGate devices across all projects
+python3 /data/.openclaw/skills/ontology/scripts/ontology.py query \
+  --type Device --where '{"vendor":"Fortinet"}' \
+  --graph memory/ontology/graph.jsonl
 ```
 
 ### Useful queries Mazin will ask
