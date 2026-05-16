@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -422,6 +423,11 @@ def append_schema(schema_path: str, incoming: dict) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Ontology graph operations")
+    parser.add_argument(
+        "--workspace", "-W",
+        default=None,
+        help="Workspace root for path safety (default: $ONTOLOGY_WORKSPACE or CWD)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     
     # Create
@@ -485,7 +491,10 @@ def main():
     schema_p.add_argument("--file", "-f", help="Schema fragment file (YAML or JSON)")
     
     args = parser.parse_args()
-    workspace_root = Path.cwd().resolve()
+
+    # Resolve workspace root: --workspace flag > $ONTOLOGY_WORKSPACE env var > CWD
+    _ws_override = args.workspace or os.environ.get("ONTOLOGY_WORKSPACE")
+    workspace_root = Path(_ws_override).resolve() if _ws_override else Path.cwd().resolve()
 
     if hasattr(args, "graph"):
         args.graph = str(

@@ -42,9 +42,11 @@ If `pdftotext` is missing, install: `brew install poppler` (inside container).
 ### 3. Create the Project entity (via ontology skill)
 
 ```bash
-python3 /data/.openclaw/skills/ontology/scripts/ontology.py create \
-  --type Project \
-  --props '{"name":"<project-key>","status":"active","domain":"network","sensitivity":"customer"}'
+python3 /data/.openclaw/skills/ontology/scripts/ontology.py \
+  --workspace /data/.openclaw/workspace \
+  create --type Project \
+  --props '{"name":"<project-key>","status":"active","domain":"network","sensitivity":"customer"}' \
+  --graph memory/ontology/graph.jsonl
 ```
 
 Save the returned `id` — every entity below links to it.
@@ -63,11 +65,14 @@ Save the returned `id` — every entity below links to it.
 | WAN link | `Service` | service_type=wan, isp, bandwidth |
 | Site / Location | `Location` | name, address (only if Mazin says OK) |
 
-For each entity, create then relate to project:
+For each entity, create then relate to project (always pass `--workspace`):
 
 ```bash
-ID=$(python3 .../ontology.py create --type Device --props '{...}' | jq -r '.id')
-python3 .../ontology.py relate --from "$ID" --rel "belongs_to" --to "<project-id>"
+ONT="python3 /data/.openclaw/skills/ontology/scripts/ontology.py --workspace /data/.openclaw/workspace"
+GRAPH="--graph memory/ontology/graph.jsonl"
+
+ID=$($ONT create --type Device --props '{...}' $GRAPH | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+$ONT relate --from "$ID" --rel "belongs_to" --to "<project-id>" $GRAPH
 ```
 
 ### 5. Summarize and confirm
@@ -86,34 +91,39 @@ Ask Mazin to confirm or correct before committing.
 
 ## Workflow when Mazin asks about a past project
 
-### IMPORTANT: always cd to the workspace first
-
-The ontology script enforces path safety — it rejects paths outside the
-current working directory. **Always `cd /data/.openclaw/workspace`** before
-running any ontology query, and use the relative graph path
-`memory/ontology/graph.jsonl`.
-
 ### Lookup commands
 
+Always pass `--workspace /data/.openclaw/workspace` so the script never
+depends on the shell's current working directory.
+
 ```bash
-cd /data/.openclaw/workspace
+ONT="python3 /data/.openclaw/skills/ontology/scripts/ontology.py \
+  --workspace /data/.openclaw/workspace"
+GRAPH="--graph memory/ontology/graph.jsonl"
 
 # All projects
-python3 /data/.openclaw/skills/ontology/scripts/ontology.py list \
-  --type Project --graph memory/ontology/graph.jsonl
+$ONT list --type Project $GRAPH
 
-# All entities linked to a project (find project id first, then query)
-PROJ_ID=$(python3 /data/.openclaw/skills/ontology/scripts/ontology.py query \
-  --type Project --where '{"name":"EALZ"}' --graph memory/ontology/graph.jsonl \
-  | python3 -c "import json,sys; print(json.load(sys.stdin)[0]['id'])")
+# All entities linked to a project
+PROJ_ID=$($ONT query --type Project --where '{"name":"EALZ"}' $GRAPH \
+  | python3 -c "import json,sys; data=json.load(sys.stdin); print(data[0]['id']) if data else print('')")
 
-python3 /data/.openclaw/skills/ontology/scripts/ontology.py related \
-  --id "$PROJ_ID" --rel belongs_to --dir incoming \
-  --graph memory/ontology/graph.jsonl
+$ONT related --id "$PROJ_ID" --rel belongs_to --dir incoming $GRAPH
 
-# All FortiGate devices across all projects
-python3 /data/.openclaw/skills/ontology/scripts/ontology.py query \
-  --type Device --where '{"vendor":"Fortinet"}' \
+# Devices by type / model
+$ONT query --type Device --where '{"role":"firewall"}' $GRAPH
+$ONT query --type Device --where '{"vendor":"Fortinet"}' $GRAPH
+$ONT query --type Device --where '{"model":"FortiGate-100F"}' $GRAPH
+
+# All subnets for a project (after getting PROJ_ID)
+$ONT related --id "$PROJ_ID" --rel belongs_to --dir incoming $GRAPH
+```
+
+If the shell alias syntax fails, use the full form:
+```bash
+python3 /data/.openclaw/skills/ontology/scripts/ontology.py \
+  --workspace /data/.openclaw/workspace \
+  query --type Device --where '{"role":"firewall"}' \
   --graph memory/ontology/graph.jsonl
 ```
 
