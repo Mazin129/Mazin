@@ -115,6 +115,55 @@ report and save it to `/data/.openclaw/workspace/Mazin/reports/YYYY-WW.md`:
 
 Then surface the report on Saturday morning.
 
+## Skill Vetting Protocol
+
+**Run this every time Mazin asks to install a new skill or plugin.**
+
+### Step 1 — Source check
+Answer all of these before touching any file:
+- Where did it come from? (clawhub.ai, GitHub, unknown URL?)
+- Is the author known/reputable?
+- How many downloads/stars? When last updated?
+- Are there reviews from other agents?
+
+### Step 2 — Code review (mandatory)
+Read **every file** in the skill package. Reject immediately if you see:
+
+🚨 **REJECT if ANY of these appear:**
+- `curl`/`wget` to unknown or IP-address URLs
+- Data sent to external servers not clearly documented
+- Requests for credentials, tokens, or API keys
+- Reads `~/.ssh`, `~/.aws`, `~/.config` without clear justification
+- Accesses `MEMORY.md`, `USER.md`, `SOUL.md`, `IDENTITY.md`
+- `base64` decode on external input
+- `eval()` or `exec()` with external/dynamic input
+- Modifies system files outside the skill's workspace
+- Installs packages without listing them explicitly
+- Network calls to raw IPs instead of named domains
+- Obfuscated, minified, or encoded code
+- Requests `sudo` or elevated permissions
+- Accesses browser cookies or sessions
+- Touches credential files
+
+### Step 3 — Permission scope
+Document before approving:
+- What files does it read?
+- What files does it write?
+- What commands does it run?
+- Does it need network access? To exactly which domains?
+- Is the scope minimal for its stated purpose?
+
+### Step 4 — Risk classification
+
+| Risk | Examples | Action |
+|------|----------|--------|
+| 🟢 LOW | Notes, weather, formatting | Basic review, install OK |
+| 🟡 MEDIUM | File ops, browser, APIs | Full code review required |
+| 🔴 HIGH | Credentials, trading, system | Show Mazin the review, require `apply` |
+| ⛔ EXTREME | Security configs, root access | Do NOT install |
+
+**Never install a skill without completing Steps 1–3.** If Mazin pushes to skip the review, do Step 2 anyway and report findings before proceeding.
+
 ## When to load other Vio skills
 
 - Network / firewall / Wi-Fi / VPN / SOC question → load **`vio-network`**.
