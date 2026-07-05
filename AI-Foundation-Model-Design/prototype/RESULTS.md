@@ -1,4 +1,14 @@
-# Prototype Results — Selective Oscillatory Memory (SOM)
+# Prototype Results
+
+Two runnable, laptop-scale prototypes back the blueprint's core claims. Both are
+pure NumPy with hand-derived gradients.
+
+1. [Selective Oscillatory Memory](#1-selective-oscillatory-memory-som) — physics-grounded long-range memory (§1.2).
+2. [Predictive Coding](#2-predictive-coding-brain-native-learning-no-backprop) — brain-native local learning that matches backprop (§5.2).
+
+---
+
+# 1. Selective Oscillatory Memory (SOM)
 
 **A physics-grounded sequence mixer, built from scratch and run on a laptop-class CPU.**
 
@@ -106,3 +116,71 @@ laptop-runnable) follow the ablation-first plan (§4.5):
 2. Stack layers + a token embedding → char-level language modeling on a small corpus;
    compare bits-per-char and long-range recall vs. an equal-size Transformer/RNN.
 3. Add the sparse-global-attention layer (1-in-6) for exact random-access recall (§1.2).
+
+---
+
+# 2. Predictive Coding (brain-native learning, NO backprop)
+
+Backs the brain-native redesign (section 5.2). The single deepest difference
+between the brain and today's AI is that the brain **cannot** run
+backpropagation (no global loss signal, no weight transport, no stored reverse
+pass). It instead learns by **predictive coding** — every layer predicts the one
+below, only prediction *error* is transmitted, the network settles into minimum
+"free energy," and each synapse updates from **only locally available signals**.
+This prototype shows that local scheme matching backprop.
+
+Run it:
+
+```bash
+python3 predictive_coding_brain.py       # ~1 min on CPU
+```
+
+### The mechanism (physics/math)
+
+```
+mu[l]  = f(x[l-1]) W[l] + b[l]        err[l] = x[l] - mu[l]
+F      = 0.5 * sum_l ||err[l]||^2     (free energy = variational bound on surprise)
+infer:   dx[l] ~ -( err[l] - f'(x[l]) . (err[l+1] W[l+1]^T) )   (perception = settle)
+learn:   dW[l] ~ f(x[l-1])^T err[l]    db[l] ~ mean(err[l])     (LOCAL, no backprop)
+```
+
+`dW[l]` uses only the pre-synaptic activity `f(x[l-1])` and the post-synaptic
+error `err[l]` — both physically present at the synapse. No backward pass, no
+weight transport.
+
+### Result — nonlinear classification (inner disk vs outer ring, [2,32,32,2])
+
+| Learner | Test accuracy | Signal used |
+|---|---|---|
+| **Predictive coding (local only)** | **1.000** | local pre-activity x local post-error |
+| Backprop MLP (same size) | 1.000 | global backward pass + weight transport |
+
+Local learning **matches** backprop — the central claim (Song et al. 2020;
+Whittington & Bogacz 2017), reproduced from scratch.
+
+### Result — perception as energy minimization
+
+During a single inference, free energy falls **~17x monotonically** as the
+network settles (0.279 -> 0.016 over 30 steps). Perception literally *is*
+gradient descent on surprise — the physics of the Free-Energy Principle, on
+screen.
+
+### Honest limitations
+
+- Toy scale (2 hidden layers, synthetic 2D task). It demonstrates that the local
+  rule *works and matches backprop*, not that it scales to LLMs (an open research
+  question, though results up to ImageNet-scale exist in the literature).
+- Weights are tied between the feedforward warm-start and the generative model, a
+  standard simplification.
+- The core cell is from the published PC literature; the contribution here is a
+  clean from-scratch, auditable implementation plus the direct backprop
+  comparison, as the section-5.2 evidence in the brain-native redesign.
+
+### Next steps (still laptop-scale)
+
+1. Swap the rate units for **spiking LIF** neurons (5.1) and measure event-driven
+   sparsity / energy proxy (spikes per inference).
+2. Add **neuromodulatory** gain/plasticity control (5.5); show faster adaptation
+   under distribution shift.
+3. Stack into a small sequence model and compare bits-per-char to a backprop
+   baseline — the real test of whether local learning holds at depth.
