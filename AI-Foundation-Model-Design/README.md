@@ -21,6 +21,22 @@ system.
 | [`02-training-and-learning.md`](02-training-and-learning.md) | Training pipeline, data strategy, continual/meta/active learning, self-improvement loop |
 | [`03-inference-memory-hardware.md`](03-inference-memory-hardware.md) | Inference pipeline, hierarchical memory system, CPU/GPU optimization, quantization |
 | [`04-evaluation-deployment-roadmap.md`](04-evaluation-deployment-roadmap.md) | Benchmarks, deployment plan, open-source roadmap, risks and mitigations, future research |
+| [`prototype/`](prototype/) | **Working, runnable code.** A physics-grounded sequence mixer (Selective Oscillatory Memory) in pure NumPy with hand-derived backprop, plus results — see [`prototype/RESULTS.md`](prototype/RESULTS.md) |
+
+## Runnable prototype (laptop-scale)
+
+`prototype/selective_oscillatory_memory.py` implements the §1.2 physics-structured
+recurrence from scratch and demonstrates its core property on a laptop CPU in ~3–4 min:
+
+```bash
+pip install numpy && python3 prototype/selective_oscillatory_memory.py
+```
+
+Result: on a pure long-range memory task (T=120), the oscillatory mixer reaches **MSE
+0.0017** while an equal-size vanilla RNN stays stuck at the **0.337** forgetful baseline —
+because the oscillator physics keeps gradients-through-time `O(1)` (measured: 61× vs the
+RNN's `3e-5`). Full write-up, including an honest negative result, in
+[`prototype/RESULTS.md`](prototype/RESULTS.md).
 
 ## Design thesis in one paragraph
 
