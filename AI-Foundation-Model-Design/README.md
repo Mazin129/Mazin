@@ -22,7 +22,7 @@ system.
 | [`03-inference-memory-hardware.md`](03-inference-memory-hardware.md) | Inference pipeline, hierarchical memory system, CPU/GPU optimization, quantization |
 | [`04-evaluation-deployment-roadmap.md`](04-evaluation-deployment-roadmap.md) | Benchmarks, deployment plan, open-source roadmap, risks and mitigations, future research |
 | [`05-brain-native-redesign.md`](05-brain-native-redesign.md) | **Brain-native redesign (codename CORTEX):** spiking neurons, predictive coding / free energy, complementary learning systems, oscillatory phase codes, neuromodulation, global workspace, self-organized criticality — the real neuroscience and math/physics for each |
-| [`prototype/`](prototype/) | **Working, runnable code.** Two pure-NumPy prototypes with hand-derived gradients — a physics-grounded sequence mixer and a brain-native (no-backprop) learner. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
+| [`prototype/`](prototype/) | **Working, runnable code.** Three prototypes: a physics-grounded sequence mixer, a brain-native (no-backprop) learner, and **BL** — a brain-like model that learns real handwritten digits. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
 
 ## Runnable prototype (laptop-scale)
 
@@ -46,6 +46,20 @@ accuracy, matching a backprop MLP of identical size**, and its free energy falls
 
 ```bash
 python3 prototype/predictive_coding_brain.py
+```
+
+`prototype/bl_brain_model.py` is **BL** — a Brain-Like model that does real ML on real
+handwritten digits (scikit-learn `digits`), assembling the brain-native mechanisms into one
+runnable system: sparse event-driven coding (only 8% of neurons active), a neocortex that
+learns by a **local rule with no backprop** (96.6% test accuracy), and a hippocampal
+one-shot memory. It demonstrates three things standard nets do badly:
+
+- **few-shot learning** — 58% from 1 example/class, 92% from 30;
+- **one-shot learning of a brand-new class** — learns digit 9 from ~10 examples (0→87%) while a backprop net stays at 0%;
+- **no catastrophic forgetting** — old digits stay at ~0.96 after adding the new class.
+
+```bash
+pip install numpy scikit-learn && python3 prototype/bl_brain_model.py
 ```
 
 Full write-ups, including honest limitations and negative results, in
