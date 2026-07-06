@@ -62,10 +62,11 @@ one-shot memory. It demonstrates three things standard nets do badly:
 pip install numpy scikit-learn && python3 prototype/bl_brain_model.py
 ```
 
-`prototype/bl_torch.py` is the **GPU version** of BL: the same brain design in PyTorch,
-auto-detecting an NVIDIA GPU and scaling up to **full MNIST** (still no backprop — all
-learning is explicit local tensor math). Falls back to CPU / the digits dataset when a
-GPU or MNIST isn't available.
+`prototype/bl_torch.py` is the **GPU version** of BL: the same brain design in PyTorch
+with a fixed **V1 visual-cortex** front-end (random edge filters + pooling), auto-detecting
+an NVIDIA GPU and scaling to **full MNIST**. It reaches **98.2% test accuracy with no
+backpropagation** (local learning only), plus few-shot and one-shot new-class learning
+without forgetting. Falls back to CPU / the digits dataset when a GPU or MNIST isn't available.
 
 ```bash
 pip install torch torchvision && python3 prototype/bl_torch.py

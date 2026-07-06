@@ -1,21 +1,27 @@
 """
 BL-Torch  —  the Brain-Like model in PyTorch, GPU-ready, trained on full MNIST.
 
-Same brain design as bl_brain_model.py (sparse coding + local-rule neocortex +
-one-shot hippocampus + neuromodulatory novelty routing), re-implemented with
-PyTorch tensors so it can run on an NVIDIA GPU (e.g. a laptop GeForce MX550) and
-scale from the tiny 8x8 sklearn digits up to full MNIST (60,000 28x28 images).
+Same brain design as bl_brain_model.py, in PyTorch so it runs on an NVIDIA GPU
+(e.g. a laptop GeForce MX550) and scales to full MNIST (60k 28x28 images).
 
-Key point kept from the brain design: NO backpropagation is used anywhere. All
-learning is explicit local tensor math (`torch.no_grad()` throughout). The GPU is
-used only to make the same brain-like math fast on big data.
+Brain systems in BL:
+  * VISUAL CORTEX (V1): a FIXED bank of random convolutional filters + ReLU +
+    pooling — like the brain's oriented edge detectors (simple cells) and their
+    pooling (complex cells). No learning here; vision is a fixed front-end.
+  * NEOCORTEX: a readout trained by a LOCAL three-factor rule (error x
+    pre-activity) — NO backpropagation.
+  * HIPPOCAMPUS: fast one-shot associative memory (gradient-free prototypes).
+  * NEUROMODULATION: a novelty signal routes new stimuli to the hippocampus.
 
-Runs on GPU if available, otherwise CPU (slower but identical results).
+NO backpropagation anywhere: all learning is explicit local tensor math under
+torch.no_grad(). The GPU only makes the same brain-like math fast on big data.
+Auto-detects GPU (else CPU) and MNIST (else falls back to sklearn digits).
 
     pip install torch torchvision
     python bl_torch.py
 
-If you have little GPU memory (the MX550 has ~2 GB), lower HIDDEN below.
+If your GPU has little memory (MX550 ~2 GB) and you hit out-of-memory, lower
+N_FILTERS below.
 """
 
 import torch
@@ -23,88 +29,100 @@ import torch.nn.functional as F
 
 torch.manual_seed(0)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-HIDDEN = 1200          # sparse-code size. Lower to 800 if you hit out-of-memory.
-ACTIVE_FRAC = 0.08     # fraction of neurons allowed to fire per input (k-WTA)
+N_FILTERS = 128        # V1 filters. Lower to 64 if you run out of GPU memory.
+ACTIVE_FRAC = 0.15     # fraction of cortical features allowed to fire (k-WTA sparsity)
 DTYPE = torch.float32
 
 
-def load_mnist():
-    """Load full MNIST via torchvision; fall back to sklearn digits if MNIST
-    can't be downloaded, so the script always runs."""
+def load_data():
     try:
         from torchvision import datasets
         tr = datasets.MNIST(root="./data", train=True, download=True)
         te = datasets.MNIST(root="./data", train=False, download=True)
-        Xtr = tr.data.reshape(-1, 784).to(DTYPE) / 255.0
-        Xte = te.data.reshape(-1, 784).to(DTYPE) / 255.0
-        ytr, yte = tr.targets.long(), te.targets.long()
-        name = "MNIST (28x28, 60k train / 10k test)"
+        Xtr = tr.data.to(DTYPE).reshape(-1, 1, 28, 28) / 255.0
+        Xte = te.data.to(DTYPE).reshape(-1, 1, 28, 28) / 255.0
+        return (Xtr.to(DEVICE), tr.targets.to(DEVICE),
+                Xte.to(DEVICE), te.targets.to(DEVICE), 28), "MNIST (28x28, 60k/10k)"
     except Exception as e:
         print(f"[MNIST unavailable ({type(e).__name__}); using sklearn digits]")
         from sklearn.datasets import load_digits
         d = load_digits()
-        X = torch.tensor(d.data / 16.0, dtype=DTYPE)
+        X = torch.tensor(d.data / 16.0, dtype=DTYPE).reshape(-1, 1, 8, 8)
         y = torch.tensor(d.target, dtype=torch.long)
         g = torch.Generator().manual_seed(0)
         p = torch.randperm(len(X), generator=g)
         X, y = X[p], y[p]
-        Xtr, ytr, Xte, yte = X[:1200], y[:1200], X[1200:], y[1200:]
-        name = "sklearn digits (8x8)"
-    return (Xtr.to(DEVICE), ytr.to(DEVICE), Xte.to(DEVICE), yte.to(DEVICE)), name
+        return (X[:1200].to(DEVICE), y[:1200].to(DEVICE),
+                X[1200:].to(DEVICE), y[1200:].to(DEVICE), 8), "sklearn digits (8x8)"
 
 
-class BLTorch:
-    """Brain-Like model, all tensor math, no autograd/backprop."""
+class VisualCortex:
+    """Fixed V1-like front-end: random conv filters (oriented edge detectors) +
+    ReLU (simple cells) + max-pool (complex cells) + standardize + k-WTA sparsity.
+    No learning — the brain's early vision is largely fixed structure."""
 
-    def __init__(self, d_in, d_hidden=HIDDEN, active_frac=ACTIVE_FRAC):
-        g = torch.Generator(device="cpu").manual_seed(1)
-        self.R = (torch.randn(d_in, d_hidden, generator=g) / d_in ** 0.5).to(DEVICE)
-        self.bias = (0.1 * torch.randn(d_hidden, generator=g)).to(DEVICE)
-        self.k = max(1, int(active_frac * d_hidden))
-        self.d_hidden = d_hidden
-        self.W = None            # neocortex readout (set in slow_learn)
-        self.cortex_classes = None
-        self.proto = {}          # hippocampus: class -> unit-norm prototype
+    def __init__(self, img_hw, n_filters=N_FILTERS, ksize=5, active_frac=ACTIVE_FRAC):
+        g = torch.Generator().manual_seed(1)
+        w = torch.randn(n_filters, 1, ksize, ksize, generator=g)
+        self.Wc = (w / w.flatten(1).norm(dim=1)[:, None, None, None]).to(DEVICE)
+        self.pad = ksize // 2
+        self.hw = img_hw
+        self.active_frac = active_frac
+        self.mu = self.sd = self.k = None
 
     @torch.no_grad()
-    def encode(self, X, batch=4096):
-        """Fixed sparse expansion code: ReLU random projection + k-Winners-Take-All.
-        Only k of d_hidden neurons fire per input (event-driven, pattern-separating)."""
+    def _raw(self, X, bs=1024):
         outs = []
-        for i in range(0, len(X), batch):
-            h = torch.relu(X[i:i+batch] @ self.R + self.bias)
-            if self.k < self.d_hidden:
-                kth = h.topk(self.k, dim=1).values[:, -1:].contiguous()
-                h = torch.where(h >= kth, h, torch.zeros_like(h))
-            outs.append(h)
+        for i in range(0, len(X), bs):
+            xb = X[i:i+bs].reshape(-1, 1, self.hw, self.hw)
+            c = F.relu(F.conv2d(xb, self.Wc, stride=2, padding=self.pad))   # simple cells
+            c = F.max_pool2d(c, 2)                                          # complex cells
+            outs.append(c.reshape(len(xb), -1))
         return torch.cat(outs, 0)
 
     @torch.no_grad()
+    def fit(self, X):                       # learn only normalization statistics
+        H = self._raw(X)
+        self.mu, self.sd = H.mean(0), H.std(0) + 1e-6
+        self.k = max(1, int(self.active_frac * H.shape[1]))
+        self.dim = H.shape[1]
+
+    @torch.no_grad()
+    def encode(self, X, bs=1024):
+        H = (self._raw(X, bs) - self.mu) / self.sd
+        if self.k < H.shape[1]:             # k-Winners-Take-All -> sparse, event-driven
+            kth = H.topk(self.k, dim=1).values[:, -1:].contiguous()
+            H = torch.where(H >= kth, H, torch.zeros_like(H))
+        return H
+
+
+class BLTorch:
+    def __init__(self, encoder):
+        self.enc = encoder
+        self.W = None
+        self.cortex_classes = None
+        self.proto = {}
+
+    @torch.no_grad()
     def slow_learn(self, X, y, epochs=15, lr=0.5, batch=512):
-        """Neocortex: local three-factor rule  dW ~ (label - prob) x pre-activity.
-        No backprop — just the delta rule on a single readout over fixed features."""
         classes = torch.unique(y).tolist()
         self.cortex_classes = classes
         idx = {c: i for i, c in enumerate(classes)}
-        C = len(classes)
-        self.W = torch.zeros(C, self.d_hidden, device=DEVICE, dtype=DTYPE)
-        ymap = torch.tensor([idx[int(c)] for c in y], device=DEVICE)
-        H = self.encode(X)
-        Y = F.one_hot(ymap, C).to(DTYPE)
+        H = self.enc.encode(X)
+        ymap = torch.tensor([idx[int(c)] for c in y.tolist()], device=DEVICE)
+        Y = F.one_hot(ymap, len(classes)).to(DTYPE)
+        self.W = torch.zeros(len(classes), H.shape[1], device=DEVICE, dtype=DTYPE)
         n = len(H)
         for _ in range(epochs):
             perm = torch.randperm(n, device=DEVICE)
             for i in range(0, n, batch):
                 b = perm[i:i+batch]
-                Hb, Yb = H[b], Y[b]
-                probs = torch.softmax(Hb @ self.W.t(), dim=1)
-                err = Yb - probs                          # local post-synaptic error
-                self.W += lr * (err.t() @ Hb) / len(b)    # Hebbian: error x pre-activity
+                probs = torch.softmax(H[b] @ self.W.t(), dim=1)
+                self.W += lr * ((Y[b] - probs).t() @ H[b]) / len(b)   # local rule
 
     @torch.no_grad()
     def fast_store(self, X, y):
-        """Hippocampus: instant, gradient-free write of a class prototype."""
-        H = self.encode(X)
+        H = self.enc.encode(X)
         for c in torch.unique(y).tolist():
             m = H[y == c].mean(0)
             self.proto[c] = m / (m.norm() + 1e-9)
@@ -115,31 +133,25 @@ class BLTorch:
         return cls[(H @ self.W.t()).argmax(1)]
 
     @torch.no_grad()
-    def _hippo_sims(self, H):
-        classes = sorted(self.proto)
-        P = torch.stack([self.proto[c] for c in classes])          # (C,H)
-        Hn = H / (H.norm(dim=1, keepdim=True) + 1e-9)
-        return classes, Hn @ P.t()                                 # cosine similarity
-
-    @torch.no_grad()
     def predict(self, X, batch=4096):
         preds = []
         for i in range(0, len(X), batch):
-            H = self.encode(X[i:i+batch])
-            classes, sims = self._hippo_sims(H)
-            hippo_pred = torch.tensor(classes, device=DEVICE)[sims.argmax(1)]
+            H = self.enc.encode(X[i:i+batch])
+            classes = sorted(self.proto)
+            P = torch.stack([self.proto[c] for c in classes])
+            Hn = H / (H.norm(dim=1, keepdim=True) + 1e-9)
+            sims = Hn @ P.t()
+            hippo = torch.tensor(classes, device=DEVICE)[sims.argmax(1)]
             if self.W is None:
-                preds.append(hippo_pred); continue
-            cortex_pred = self._cortex_pred(H)
+                preds.append(hippo); continue
+            cortex = self._cortex_pred(H)
             known = set(self.cortex_classes)
             new_cols = [j for j, c in enumerate(classes) if c not in known]
             if not new_cols:
-                preds.append(cortex_pred); continue
+                preds.append(cortex); continue
             known_cols = [j for j, c in enumerate(classes) if c in known]
-            s_known = sims[:, known_cols].max(1).values
-            s_new = sims[:, new_cols].max(1).values
-            novel = s_new > s_known                                # hippocampal novelty
-            preds.append(torch.where(novel, hippo_pred, cortex_pred))
+            novel = sims[:, new_cols].max(1).values > sims[:, known_cols].max(1).values
+            preds.append(torch.where(novel, hippo, cortex))
         return torch.cat(preds, 0)
 
 
@@ -150,43 +162,43 @@ def acc(pred, y, mask=None):
 
 
 if __name__ == "__main__":
-    print(f"Device: {DEVICE.upper()}"
-          + (f"  ({torch.cuda.get_device_name(0)})" if DEVICE == "cuda" else "  (no CUDA GPU found — running on CPU)"))
-    (Xtr, ytr, Xte, yte), name = load_mnist()
+    print(f"Device: {DEVICE.upper()}" +
+          (f"  ({torch.cuda.get_device_name(0)})" if DEVICE == "cuda"
+           else "  (no CUDA GPU found — running on CPU)"))
+    Xtr, ytr, Xte, yte, hw = None, None, None, None, None
+    (Xtr, ytr, Xte, yte, hw), name = load_data()
     print(f"Dataset: {name}   train={len(Xtr)}  test={len(Xte)}\n")
 
-    bl = BLTorch(d_in=Xtr.shape[1])
-    frac_active = (bl.encode(Xtr[:1000]) > 0).float().mean().item()
-    print(f"Sparse code: {100*frac_active:.1f}% of neurons active per input "
-          f"(event-driven, like cortex).\n")
+    vc = VisualCortex(img_hw=hw)
+    vc.fit(Xtr)
+    frac = (vc.encode(Xtr[:1000]) > 0).float().mean().item()
+    print(f"Visual cortex: {N_FILTERS} fixed V1 filters -> {vc.dim} features, "
+          f"{100*frac:.1f}% active per image (sparse, event-driven).\n")
 
-    # DEMO 1 — few-shot learning (hippocampus)
     print("=" * 64)
     print("DEMO 1  Few-shot learning (hippocampus): accuracy vs #examples/class")
     print("=" * 64)
     for n in [1, 5, 10, 30]:
-        h = BLTorch(d_in=Xtr.shape[1]); h.R, h.bias = bl.R, bl.bias
+        m = BLTorch(vc)
         Xs, ys = [], []
         for c in range(10):
             ci = (ytr == c).nonzero(as_tuple=True)[0][:n]
             Xs.append(Xtr[ci]); ys.append(ytr[ci])
-        Xs, ys = torch.cat(Xs), torch.cat(ys)
-        h.fast_store(Xs, ys)
-        print(f"   {n:2d} example(s)/class ->  test accuracy = {acc(h.predict(Xte), yte):.3f}")
+        m.fast_store(torch.cat(Xs), torch.cat(ys))
+        print(f"   {n:2d} example(s)/class ->  test accuracy = {acc(m.predict(Xte), yte):.3f}")
 
-    # DEMO 2 — slow cortical learning, LOCAL rule, no backprop
     print("\n" + "=" * 64)
     print("DEMO 2  Cortical learning (LOCAL rule, NO backprop): full 10-class")
     print("=" * 64)
+    bl = BLTorch(vc)
     bl.slow_learn(Xtr, ytr, epochs=15)
-    print(f"   test accuracy = {acc(bl._cortex_pred(bl.encode(Xte)), yte):.3f}")
+    print(f"   test accuracy = {acc(bl._cortex_pred(vc.encode(Xte)), yte):.3f}")
 
-    # DEMO 3 — one-shot new class + no forgetting
     print("\n" + "=" * 64)
     print("DEMO 3  One-shot new class (9) without forgetting 0-8")
     print("=" * 64)
     base = torch.isin(ytr, torch.arange(9, device=DEVICE))
-    bl2 = BLTorch(d_in=Xtr.shape[1]); bl2.R, bl2.bias = bl.R, bl.bias
+    bl2 = BLTorch(vc)
     bl2.slow_learn(Xtr[base], ytr[base], epochs=15)
     bl2.fast_store(Xtr[base], ytr[base])
     known_mask = torch.isin(yte, torch.arange(9, device=DEVICE))
