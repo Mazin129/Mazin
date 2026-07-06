@@ -29,13 +29,16 @@ import torch.nn.functional as F
 
 torch.manual_seed(0)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-D_MODEL = 256
+# Defaults sized for a 2 GB laptop GPU (e.g. GeForce MX550). The complex FFT
+# roughly doubles activation memory, so keep BATCH/SEQ modest on a small card.
+# On a bigger GPU, raise D_MODEL / SEQ / BATCH for higher quality.
+D_MODEL = 192
 N_HEAD = 4
-N_BLOCK = 3
+N_BLOCK = 2
 ATTN_EVERY = 2         # attention in every 2nd block
 WINDOW = 64            # local attention window (0 = full)
-SEQ = 256             # can be long now — the scan is parallel, not a loop
-BATCH = 64
+SEQ = 128             # parallel scan makes long context cheap; 128 is light for 2 GB
+BATCH = 32
 STEPS = 3000
 LR = 3e-3
 CORPUS_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
@@ -172,16 +175,20 @@ def main():
             idx.append(int(torch.multinomial(F.softmax(model(x)[0, -1] / temp, -1), 1)))
         model.train(); return "".join(itos[i] for i in idx)
 
-    print("Training the parallel-scan oscillatory LM...")
+    print("Training the parallel-scan oscillatory LM (prints from step 1)...", flush=True)
     t0 = time.time()
     for step in range(1, STEPS + 1):
         x, y = get_batch(train)
         loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
         opt.zero_grad(); loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
-        if step % 500 == 0:
-            print(f"  step {step:5d}   train {loss.item():.3f}   val {val_loss():.3f}   "
-                  f"({(time.time()-t0)/step*1000:.0f} ms/step)", flush=True)
+        # print immediately for the first steps (so you see ms/step and that it's alive)
+        if step in (1, 2, 5, 10, 25, 50, 100, 200, 300) or step % 500 == 0:
+            ms = (time.time() - t0) / step * 1000
+            msg = f"  step {step:5d}   train {loss.item():.3f}   ({ms:.0f} ms/step)"
+            if step % 500 == 0:
+                msg += f"   val {val_loss():.3f}"
+            print(msg, flush=True)
 
     print("\n" + "=" * 60 + "\nGENERATED (fast parallel-scan oscillator):\n" + "=" * 60)
     print(sample())
