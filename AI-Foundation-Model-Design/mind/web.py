@@ -42,8 +42,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  details summary{cursor:pointer}
 </style></head><body>
 <h1>🧠 <span id="who">Vio</span> <span class="sub">— your local assistant · reasons &amp; verifies · English / العربية</span></h1>
-<div class="sub">Try: <b>what are the roots of x squared minus 5x plus 6</b> · <b>integrate 1/x</b> ·
- <b>remember that my name is Mazin</b> · <b>teach: the capital of France is Paris</b> · <b>what do you know about me</b></div>
+<div class="sub">Try: <b>solve x+y=10, x-y=2</b> · <b>15% of 200</b> · <b>average of 4,8,15,16</b> · <b>5 km to miles</b> ·
+ <b>integrate 1/x</b> · <b>remember that my name is Mazin</b> · <b>teach: &lt;paste a paragraph&gt;</b> · <b>what time is it in KSA</b></div>
 <div id="log"></div>
 <div id="row"><input id="inp" placeholder="Ask, or tell me a fact… (English or العربية)" autofocus>
   <button onclick="send()">Send</button></div>

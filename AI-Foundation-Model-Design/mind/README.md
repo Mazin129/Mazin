@@ -84,3 +84,17 @@ to stop Vio. (First time only: right-click → keep, if Windows asks.)
 Double-click **`Create Vio Desktop Icon.bat`** once. It puts a **Vio** icon on your
 Desktop. After that, just double-click the Desktop **Vio** icon to start chatting —
 no folders, no commands.
+
+## What Vio can do (all exact & verified)
+
+- **Maths**: arithmetic, algebra (`solve x^2-5x+6=0`), calculus (`integrate 1/x`,
+  `derivative of x^3`), `simplify`/`factor`/`expand`, and **systems** (`solve x+y=10, x-y=2`).
+- **Percentages**: `15% of 200`, `what percent is 30 of 120`, `increase 200 by 15%`.
+- **Statistics**: `average of 4, 8, 15, 16`, `median/sum/min/max/std of …`.
+- **Unit conversions**: `5 km to miles`, `100 f to c`, `2 hours in minutes` (length, mass, time, temperature).
+- **Time/date**: `what time is it in KSA`, `date today`.
+- **Memory**: `remember that …` / `my name is …`, then `what do you know about me`.
+- **Knowledge**: `teach: <a fact or a whole paragraph>` (paragraphs split into
+  retrievable facts), then ask questions about it.
+- **Honesty**: says *"I don't know"* rather than guessing. Everything is verified or
+  taught by you.

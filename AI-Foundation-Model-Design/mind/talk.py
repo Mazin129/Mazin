@@ -108,6 +108,11 @@ def route(text):
     """Map free text -> a structured query for The Mind."""
     t = text.lower().strip()
 
+    # system of equations ("solve x+y=10, x-y=2") -> pass through raw so The Mind's
+    # system solver sees the separators (don't normalise the comma away).
+    if text.count("=") >= 2 and re.search(r"[,;]|\band\b", text):
+        return text
+
     # explicit teaching / memory (natural phrasing)
     if t.startswith(("remember that", "remember")) or t.startswith(("تذكر",)):
         fact = re.sub(r"^(remember that|remember|تذكر ان|تذكر أن|تذكر)\s*", "", text, flags=re.I).strip(" :؟?.")

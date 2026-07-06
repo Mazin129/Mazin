@@ -119,6 +119,70 @@ class MathReasoner:
 
 
 # --------------------------------------------------------------------------- #
+# Everyday exact tools: percentages, statistics, unit conversions.
+# --------------------------------------------------------------------------- #
+def _fmt(v):
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
+def try_percent(q):
+    ql = q.lower()
+    m = re.search(r"(-?\d+\.?\d*)\s*%\s*(?:of|من)\s*(-?\d+\.?\d*)", ql)
+    if m:
+        a, b = float(m[1]), float(m[2]); return f"{m[1]}% of {m[2]} = {_fmt(a/100*b)}"
+    m = re.search(r"what\s*percent(?:age)?\s*(?:is)?\s*(-?\d+\.?\d*)\s*of\s*(-?\d+\.?\d*)", ql)
+    if m:
+        a, b = float(m[1]), float(m[2]); return f"{m[1]} is {_fmt(a/b*100)}% of {m[2]}"
+    m = re.search(r"(increase|raise|decrease|reduce)\s*(-?\d+\.?\d*)\s*by\s*(-?\d+\.?\d*)\s*%", ql)
+    if m:
+        base, p = float(m[2]), float(m[3])
+        r = base * (1 + p/100) if m[1] in ("increase", "raise") else base * (1 - p/100)
+        return f"{m[2]} {m[1]}d by {m[3]}% = {_fmt(r)}"
+    return None
+
+
+def try_stats(q):
+    import statistics as st
+    m = re.search(r"\b(mean|average|median|sum|total|max|maximum|min|minimum|std|"
+                  r"standard deviation|variance|range|count)\b[^0-9\-]*(.+)", q.lower())
+    if not m:
+        return None
+    xs = [float(n) for n in re.findall(r"-?\d+\.?\d*", m[2])]
+    if len(xs) < 1:
+        return None
+    fns = {"mean": st.mean, "average": st.mean, "median": st.median, "sum": sum,
+           "total": sum, "max": max, "maximum": max, "min": min, "minimum": min,
+           "count": len, "std": st.pstdev, "standard deviation": st.pstdev,
+           "variance": st.pvariance, "range": lambda x: max(x) - min(x)}
+    return f"{m[1]} of {len(xs)} values = {_fmt(fns[m[1]](xs))}"
+
+
+_LEN = {"m": 1, "meter": 1, "meters": 1, "km": 1000, "cm": .01, "mm": .001, "mile": 1609.34,
+        "miles": 1609.34, "mi": 1609.34, "foot": .3048, "feet": .3048, "ft": .3048,
+        "inch": .0254, "inches": .0254, "yard": .9144, "yd": .9144}
+_MASS = {"kg": 1, "g": .001, "gram": .001, "grams": .001, "mg": 1e-6, "lb": .453592,
+         "pound": .453592, "pounds": .453592, "oz": .0283495, "ton": 1000, "tonne": 1000}
+_TIME = {"s": 1, "sec": 1, "second": 1, "seconds": 1, "min": 60, "minute": 60, "minutes": 60,
+         "hour": 3600, "hours": 3600, "hr": 3600, "day": 86400, "days": 86400, "week": 604800}
+
+
+def try_units(q):
+    m = re.search(r"(-?\d+\.?\d*)\s*([a-z°]+)\s*(?:to|in|into|=)\s*([a-z°]+)", q.lower())
+    if not m:
+        return None
+    val, u1, u2 = float(m[1]), m[2].strip("°"), m[3].strip("°")
+    for tbl in (_LEN, _MASS, _TIME):
+        if u1 in tbl and u2 in tbl:
+            return f"{m[1]} {u1} = {_fmt(val*tbl[u1]/tbl[u2])} {u2}"
+    temp = {"c", "celsius", "f", "fahrenheit", "k", "kelvin"}
+    if u1 in temp and u2 in temp:
+        c = val if u1[0] == "c" else (val-32)*5/9 if u1[0] == "f" else val-273.15
+        out = c if u2[0] == "c" else c*9/5+32 if u2[0] == "f" else c+273.15
+        return f"{m[1]} {u1} = {_fmt(round(out, 4))} {u2}"
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # Retrieval tool — a growing knowledge base, searched by TF-IDF.
 # --------------------------------------------------------------------------- #
 class Library:
@@ -137,7 +201,10 @@ class Library:
             self.vec = None
 
     def add(self, text):
-        self.docs.append(text)
+        self.add_many([text])
+
+    def add_many(self, texts):
+        self.docs.extend(texts)
         json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         self._fit()
 
@@ -185,9 +252,13 @@ class Mind:
         return False
 
     def teach(self, text):                 # add durable knowledge to the library
-        self.lib.add(text)
-        return f"Learned and stored in the library: “{text[:60]}…”" if len(text) > 60 \
-            else f"Learned: “{text}”"
+        # split a long passage into sentences so each becomes a retrievable fact
+        chunks = [c.strip() for c in re.split(r"(?<=[.!?؟])\s+|\n+", text.strip()) if len(c.strip()) > 3]
+        if not chunks:
+            chunks = [text.strip()]
+        self.lib.add_many(chunks)
+        return (f"Learned {len(chunks)} facts into the library." if len(chunks) > 1
+                else f"Learned: “{chunks[0]}”")
 
     def remember(self, fact):              # store a personal fact (memory)
         self.mem["facts"].append(fact); self._save()
@@ -201,6 +272,29 @@ class Mind:
             return {"answer": self.teach(q[6:].strip()), "how": "library-write", "verified": True, "trace": []}
         if low.startswith("remember:"):
             return {"answer": self.remember(q[9:].strip()), "how": "memory-write", "verified": True, "trace": []}
+
+        # 1a) everyday exact tools: percentages, statistics, unit conversions
+        for tool in (try_percent, try_stats, try_units):
+            r = tool(q)
+            if r:
+                return {"answer": r, "how": "exact tool", "verified": True, "trace": []}
+
+        # 1b) systems of equations: "solve x+y=10, x-y=2"
+        if q.count("=") >= 2 and re.search(r"[,;]|and", q):
+            try:
+                body = re.sub(r"^\s*solve\s*", "", q, flags=re.I)
+                parts = [p for p in re.split(r"[,;]|\band\b", body) if "=" in p]
+                eqs = [sp.Eq(self.math._parse(l), self.math._parse(r))
+                       for l, r in (p.split("=", 1) for p in parts)]
+                syms = sorted(set().union(*[e.free_symbols for e in eqs]), key=str)
+                sol = sp.solve(eqs, syms, dict=True)
+                if sol:
+                    ans = ", ".join(f"{k} = {v}" for k, v in sol[0].items())
+                    self.mem["solved"][q] = ans; self._save()
+                    return {"answer": ans, "how": "symbolic reasoning (system)",
+                            "verified": True, "trace": [f"solved {len(eqs)} equations"]}
+            except Exception:
+                pass
 
         # 1) exact reasoning (math/logic) — verified
         if self.math.looks_mathy(q):
