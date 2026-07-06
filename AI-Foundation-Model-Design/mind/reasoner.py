@@ -62,6 +62,17 @@ class MathReasoner:
         ql = q.lower().strip()
         trace = []
         try:
+            # inequality: "solve x^2 - 4 > 0", "x >= 5"
+            if re.search(r"<=|>=|<|>", q):
+                body = re.sub(r"^\s*solve\s*", "", q, flags=re.I).strip().rstrip("?").strip()
+                mm = re.search(r"^(.*?)(<=|>=|<|>)(.*)$", body)
+                lhs, rhs = self._parse(mm.group(1)), self._parse(mm.group(3))
+                rel = {"<": sp.Lt, "<=": sp.Le, ">": sp.Gt, ">=": sp.Ge}[mm.group(2)]
+                syms = list((lhs - rhs).free_symbols)
+                if syms:
+                    sol = sp.solve_univariate_inequality(rel(lhs, rhs), syms[0], relational=True)
+                    return f"{sol}", ["solved inequality"], True
+                return f"{body} is {'TRUE' if bool(rel(lhs, rhs)) else 'FALSE'}", trace, True
             # equation or "expr =" / "expr = ?"  (e.g. "solve x^2=4", "333+98=?")
             if "solve" in ql or ("=" in q and "==" not in q):
                 body = re.sub(r"^\s*solve\s*", "", q, flags=re.I).strip().rstrip("?").strip()
@@ -126,7 +137,7 @@ class MathReasoner:
         ql = q.lower()
         if any(k in ql for k in self.KEYWORDS):
             return True                          # keyword request; handle() parses the rest
-        if re.search(r"\d\s*[+\-*/^]|\^|=", q):  # arithmetic-looking expression
+        if re.search(r"\d\s*[+\-*/^]|\^|=|[<>]", q):  # arithmetic/inequality-looking
             try:
                 self._parse(q.split("=")[0]); return True
             except Exception:
@@ -154,6 +165,10 @@ def try_percent(q):
         base, p = float(m[2]), float(m[3])
         r = base * (1 + p/100) if m[1] in ("increase", "raise") else base * (1 - p/100)
         return f"{m[2]} {m[1]}d by {m[3]}% = {_fmt(r)}"
+    m = re.search(r"percent(?:age)?\s+change\s+from\s+(-?\d+\.?\d*)\s+to\s+(-?\d+\.?\d*)", ql)
+    if m:
+        a, b = float(m[1]), float(m[2]); ch = (b - a) / a * 100
+        return f"change from {m[1]} to {m[2]} = {'+' if ch >= 0 else ''}{_fmt(ch)}%"
     return None
 
 
@@ -182,12 +197,18 @@ _TIME = {"s": 1, "sec": 1, "second": 1, "seconds": 1, "min": 60, "minute": 60, "
          "hour": 3600, "hours": 3600, "hr": 3600, "day": 86400, "days": 86400, "week": 604800}
 
 
+_DATA = {"b": 1, "byte": 1, "bytes": 1, "kb": 1e3, "mb": 1e6, "gb": 1e9, "tb": 1e12,
+         "kib": 1024, "mib": 1024**2, "gib": 1024**3, "bit": 0.125, "bits": 0.125}
+_AREA = {"sqm": 1, "m2": 1, "sqkm": 1e6, "km2": 1e6, "sqft": .092903, "sqyd": .836127,
+         "acre": 4046.86, "acres": 4046.86, "hectare": 10000, "hectares": 10000, "ha": 10000}
+
+
 def try_units(q):
-    m = re.search(r"(-?\d+\.?\d*)\s*([a-z°]+)\s*(?:to|in|into|=)\s*([a-z°]+)", q.lower())
+    m = re.search(r"(-?\d+\.?\d*)\s*([a-z°0-9]+)\s*(?:to|in|into|=)\s*([a-z°0-9]+)", q.lower())
     if not m:
         return None
     val, u1, u2 = float(m[1]), m[2].strip("°"), m[3].strip("°")
-    for tbl in (_LEN, _MASS, _TIME):
+    for tbl in (_LEN, _MASS, _TIME, _DATA, _AREA):
         if u1 in tbl and u2 in tbl:
             return f"{m[1]} {u1} = {_fmt(val*tbl[u1]/tbl[u2])} {u2}"
     temp = {"c", "celsius", "f", "fahrenheit", "k", "kelvin"}
@@ -231,6 +252,93 @@ def try_base(q):
     m = re.search(r"hex\s+([0-9a-fA-F]+)\s+(?:in|to)\s+decimal", ql)
     if m:
         return f"hex {m[1]} = {int(m[1], 16)} in decimal"
+    return None
+
+
+def try_combinatorics(q):
+    ql = q.lower()
+    m = re.search(r"(\d+)\s*(?:choose|c)\s*(\d+)", ql)
+    if m:
+        n, r = int(m[1]), int(m[2]); return f"C({n}, {r}) = {sp.binomial(n, r)}"
+    m = re.search(r"permutations?\s+of\s+(\d+)\s+(?:take|pick|choose)?\s*(\d+)", ql)
+    if m:
+        n, r = int(m[1]), int(m[2]); return f"P({n}, {r}) = {sp.factorial(n)//sp.factorial(n-r)}"
+    m = re.search(r"factorial\s+of\s+(\d+)", ql) or re.search(r"\b(\d+)\s*!", q)
+    if m:
+        n = int(m[1]); return f"{n}! = {sp.factorial(n)}"
+    m = re.search(r"(\d+)(?:st|nd|rd|th)?\s+fibonacci", ql)
+    if m:
+        n = int(m[1]); return f"Fibonacci #{n} = {sp.fibonacci(n)}"
+    return None
+
+
+def try_random(q):
+    import random
+    ql = q.lower()
+    if re.search(r"(flip|toss).*coin|coin\s*(flip|toss)", ql):
+        return f"🪙 {random.choice(['Heads', 'Tails'])}"
+    if re.search(r"\broll\b|\bdice\b|\bdie\b", ql):
+        m = re.search(r"d(\d+)|(\d+)[\s-]*sided", ql)
+        sides = int(m[1] or m[2]) if m else 6
+        return f"🎲 (d{sides}): {random.randint(1, sides)}"
+    m = re.search(r"random\s+number\s+(?:between\s+)?(-?\d+)\s*(?:and|to|-)\s*(-?\d+)", ql)
+    if m:
+        a, b = int(m[1]), int(m[2]); return f"Random {a}–{b}: {random.randint(min(a, b), max(a, b))}"
+    return None
+
+
+_ROMAN = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"), (90, "XC"),
+          (50, "L"), (40, "XL"), (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
+
+
+def try_roman(q):
+    ql = q.lower()
+    m = re.search(r"(\d+)\s+(?:to|in|as)\s+roman|roman\s+(?:numeral\s+)?(?:of|for)\s+(\d+)", ql)
+    if m:
+        n = int(m[1] or m[2])
+        if not 0 < n < 4000:
+            return "Roman numerals cover 1–3999."
+        out = ""
+        for v, sym in _ROMAN:
+            while n >= v:
+                out += sym; n -= v
+        return f"{m[1] or m[2]} = {out}"
+    m = re.search(r"\b([ivxlcdm]{1,15})\b\s+(?:to|in|as)\s+(?:number|decimal|arabic)", ql)
+    if m:
+        s = m[1].upper(); vals = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
+        tot, prev = 0, 0
+        for ch in reversed(s):
+            v = vals[ch]; tot += -v if v < prev else v; prev = v
+        return f"{s} = {tot}"
+    return None
+
+
+def try_interest(q):
+    ql = q.lower()
+    nums = re.findall(r"\d+\.?\d*", ql)
+    if "compound interest" in ql and len(nums) >= 3:
+        p, r, t = float(nums[0]), float(nums[1]), float(nums[2])
+        amt = p * (1 + r/100) ** t
+        return f"Compound: {_fmt(p)} at {_fmt(r)}%/yr for {_fmt(t)}yr = {amt:.2f} (interest {amt-p:.2f})"
+    if "simple interest" in ql and len(nums) >= 3:
+        p, r, t = float(nums[0]), float(nums[1]), float(nums[2])
+        i = p * r/100 * t
+        return f"Simple: interest = {i:.2f}, total = {p+i:.2f}"
+    return None
+
+
+def try_text(q):
+    m = re.search(r"(?:count|how many)\s+(word|character|letter)s?\s+(?:in|of|are in)?\s*[:\-]?\s*(.+)",
+                  q, re.I)
+    if m:
+        text = m.group(2).strip(" \"'")
+        return f"{len(text.split())} words" if m.group(1).lower() == "word" else f"{len(text)} characters"
+    m = re.search(r"reverse\s+(?:the\s+)?(?:text|string|word)?s?\s*[:\-]?\s*(.+)", q, re.I)
+    if m:
+        return m.group(1).strip()[::-1]
+    m = re.search(r"\b(upper\s?case|lower\s?case)\s*[:\-]?\s*(.+)", q, re.I)
+    if m:
+        s = m.group(2).strip(); return s.upper() if "upper" in m.group(1).lower() else s.lower()
     return None
 
 
@@ -342,8 +450,9 @@ class Mind:
         if low.startswith("remember:"):
             return {"answer": self.remember(q[9:].strip()), "how": "memory-write", "verified": True, "trace": []}
 
-        # 1a) everyday exact tools: percentages, stats, units, number theory, bases
-        for tool in (try_percent, try_base, try_numtheory, try_units, try_stats):
+        # 1a) everyday exact tools (order matters: most specific first)
+        for tool in (try_percent, try_interest, try_combinatorics, try_roman, try_base,
+                     try_numtheory, try_random, try_units, try_stats, try_text):
             r = tool(q)
             if r:
                 return {"answer": r, "how": "exact tool", "verified": True, "trace": []}

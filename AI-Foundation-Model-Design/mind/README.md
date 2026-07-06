@@ -109,3 +109,13 @@ can then **ask questions about it** — answered only from what the document act
 More skills added: **number theory** (`is 97 prime`, `factorize 360`, `gcd of 48 and 60`,
 `lcm of 4 and 6`), **base conversion** (`255 to binary`, `255 to hex`), and **date math**
 (`what day is 2026-01-01`, `days between 2020-01-01 and 2026-01-01`, `days until 2027-01-01`).
+
+## More ready skills (all exact / local)
+
+- **Combinatorics**: `5 choose 2`, `permutations of 5 take 2`, `factorial of 6` / `6!`, `10th fibonacci number`.
+- **Inequalities**: `solve x^2 - 4 > 0`.
+- **Random**: `flip a coin`, `roll a dice` (`roll a d20`), `random number between 1 and 100`.
+- **Roman numerals**: `2024 to roman`, `MMXXIV to number`.
+- **Finance**: `compound interest 1000 5% 3 years`, `simple interest 1000 5% 3 years`, `percent change from 80 to 100`.
+- **More conversions**: data (`500 mb to gb`), area (`2 acres to sqm`) — on top of length/mass/time/temperature.
+- **Text**: `count words in <text>`, `reverse <text>`, `uppercase <text>` / `lowercase <text>`.

@@ -139,6 +139,9 @@ def route(text):
     # system solver sees the separators (don't normalise the comma away).
     if text.count("=") >= 2 and re.search(r"[,;]|\band\b", text):
         return text
+    # inequality ("solve x^2 - 4 > 0") -> pass through raw (keep the < / >)
+    if re.search(r"(<=|>=|<|>)", text):
+        return text
 
     # explicit teaching / memory (natural phrasing)
     if t.startswith(("remember that", "remember")) or t.startswith(("تذكر",)):
@@ -156,7 +159,7 @@ def route(text):
         return "derivative of " + normalize_math(t)
     if has(t, SIMPLIFY):
         return "simplify " + normalize_math(t)
-    if has(t, FACTOR):
+    if has(t, FACTOR) and "factorial" not in t:      # don't catch "factorial"
         return "factor " + normalize_math(t)
     if has(t, EXPAND):
         return "expand " + normalize_math(t)
