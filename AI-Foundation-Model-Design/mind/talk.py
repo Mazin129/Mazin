@@ -49,10 +49,23 @@ def time_answer(text):
     if m and parse_date(m.group(1)) and parse_date(m.group(2)):
         d1, d2 = parse_date(m.group(1)), parse_date(m.group(2))
         return f"{abs((d2 - d1).days)} days between {d1} and {d2}."
-    m = re.search(r"days?\s+(?:until|till|to|since)\s+(.+)", t)
+    m = re.search(r"days?\s+(?:until|till|since)\s+(.+)", t)
     if m and parse_date(m.group(1)):
         d = parse_date(m.group(1)); diff = (d - datetime.date.today()).days
         return f"{abs(diff)} days {'until' if diff >= 0 else 'since'} {d} (a {d.strftime('%A')})."
+    # date arithmetic: "add 30 days to 2025-01-01", "30 days after today", "10 days before X"
+    m = re.search(r"(?:add\s+)?(\d+)\s+days?\s+(?:from|after|to)\s+(.+)", t)
+    if m:
+        base = datetime.date.today() if "today" in m.group(2) else parse_date(m.group(2))
+        if base:
+            d = base + datetime.timedelta(days=int(m.group(1)))
+            return f"{int(m.group(1))} days after {base} → {d.strftime('%A, %d %B %Y')}."
+    m = re.search(r"(\d+)\s+days?\s+before\s+(.+)", t)
+    if m:
+        base = datetime.date.today() if "today" in m.group(2) else parse_date(m.group(2))
+        if base:
+            d = base - datetime.timedelta(days=int(m.group(1)))
+            return f"{int(m.group(1))} days before {base} → {d.strftime('%A, %d %B %Y')}."
     m = re.search(r"(?:what\s+day\s+(?:is|was|of\s+the\s+week)|day\s+of\s+week\s+for|"
                   r"which\s+day\s+is)\s+(.+)", t)
     if m and parse_date(m.group(1)):
@@ -141,6 +154,9 @@ def route(text):
         return text
     # inequality ("solve x^2 - 4 > 0") -> pass through raw (keep the < / >)
     if re.search(r"(<=|>=|<|>)", text):
+        return text
+    # "solve … for x" (rearrange a formula) or a matrix [[..]] -> pass through raw
+    if re.search(r"\bsolve\b.*\bfor\s+[a-zA-Z]\b", text) or "[[" in text:
         return text
 
     # explicit teaching / memory (natural phrasing)

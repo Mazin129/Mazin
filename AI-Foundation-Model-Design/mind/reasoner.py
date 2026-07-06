@@ -73,9 +73,13 @@ class MathReasoner:
                     sol = sp.solve_univariate_inequality(rel(lhs, rhs), syms[0], relational=True)
                     return f"{sol}", ["solved inequality"], True
                 return f"{body} is {'TRUE' if bool(rel(lhs, rhs)) else 'FALSE'}", trace, True
-            # equation or "expr =" / "expr = ?"  (e.g. "solve x^2=4", "333+98=?")
+            # equation / "solve … for x" / "expr =" / "expr = ?"
             if "solve" in ql or ("=" in q and "==" not in q):
                 body = re.sub(r"^\s*solve\s*", "", q, flags=re.I).strip().rstrip("?").strip()
+                target = None                           # "solve A = pi*r^2 for r"
+                mfor = re.search(r"\s+for\s+([a-zA-Z])\s*$", body)
+                if mfor:
+                    target = sp.Symbol(mfor.group(1)); body = body[:mfor.start()].strip()
                 if body.endswith("="):
                     body = body[:-1].strip()            # "333+98=" -> "333+98" (just evaluate)
                 if "=" in body:
@@ -83,14 +87,15 @@ class MathReasoner:
                     eq = sp.Eq(self._parse(lhs), self._parse(rhs))
                     syms = list(eq.free_symbols)
                     if syms:                            # a real equation in a variable -> solve
-                        sol = sp.solve(eq, syms[0])
+                        var = target if (target is not None and target in eq.free_symbols) else syms[0]
+                        sol = sp.solve(eq, var)
                         trace.append(f"parsed equation: {sp.pretty(eq, use_unicode=False)}")
                         checks = []
                         for s in sol:                   # VERIFY: substitute each solution back
-                            ok = sp.simplify(eq.lhs.subs(syms[0], s) - eq.rhs.subs(syms[0], s)) == 0
-                            checks.append(f"{syms[0]}={s}  ->  {'verified' if ok else 'CHECK FAILED'}")
+                            ok = sp.simplify(eq.lhs.subs(var, s) - eq.rhs.subs(var, s)) == 0
+                            checks.append(f"{var}={s}  ->  {'verified' if ok else 'CHECK FAILED'}")
                         trace += ["verification:"] + ["  " + c for c in checks]
-                        return (f"{syms[0]} = " + ", ".join(map(str, sol)), trace,
+                        return (f"{var} = " + ", ".join(map(str, sol)), trace,
                                 all("verified" in c for c in checks))
                     val = sp.simplify(eq.lhs - eq.rhs)  # numeric "a = b" -> true/false
                     return f"{body}  is  {'TRUE' if val == 0 else 'FALSE'}", trace, True
@@ -342,6 +347,71 @@ def try_text(q):
     return None
 
 
+def try_matrix(q):
+    mm = re.search(r"\[\[.*?\]\]", q)
+    if not mm:
+        return None
+    txt = mm.group(0)
+    if re.search(r"[^0-9,.\[\]\s+-]", txt):          # SECURITY: numbers only, no code
+        return None
+    rows = re.findall(r"\[([^\[\]]+)\]", txt)
+    try:
+        mat = sp.Matrix([[sp.Rational(x) for x in re.split(r"[,\s]+", r.strip()) if x] for r in rows])
+    except Exception:
+        return None
+    ql = q.lower()
+    if "determinant" in ql or re.search(r"\bdet\b", ql):
+        return f"determinant = {mat.det()}" if mat.rows == mat.cols else "determinant needs a square matrix."
+    if "inverse" in ql:
+        return f"inverse = {mat.inv().tolist()}" if mat.det() != 0 else "not invertible (determinant is 0)."
+    if "transpose" in ql:
+        return f"transpose = {mat.T.tolist()}"
+    if "rank" in ql:
+        return f"rank = {mat.rank()}"
+    return None
+
+
+def try_range(q):
+    ql = q.lower()
+    m = re.search(r"sum\s+(?:of\s+)?(?:the\s+)?(?:squares?\s+)?(?:of\s+)?(?:numbers?\s+|integers?\s+)?"
+                  r"(?:from\s+)?(-?\d+)\s+to\s+(-?\d+)", ql)
+    if m:
+        a, b = int(m[1]), int(m[2])
+        if abs(b - a) > 2_000_000:
+            return "That range is too large."
+        rng = range(min(a, b), max(a, b) + 1)
+        if "square" in ql:
+            return f"sum of squares {a}..{b} = {sum(i*i for i in rng)}"
+        return f"sum {a} to {b} = {sum(rng)}"
+    m = re.search(r"next\s+prime\s+(?:after\s+)?(\d+)", ql)
+    if m:
+        return f"next prime after {m[1]} = {sp.nextprime(int(m[1]))}"
+    m = re.search(r"primes?\s+(?:up\s+to|below|under)\s+(\d+)", ql)
+    if m:
+        n = min(int(m[1]), 5000); ps = list(sp.primerange(2, n + 1))
+        return f"primes up to {n} ({len(ps)}): {', '.join(map(str, ps[:60]))}" + (" …" if len(ps) > 60 else "")
+    m = re.search(r"first\s+(\d+)\s+primes?", ql)
+    if m:
+        n = min(int(m[1]), 200); ps = []
+        c = 2
+        while len(ps) < n:
+            if sp.isprime(c):
+                ps.append(c)
+            c += 1
+        return f"first {n} primes: {', '.join(map(str, ps))}"
+    return None
+
+
+def try_round(q):
+    m = re.search(r"round\s+(-?\d+\.?\d*)\s+to\s+(\d+)\s*(?:decimal|place|dp|digit)", q.lower())
+    if m:
+        return f"{m[1]} rounded to {m[2]} places = {round(float(m[1]), int(m[2]))}"
+    m = re.search(r"round\s+(-?\d+\.?\d*)\b", q.lower())
+    if m:
+        return f"{m[1]} rounded = {round(float(m[1]))}"
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Retrieval tool — a growing knowledge base, searched by TF-IDF.
 # --------------------------------------------------------------------------- #
@@ -452,7 +522,8 @@ class Mind:
 
         # 1a) everyday exact tools (order matters: most specific first)
         for tool in (try_percent, try_interest, try_combinatorics, try_roman, try_base,
-                     try_numtheory, try_random, try_units, try_stats, try_text):
+                     try_numtheory, try_matrix, try_range, try_round, try_random,
+                     try_units, try_stats, try_text):
             r = tool(q)
             if r:
                 return {"answer": r, "how": "exact tool", "verified": True, "trace": []}
