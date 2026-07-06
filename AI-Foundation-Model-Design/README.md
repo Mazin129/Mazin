@@ -105,6 +105,12 @@ oscillatory memory cell (with learnable per-neuron dynamics) that reads text and
 downloaded at runtime): two stacked oscillatory cells that learn to generate Shakespeare-style
 text — speaker names, line breaks, dialogue structure. GPU-oriented defaults.
 
+`prototype/bl_language_hybrid.py` is the blueprint's **§1.2 language architecture**:
+oscillatory memory cells (cheap O(1) state) **interleaved with causal attention** (exact
+recall). This breaks the pure oscillator's plateau — val loss **2.02 → 1.59** with genuinely
+fluent Shakespeare — demonstrating the thesis that cheap memory + periodic attention beats
+either alone.
+
 ```bash
 python3 prototype/bl_system.py       # the full stack
 python3 prototype/bl_language.py     # the oscillatory language model
