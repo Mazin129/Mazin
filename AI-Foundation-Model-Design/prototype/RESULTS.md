@@ -309,3 +309,51 @@ fixed V1 vision front-end — no backpropagation.** The V1 front-end raised the 
 
 Tuning for a small (2 GB) GPU: lower `N_FILTERS` in the file (128 -> 64) if you hit
 out-of-memory.
+
+---
+
+# 5. BL-Advanced — episodic memory + a harder dataset
+
+`bl_advanced.py`. Two tested upgrades over BL-Torch:
+
+**(1) Episodic hippocampus.** The real hippocampus stores individual experiences,
+not one averaged prototype per category. BL now keeps multiple exemplar codes per
+class and recalls by weighted k-nearest-neighbour. Measured gain over a single
+prototype (MNIST few-shot): n=5 0.52 -> 0.59, n=30 0.68 -> 0.71; one-shot new
+class (20 shots) 0.63 -> 0.66.
+
+**(3) Runs on MNIST or Fashion-MNIST** (harder real clothing images, same format;
+set `DATASET` at the top) — showing the brain design generalises beyond digits.
+
+**Tested negative result — upgrade (2) not shipped.** Learning the V1 filters with
+unsupervised patch k-means gave *no* gain over random filters at this scale
+(cortex 0.963 vs 0.963 on a subset), so it was deliberately left out rather than
+adding complexity for nothing.
+
+Still **no backpropagation** — all learning is local tensor math under `torch.no_grad()`.
+
+```bash
+python bl_advanced.py            # edit DATASET = "mnist" or "fashion"
+```
+
+### Results (full datasets, GPU or CPU)
+
+| | MNIST | Fashion-MNIST |
+|---|---|---|
+| **Cortex, local rule, NO backprop** | **0.982** | **0.865** |
+| Few-shot (episodic) 1 / 5 / 10 / 30 per class | 0.48 / 0.59 / 0.63 / 0.71 | 0.51 / 0.67 / 0.71 / 0.75 |
+| One-shot new class, 1 / 5 / 10 / 20 shots | 0.08 / 0.17 / 0.29 / 0.66 | 0.48 / 0.88 / 0.92 / **0.97** |
+| Old classes kept (forgetting check) | ~0.95 | ~0.76 |
+
+The new class is far easier to learn one-shot on Fashion-MNIST (class 9 = "ankle
+boot", visually distinct) than on MNIST (a 9 looks like 4/7) — a nice illustration
+that novelty routing works when the new category is actually novel-looking.
+
+### Honest status
+
+- Episodic memory helps few-shot/one-shot by a few points; it does not make hard
+  few-shot easy — that needs a learned/adaptive encoder, which is the open next step.
+- Cortex accuracy (0.98 MNIST, 0.87 Fashion) with a single-layer local rule + fixed
+  V1 features is a genuine, honest result for backprop-free learning; matching a deep
+  backprop net (~0.90+ on Fashion) would need deep local learning (section 2's
+  predictive coding) scaled up.

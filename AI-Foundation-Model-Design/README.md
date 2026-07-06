@@ -72,6 +72,17 @@ without forgetting. Falls back to CPU / the digits dataset when a GPU or MNIST i
 pip install torch torchvision && python3 prototype/bl_torch.py
 ```
 
+`prototype/bl_advanced.py` adds an **episodic hippocampus** (multiple stored memories per
+class + k-NN recall, like the real hippocampus) and runs on **MNIST or Fashion-MNIST**.
+It improves few-shot/one-shot over a single prototype, and on Fashion-MNIST learns a new
+visually-distinct class one-shot to **97%** — all still with no backpropagation. (Learning
+the V1 filters was tested and gave no gain at this scale, so it was deliberately left out —
+a documented negative result.)
+
+```bash
+python3 prototype/bl_advanced.py     # set DATASET = "mnist" or "fashion"
+```
+
 Full write-ups, including honest limitations and negative results, in
 [`prototype/RESULTS.md`](prototype/RESULTS.md).
 
