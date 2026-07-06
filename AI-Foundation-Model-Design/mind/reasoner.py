@@ -27,6 +27,7 @@ import sympy as sp
 from sympy.parsing.sympy_parser import (parse_expr, standard_transformations,
                                         implicit_multiplication_application,
                                         convert_xor)
+from think import Thinker
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -476,6 +477,12 @@ class Mind:
         self.mem = json.load(open(MEM_FILE, encoding="utf-8")) if os.path.exists(MEM_FILE) \
             else {"facts": [], "solved": {}}
         self.mem.setdefault("identity", {"name": "Vio"})   # the assistant's own name
+        self.thinker = Thinker()                           # open-ended thinking engine
+        self._retrain()
+
+    def _retrain(self):
+        """(Re)train the open-ended thinker on everything Vio has learned."""
+        self.thinker.train(self.lib.docs + self.mem.get("facts", []))
 
     def name(self):
         return self.mem.get("identity", {}).get("name", "Vio")
@@ -517,12 +524,14 @@ class Mind:
     def teach(self, text):                 # add durable knowledge to the library
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
+        self._retrain()                    # keep the thinker current with new knowledge
         return (f"Learned {len(chunks)} passages into the library." if len(chunks) > 1
                 else f"Learned: “{chunks[0]}”")
 
     def learn_text(self, text, source=""):
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
+        self._retrain()
         where = f" from {source}" if source else ""
         return f"Learned {len(chunks)} passages{where}. You can now ask me about it."
 
@@ -596,7 +605,27 @@ class Mind:
 
     def remember(self, fact):              # store a personal fact (memory)
         self.mem["facts"].append(fact); self._save()
+        self._retrain()
         return f"I'll remember: {fact}"
+
+    def _library_summary(self):
+        """'What have I taught you?' — Vio summarises its whole library + memory."""
+        docs = self.lib.docs
+        parts = []
+        if self.mem.get("facts"):
+            parts.append(f"I remember {len(self.mem['facts'])} thing(s) about you:")
+            parts += [f"  • {f}" for f in self.mem["facts"][:12]]
+        if docs:
+            parts.append(f"\nMy library holds {len(docs)} passage(s). Topics I can discuss:")
+            for d in docs[:12]:
+                first = re.split(r"(?<=[.!?؟])\s+", d.strip())[0]
+                parts.append(f"  • {first[:110]}" + ("…" if len(first) > 110 else ""))
+            if len(docs) > 12:
+                parts.append(f"  …and {len(docs) - 12} more. Ask me about any of it.")
+        if not parts:
+            return ("You haven't taught me anything yet. Use the 📄 button to feed me a "
+                    "book/notes, or say 'teach: <a fact>'. Then ask me about it.")
+        return "\n".join(parts)
 
     def ask(self, q):
         q = q.strip()
@@ -606,6 +635,30 @@ class Mind:
             return {"answer": self.teach(q[6:].strip()), "how": "library-write", "verified": True, "trace": []}
         if low.startswith("remember:"):
             return {"answer": self.remember(q[9:].strip()), "how": "memory-write", "verified": True, "trace": []}
+
+        # 0) "what have I taught you / what do you know / what's in your library"
+        if re.search(r"what (have i|did i) (taught|told)|what do you know$|"
+                     r"what('?s| is) in your (library|memory|head|brain)|"
+                     r"what have you learn|summari[sz]e (your |the )?(library|knowledge|memory)",
+                     low):
+            return {"answer": self._library_summary(), "how": "library summary",
+                    "verified": True, "trace": []}
+
+        # 0-) open-ended GENERATION: "write/continue/imagine/compose about …"
+        gm = re.match(r"\s*(write|continue|compose|imagine|generate|dream|make up)\b(.*)",
+                      low, re.I)
+        if gm:
+            seed = re.sub(r"\b(a|an|the|about|something|some|text|paragraph|sentence|story|"
+                          r"me|for|on)\b", " ", gm.group(2)).strip()
+            out = self.thinker.generate(seed)
+            if out:
+                return {"answer": out, "how": "generation (learned from your library)",
+                        "verified": False,
+                        "trace": [f"n-gram model trained on {self.thinker._trained_on} passages",
+                                  "generated text — not a retrieved fact"]}
+            return {"answer": "I can't generate yet — I haven't read enough. Teach me a book "
+                              "or some notes first (📄 or 'teach: …'), then ask me to write.",
+                    "how": "generation", "verified": False, "trace": []}
 
         # 1-) visual/analysis skills first (they consume "plot …", "vertex …")
         if re.match(r"\s*(plot|graph|draw)\b", low):
@@ -661,6 +714,15 @@ class Mind:
         else:
             facts = [f for f in self.mem["facts"] if self._match_fact(f, words)]
         if hits or facts:
+            # open-ended THINKING: synthesise the exact sentences that answer the
+            # question, drawn from several passages at once (grounded, no guessing).
+            syn = self.thinker.synthesize(q, [d for d, _ in hits], facts)
+            if syn:
+                return {"answer": syn, "how": "reasoning over knowledge (synthesis)",
+                        "verified": True,
+                        "trace": [f"synthesised from {len(hits)} passage(s) + "
+                                  f"{len(facts)} memory fact(s)"]}
+            # fallback: show the passages/facts directly
             parts = []
             if facts:
                 parts.append("From what I know about you:\n  " + "\n  ".join(facts))

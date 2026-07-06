@@ -99,12 +99,32 @@ no folders, no commands.
 - **Honesty**: says *"I don't know"* rather than guessing. Everything is verified or
   taught by you.
 
-## Learn from a document or book (📄)
+## Learn from a document, book, or PDF (📄)
 
-In the browser, click the **📄** button next to Send and choose a **.txt / .md** file
-(your notes, an article, a whole book). Vio splits it into passages, stores them, and you
+In the browser, click the **📄** button next to Send and choose a **.txt / .md / .pdf**
+file (your notes, an article, a whole book). Vio reads it, splits it into passages, and you
 can then **ask questions about it** — answered only from what the document actually says.
-(To convert a PDF/Word file first, "Save As → Plain Text .txt", then upload it.)
+PDF reading is built in (dependency-free); scanned/image-only PDFs have no text to
+extract, so for those "Save As → Plain Text .txt" first.
+
+### Open-ended thinking — reason & generate (all local)
+
+Once Vio has read something, it does two "thinking" things, 100% on your machine:
+
+- **Reason over what it knows (synthesis).** Ask a real question and Vio pulls the exact
+  sentences across everything it has learned and composes one grounded answer — not a
+  wall of text. It draws on several passages at once, and never makes facts up.
+  ```
+  you › how many chambers does the heart have?
+        • It has four chambers: two atria and two ventricles.
+  ```
+- **Generate text it learned from your books.** Ask it to `write about the heart`,
+  `continue: once upon a time`, `imagine a story` — Vio trains a small word-level
+  language model on *your* library and generates new text in that style. It's your own
+  (small) language model — honest about its size, and it gets sharper the more you teach
+  it. This is the laptop-native seed of the "language cortex".
+- **See everything it knows.** Ask `what have you learned` / `what's in your library`
+  and Vio summarises its whole memory + library.
 
 More skills added: **number theory** (`is 97 prime`, `factorize 360`, `gcd of 48 and 60`,
 `lcm of 4 and 6`), **base conversion** (`255 to binary`, `255 to hex`), and **date math**

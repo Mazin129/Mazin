@@ -162,6 +162,14 @@ def route(text):
     # strip the keyword and mangle "plot x^2" into bare arithmetic)
     if re.match(r"\s*(plot|graph|draw|vertex|analy[sz]e)\b", t):
         return text
+    # open-ended thinking: generation + library summary -> pass through raw so The
+    # Mind's thinker sees the full prompt (normalize_math would gut the sentence).
+    if re.match(r"\s*(write|continue|compose|imagine|generate|dream|make up)\b", t):
+        return text
+    if re.search(r"what (have|did) (i|you) (taught|told|learn)|"
+                 r"what('?s| is) in your (library|memory|head|brain)|"
+                 r"summari[sz]e (your |the )?(library|knowledge|memory)", t):
+        return text
     # coordinate geometry between points "(x,y) and (x,y)" -> pass through raw
     if re.search(r"\(\s*-?\d.*,.*-?\d\s*\).*\(\s*-?\d", text) and \
             re.search(r"distance|midpoint|slope|line", t):
