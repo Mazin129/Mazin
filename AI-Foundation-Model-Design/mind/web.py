@@ -46,7 +46,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  <b>integrate 1/x</b> · <b>remember that my name is Mazin</b> · <b>teach: &lt;paste a paragraph&gt;</b> · <b>what time is it in KSA</b></div>
 <div id="log"></div>
 <div id="row"><input id="inp" placeholder="Ask, or tell me a fact… (English or العربية)" autofocus>
-  <button onclick="send()">Send</button></div>
+  <button onclick="send()">Send</button>
+  <button onclick="document.getElementById('file').click()" title="Teach me from a .txt/.md file"
+    style="background:#334155">📄</button>
+  <input type="file" id="file" accept=".txt,.md,.text,.csv,.log" style="display:none" onchange="upload()"></div>
 <details><summary>What I remember / have learned</summary><div id="mem"></div>
   <button onclick="forget()" style="background:#7a1f1f;margin-top:8px">Forget everything</button></details>
 <script>
@@ -61,6 +64,12 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';add(t,'
  const badge=(j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+j.how;
  add(j.answer,'bot',badge);loadMem()}
 inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
+async function upload(){const f=document.getElementById('file').files[0];if(!f)return;
+ add('📄 Learning from '+f.name+' …','user');const text=await f.text();
+ const j=await(await fetch('/api/learn',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({name:f.name,text})})).json();
+ add(j.answer,'bot','<span class="ok">✓</span> · learned from file');loadMem();
+ document.getElementById('file').value=''}
 async function loadMem(){const j=await(await fetch('/api/memory')).json();
  if(j.name){document.getElementById('who').textContent=j.name;document.title=j.name;}
  document.getElementById('mem').innerHTML=
@@ -94,6 +103,9 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/api/ask":
             r = reply(MIND, (body.get("message") or "").strip())
             self._s(200, json.dumps(r, ensure_ascii=False))
+        elif self.path == "/api/learn":
+            msg = MIND.learn_text(body.get("text") or "", body.get("name") or "a file")
+            self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
         elif self.path == "/api/forget":
             MIND.mem = {"facts": [], "solved": {}}; MIND._save()
             if os.path.exists(KB_FILE):

@@ -182,6 +182,42 @@ def try_units(q):
     return None
 
 
+def try_numtheory(q):
+    ql = q.lower()
+    m = re.search(r"is\s+(\d+)\s+(?:a\s+)?prime", ql)
+    if m:
+        n = int(m[1]); return f"{n} is {'a PRIME' if sp.isprime(n) else 'NOT prime'} number."
+    m = re.search(r"(?:prime\s+factors?\s+of|factor(?:ize|ise)?)\s+(\d+)", ql)
+    if m:
+        n = int(m[1]); f = sp.factorint(n)
+        s = " × ".join(f"{p}^{e}" if e > 1 else f"{p}" for p, e in f.items())
+        return f"{n} = {s}" + ("  (prime)" if sp.isprime(n) else "")
+    m = re.search(r"gcd\s+(?:of\s+)?(\d+)\D+(\d+)", ql)
+    if m:
+        return f"gcd({m[1]}, {m[2]}) = {sp.igcd(int(m[1]), int(m[2]))}"
+    m = re.search(r"lcm\s+(?:of\s+)?(\d+)\D+(\d+)", ql)
+    if m:
+        return f"lcm({m[1]}, {m[2]}) = {sp.ilcm(int(m[1]), int(m[2]))}"
+    return None
+
+
+def try_base(q):
+    ql = q.lower()
+    m = re.search(r"(\d+)\s+(?:in|to|as|into)\s+binary", ql)
+    if m:
+        return f"{m[1]} in binary = {bin(int(m[1]))[2:]}"
+    m = re.search(r"(\d+)\s+(?:in|to|as|into)\s+hex(?:adecimal)?", ql)
+    if m:
+        return f"{m[1]} in hex = {hex(int(m[1]))[2:].upper()}"
+    m = re.search(r"binary\s+([01]+)\s+(?:in|to)\s+decimal", ql)
+    if m:
+        return f"binary {m[1]} = {int(m[1], 2)} in decimal"
+    m = re.search(r"hex\s+([0-9a-fA-F]+)\s+(?:in|to)\s+decimal", ql)
+    if m:
+        return f"hex {m[1]} = {int(m[1], 16)} in decimal"
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Retrieval tool — a growing knowledge base, searched by TF-IDF.
 # --------------------------------------------------------------------------- #
@@ -251,14 +287,31 @@ class Mind:
                 return True
         return False
 
+    @staticmethod
+    def _chunk(text, size=320):
+        """Group a long passage/book into ~size-char passages for good retrieval."""
+        sents = [s.strip() for s in re.split(r"(?<=[.!?؟])\s+|\n+", text.strip()) if len(s.strip()) > 2]
+        chunks, cur = [], ""
+        for s in sents:
+            if not cur or len(cur) + len(s) + 1 <= size:
+                cur = (cur + " " + s).strip()
+            else:
+                chunks.append(cur); cur = s
+        if cur:
+            chunks.append(cur)
+        return chunks or [text.strip()]
+
     def teach(self, text):                 # add durable knowledge to the library
-        # split a long passage into sentences so each becomes a retrievable fact
-        chunks = [c.strip() for c in re.split(r"(?<=[.!?؟])\s+|\n+", text.strip()) if len(c.strip()) > 3]
-        if not chunks:
-            chunks = [text.strip()]
+        chunks = self._chunk(text)
         self.lib.add_many(chunks)
-        return (f"Learned {len(chunks)} facts into the library." if len(chunks) > 1
+        return (f"Learned {len(chunks)} passages into the library." if len(chunks) > 1
                 else f"Learned: “{chunks[0]}”")
+
+    def learn_text(self, text, source=""):
+        chunks = self._chunk(text)
+        self.lib.add_many(chunks)
+        where = f" from {source}" if source else ""
+        return f"Learned {len(chunks)} passages{where}. You can now ask me about it."
 
     def remember(self, fact):              # store a personal fact (memory)
         self.mem["facts"].append(fact); self._save()
@@ -273,8 +326,8 @@ class Mind:
         if low.startswith("remember:"):
             return {"answer": self.remember(q[9:].strip()), "how": "memory-write", "verified": True, "trace": []}
 
-        # 1a) everyday exact tools: percentages, statistics, unit conversions
-        for tool in (try_percent, try_stats, try_units):
+        # 1a) everyday exact tools: percentages, stats, units, number theory, bases
+        for tool in (try_percent, try_base, try_numtheory, try_units, try_stats):
             r = tool(q)
             if r:
                 return {"answer": r, "how": "exact tool", "verified": True, "trace": []}

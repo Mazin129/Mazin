@@ -28,9 +28,37 @@ TZ = {"ksa": 3, "saudi": 3, "riyadh": 3, "makkah": 3, "mecca": 3, "jeddah": 3,
       "germany": 1, "france": 1, "paris": 1, "india": 5.5, "new york": -5, "est": -5}
 
 
+DATE_FMTS = ["%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%d.%m.%Y",
+             "%B %d %Y", "%B %d, %Y", "%d %B %Y", "%d %b %Y", "%b %d %Y", "%b %d, %Y"]
+
+
+def parse_date(s):
+    s = s.strip().strip("؟?.،")
+    for f in DATE_FMTS:
+        try:
+            return datetime.datetime.strptime(s, f).date()
+        except ValueError:
+            pass
+    return None
+
+
 def time_answer(text):
     t = text.lower()
-    if not re.search(r"\b(time|clock|date|day|الوقت|الساعة|التاريخ|اليوم)\b", t):
+    # 1) date math on a specific date
+    m = re.search(r"days?\s+(?:between|from)\s+(.+?)\s+(?:and|to|until)\s+(.+)", t)
+    if m and parse_date(m.group(1)) and parse_date(m.group(2)):
+        d1, d2 = parse_date(m.group(1)), parse_date(m.group(2))
+        return f"{abs((d2 - d1).days)} days between {d1} and {d2}."
+    m = re.search(r"days?\s+(?:until|till|to|since)\s+(.+)", t)
+    if m and parse_date(m.group(1)):
+        d = parse_date(m.group(1)); diff = (d - datetime.date.today()).days
+        return f"{abs(diff)} days {'until' if diff >= 0 else 'since'} {d} (a {d.strftime('%A')})."
+    m = re.search(r"(?:what\s+day\s+(?:is|was|of\s+the\s+week)|day\s+of\s+week\s+for|"
+                  r"which\s+day\s+is)\s+(.+)", t)
+    if m and parse_date(m.group(1)):
+        return f"{parse_date(m.group(1)).strftime('%A, %d %B %Y')}."
+    # 2) current time / date  (note: plain 'day' is NOT a trigger, to avoid clashing)
+    if not re.search(r"\b(time|clock|now|today|current|date|الوقت|الساعة|التاريخ|اليوم|الآن|الان)\b", t):
         return None
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     place, off = None, None
@@ -38,10 +66,9 @@ def time_answer(text):
         if name in t:
             place, off = name, o
             break
-    when = now_utc + datetime.timedelta(hours=off) if off is not None else \
-        datetime.datetime.now()
+    when = now_utc + datetime.timedelta(hours=off) if off is not None else datetime.datetime.now()
     where = f" in {place.upper()}" if place else " (your machine's local time)"
-    if re.search(r"\b(date|day|التاريخ|اليوم)\b", t):
+    if re.search(r"\b(date|today|التاريخ|اليوم)\b", t):
         return f"Today{where} is {when.strftime('%A, %d %B %Y')}."
     return f"The time{where} is {when.strftime('%H:%M')} ({when.strftime('%I:%M %p')})."
 

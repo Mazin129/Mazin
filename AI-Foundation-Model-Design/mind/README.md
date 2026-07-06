@@ -98,3 +98,14 @@ no folders, no commands.
   retrievable facts), then ask questions about it.
 - **Honesty**: says *"I don't know"* rather than guessing. Everything is verified or
   taught by you.
+
+## Learn from a document or book (📄)
+
+In the browser, click the **📄** button next to Send and choose a **.txt / .md** file
+(your notes, an article, a whole book). Vio splits it into passages, stores them, and you
+can then **ask questions about it** — answered only from what the document actually says.
+(To convert a PDF/Word file first, "Save As → Plain Text .txt", then upload it.)
+
+More skills added: **number theory** (`is 97 prime`, `factorize 360`, `gcd of 48 and 60`,
+`lcm of 4 and 6`), **base conversion** (`255 to binary`, `255 to hex`), and **date math**
+(`what day is 2026-01-01`, `days between 2020-01-01 and 2026-01-01`, `days until 2027-01-01`).
