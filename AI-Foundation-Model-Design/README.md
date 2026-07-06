@@ -101,6 +101,10 @@ deep vision, one-shot new classes, and no catastrophic forgetting (MNIST or Fash
 oscillatory memory cell (with learnable per-neuron dynamics) that reads text and learns to
 **generate coherent English** (loss ~0.09).
 
+`prototype/bl_language_real.py` scales that to a **real corpus** (tiny-shakespeare, ~1 MB,
+downloaded at runtime): two stacked oscillatory cells that learn to generate Shakespeare-style
+text — speaker names, line breaks, dialogue structure. GPU-oriented defaults.
+
 ```bash
 python3 prototype/bl_system.py       # the full stack
 python3 prototype/bl_language.py     # the oscillatory language model

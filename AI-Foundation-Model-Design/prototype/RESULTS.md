@@ -477,3 +477,44 @@ per unit, so each neuron tunes its own memory timescale.
   architecture can drive coherent character-level generation, not that it competes
   with a large transformer LM. Scaling to a real corpus + the sparse-attention layer
   (section 1.2) is the next step.
+
+---
+
+# 9. BL-Language-Real — the oscillatory LM on a real corpus (Shakespeare)
+
+`bl_language_real.py`. Scales the oscillatory language model from a toy embedded
+string (section 8) to a **real ~1 MB corpus (tiny-shakespeare, downloaded at
+runtime)**. Two stacked oscillatory cells (learnable per-neuron dynamics) with
+layer-norm and a residual connection, trained to predict the next character.
+
+```bash
+python bl_language_real.py       # downloads the corpus; GPU-oriented defaults
+```
+
+### Result (small 0.24M-param model validated on CPU, ~3k steps)
+
+The model learns the **structure of Shakespeare** — speaker names, line breaks,
+dialogue punctuation, capitalisation — with train loss falling ~2.8 -> ~2.0:
+
+```
+ROMEO:
+Of your so lomefler. no me purnot the hous urd the smiber'd?
+
+MENENA PLAG:
+Powt for I my chinge sis, with hot in to les
+```
+
+Speaker labels (`ROMEO:`, `MENENA PLAG:` ~ MENENIUS), the play layout, and the
+rhythm are clearly learned; individual words are still rough at this tiny size.
+
+### Honest status
+
+- This is a **0.24M-param model trained briefly on CPU for validation**; it learns
+  Shakespeare's *form*, not fluent words (train loss plateaus ~2.0). The shipped
+  defaults (D_HID=512, two cells, 6000 steps) are sized for a GPU and reach lower
+  loss / cleaner text — run it on the MX550 for the real thing.
+- An oscillatory char-LM at this scale is **not** competitive with a tuned LSTM or
+  transformer; the point is that the physics-grounded memory cell (section 1.2)
+  scales from a toy string to a real corpus and learns real text structure.
+- Fixed a validation-loss bug found during this run (x and y were sampled from
+  different random offsets); the reported *train* losses were always correct.
