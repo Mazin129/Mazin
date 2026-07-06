@@ -83,8 +83,18 @@ class Thinker:
     def generate(self, prompt="", max_words=40):
         if not self.starts:
             return None
-        seed = re.findall(r"[A-Za-z0-9']+|[.,;:!?]", prompt)
-        history = seed[-2:] if len(seed) >= 2 else list(random.choice(self.starts))
+        # topic-aware seeding: start from a real context that mentions the topic word
+        kws = [w for w in re.findall(r"[a-z']+", prompt.lower())
+               if len(w) > 2 and w not in _STOP]
+        history = None
+        if kws:
+            cands = [list(ctx) for ctx in self.models[1]
+                     if any(k in w.lower() for w in ctx for k in kws)]
+            if cands:
+                history = random.choice(cands)
+        if history is None:
+            seed = re.findall(r"[A-Za-z0-9']+|[.,;:!?]", prompt)
+            history = seed[-2:] if len(seed) >= 2 else list(random.choice(self.starts))
         out = list(history)
         for _ in range(max_words):
             nxt = self._next(history)

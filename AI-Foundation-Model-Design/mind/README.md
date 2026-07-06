@@ -107,6 +107,14 @@ can then **ask questions about it** — answered only from what the document act
 PDF reading is built in (dependency-free); scanned/image-only PDFs have no text to
 extract, so for those "Save As → Plain Text .txt" first.
 
+### Knows things out of the box
+
+Vio ships with a **built-in starter knowledge pack** (`seed_knowledge.py`) — accurate,
+general facts about the body, science, space, geography, and technology — loaded the
+first time it runs. So it can answer common questions immediately (e.g. *"how many
+chambers does the heart have?"*, *"how many planets are there?"*, *"what is the longest
+river?"*) without you teaching it first. Everything you teach sits alongside this.
+
 ### Open-ended thinking — reason & generate (all local)
 
 Once Vio has read something, it does two "thinking" things, 100% on your machine:

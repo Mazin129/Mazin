@@ -440,7 +440,18 @@ class Library:
         self.docs = []
         if os.path.exists(KB_FILE):
             self.docs = json.load(open(KB_FILE, encoding="utf-8"))
+        else:
+            self._seed()                     # first ever run: load built-in knowledge
         self._fit()
+
+    def _seed(self):
+        """Give a fresh Vio a starter library so it isn't blank on day one."""
+        try:
+            from seed_knowledge import SEED
+        except Exception:
+            return
+        self.docs = list(SEED)
+        json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
     def _fit(self):
         from sklearn.feature_extraction.text import TfidfVectorizer
@@ -645,8 +656,9 @@ class Mind:
                     "verified": True, "trace": []}
 
         # 0-) open-ended GENERATION: "write/continue/imagine/compose about …"
-        gm = re.match(r"\s*(write|continue|compose|imagine|generate|dream|make up)\b(.*)",
-                      low, re.I)
+        #     (typo-tolerant: 'rite'/'wirte' for 'write')
+        gm = re.match(r"\s*(w?rite|wirte|write|continue|compose|imagine|generate|dream|"
+                      r"make up|tell me a story)\b(.*)", low, re.I)
         if gm:
             seed = re.sub(r"\b(a|an|the|about|something|some|text|paragraph|sentence|story|"
                           r"me|for|on)\b", " ", gm.group(2)).strip()
