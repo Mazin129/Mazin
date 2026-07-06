@@ -40,7 +40,8 @@ EPOCHS = 40
 TRAIN_N = None         # None = full 60k. Set e.g. 20000 for a quicker CPU run.
 INFER_STEPS = 20
 INFER_LR = 0.2
-LR = 0.02
+LR = 0.03
+MOMENTUM = 0.9         # momentum on the local weight updates -> faster convergence
 
 act = torch.relu
 def dact(z): return (z > 0).float()
@@ -79,6 +80,7 @@ class DeepPredictiveCoding:
         self.W = [None] + [(torch.randn(sizes[l-1], sizes[l], device=DEVICE)
                             * (2 / sizes[l-1]) ** 0.5) for l in range(1, L + 1)]
         self.b = [None] + [torch.zeros(sizes[l], device=DEVICE) for l in range(1, L + 1)]
+        self.vW = [None] + [torch.zeros_like(self.W[l]) for l in range(1, L + 1)]  # momentum
 
     def feedforward(self, X):
         x = [X]
@@ -105,7 +107,9 @@ class DeepPredictiveCoding:
                     x[l] = x[l] - INFER_LR * (e[l] - dact(x[l]) * (e[l+1] @ self.W[l+1].t()))
             e = self.errors(x)
             for l in range(1, L + 1):                 # plasticity: LOCAL updates
-                self.W[l] += LR * (act(x[l-1]).t() @ e[l]) / len(b)
+                g = (act(x[l-1]).t() @ e[l]) / len(b)
+                self.vW[l] = MOMENTUM * self.vW[l] + g
+                self.W[l] += LR * self.vW[l]
                 self.b[l] += LR * e[l].mean(0)
 
     @torch.no_grad()

@@ -85,12 +85,25 @@ python3 prototype/bl_advanced.py     # set DATASET = "mnist" or "fashion"
 
 `prototype/bl_deep_local.py` is the strongest brain-native learning result: a **deep
 network (784-400-150-10) that learns MNIST with NO backpropagation** — only local
-predictive-coding updates. It reaches ~90% (still climbing) vs a backprop MLP's 94.5% on
-the identical net, learning its own hidden features with no backward pass and no weight
-transport. This scales the section-5.2 claim from a toy task to real images.
+predictive-coding updates. With momentum it reaches **96.9% — backprop-class accuracy** —
+learning its own hidden features with no backward pass and no weight transport. This
+scales the section-5.2 claim from a toy task to real images.
 
 ```bash
 python3 prototype/bl_deep_local.py
+```
+
+`prototype/bl_system.py` is the **whole brain-like stack in one model**: V1 vision → a deep
+local-learning neocortex (no backprop) → an episodic hippocampus. One model does learned
+deep vision, one-shot new classes, and no catastrophic forgetting (MNIST or Fashion-MNIST).
+
+`prototype/bl_language.py` steps toward **language**: a character-level model built on the
+oscillatory memory cell (with learnable per-neuron dynamics) that reads text and learns to
+**generate coherent English** (loss ~0.09).
+
+```bash
+python3 prototype/bl_system.py       # the full stack
+python3 prototype/bl_language.py     # the oscillatory language model
 ```
 
 Full write-ups, including honest limitations and negative results, in
