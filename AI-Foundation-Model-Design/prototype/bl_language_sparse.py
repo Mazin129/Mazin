@@ -31,7 +31,7 @@ N_HEAD = 4
 N_BLOCK = 3
 ATTN_EVERY = 3         # attention only in every 3rd block (1-of-3)
 WINDOW = 32            # local attention window (0 = full causal attention)
-SEQ = 96
+SEQ = 64               # main speed knob (oscillator is sequential); raise on a bigger GPU
 BATCH = 48
 STEPS = 3000
 LR = 3e-3
@@ -59,11 +59,12 @@ class OscillatoryMixer(nn.Module):
 
     def forward(self, u):
         B, T, _ = u.shape
+        Uu = self.Wu(u)                        # input projection for all steps at once (parallel)
         y = torch.zeros(B, self.d, device=u.device); z = torch.zeros(B, self.d, device=u.device)
         g, a, dt = self.log_gamma.exp(), self.log_alpha.exp(), self.log_dt.exp()
         outs = []
         for t in range(T):
-            drive = torch.tanh(self.Wy(y) + self.Wu(u[:, t]))
+            drive = torch.tanh(self.Wy(y) + Uu[:, t])
             z = z + dt * (drive - g * y - a * z); y = y + dt * z
             outs.append(y)
         return torch.stack(outs, dim=1)

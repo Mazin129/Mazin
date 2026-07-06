@@ -25,8 +25,8 @@ import torch.nn.functional as F
 torch.manual_seed(0)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 D_EMB = 64
-D_HID = 512            # hidden width. Lower to 256 on CPU / small GPU.
-SEQ = 128             # sequence length for training
+D_HID = 384            # hidden width. Lower to 256 on CPU / small GPU.
+SEQ = 96              # sequence length (the oscillator is sequential — main speed knob)
 BATCH = 64
 STEPS = 6000          # training steps. Lower for a quick look.
 LR = 3e-3
@@ -62,12 +62,13 @@ class OscillatoryCell(nn.Module):
 
     def forward(self, u):
         B, T, _ = u.shape
+        Uu = self.Wu(u)                       # input projection for all steps at once (parallel, GPU-friendly)
         y = torch.zeros(B, self.d_hid, device=u.device)
         z = torch.zeros(B, self.d_hid, device=u.device)
         g, a, dt = self.log_gamma.exp(), self.log_alpha.exp(), self.log_dt.exp()
         outs = []
         for t in range(T):
-            drive = torch.tanh(self.Wy(y) + self.Wu(u[:, t]))
+            drive = torch.tanh(self.Wy(y) + Uu[:, t])
             z = z + dt * (drive - g * y - a * z)
             y = y + dt * z
             outs.append(y)

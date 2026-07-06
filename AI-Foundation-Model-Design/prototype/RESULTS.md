@@ -569,3 +569,40 @@ attention for exact recall**.
 - This build uses *full* attention in each block. The blueprint's efficiency claim
   is **sparse** / periodic attention (1-in-k layers, top-k keys); adding that
   sparsity is the next step, trading a little quality for the O(1)-ish cost.
+
+---
+
+# 11. BL-Language-Sparse — the efficient section-1.2 architecture
+
+`bl_language_sparse.py`. The efficiency payoff of the blueprint: oscillatory memory
+in every block, but attention used **sparingly** — only in every k-th block
+(periodic) and only over a **local window** (windowed, O(T*W) instead of O(T^2)).
+
+### Efficiency comparison (matched size/steps on tiny-shakespeare)
+
+| Attention | Val loss | Attention-cost proxy |
+|---|---|---|
+| Pure oscillator (no attention) | ~2.02 | 0 |
+| Full attention (every block, full context) | **1.666** | 1.00x |
+| **Sparse (1 of 3 blocks, window 32)** | **1.754** | **0.11x (9x cheaper)** |
+
+Sparse attention recovers ~90% of the gap between the pure oscillator and full
+attention while using **~1/9th the attention cost** — the blueprint's core
+efficiency claim, measured: cheap O(1) oscillatory memory does the bulk of the
+work, and a little periodic/windowed attention supplies the exact recall.
+
+### GPU performance note (important)
+
+The oscillatory cell is a **sequential recurrence** (a Python loop over timesteps),
+so on a GPU it is launch-overhead-bound and shows low GPU utilisation — most time is
+spent dispatching many tiny per-step kernels rather than computing. Two mitigations
+are applied in these files:
+
+- the input projection `Wu(u)` is precomputed for the whole sequence in one parallel
+  matmul (only the truly-sequential recurrence stays in the loop);
+- defaults are sized for a modest laptop GPU (small `SEQ`, the main speed knob).
+
+The proper fix for true GPU speed is a **parallel associative scan** (as in Mamba /
+LinOSS), which requires a *linear* recurrence; the current cell's nonlinearity
+(`tanh(Wy·y + ...)`) blocks that. Converting the oscillator to a linear,
+scan-parallelisable form is the clear next step for GPU efficiency.

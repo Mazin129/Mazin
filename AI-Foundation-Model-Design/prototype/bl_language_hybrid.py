@@ -28,12 +28,15 @@ import torch.nn.functional as F
 
 torch.manual_seed(0)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-D_MODEL = 256
+# Defaults sized for a modest laptop GPU (e.g. GeForce MX550, 2 GB). The
+# oscillator is a sequential recurrence, so SEQ is the main speed knob — keep it
+# small. Raise D_MODEL/N_BLOCK/SEQ on a bigger GPU for higher quality.
+D_MODEL = 192
 N_HEAD = 4
-N_BLOCK = 3
-SEQ = 128
+N_BLOCK = 2
+SEQ = 64
 BATCH = 64
-STEPS = 5000
+STEPS = 3000
 LR = 3e-3
 CORPUS_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 FALLBACK = ("to be or not to be that is the question whether tis nobler in the mind "
@@ -64,12 +67,13 @@ class OscillatoryMixer(nn.Module):
 
     def forward(self, u):
         B, T, _ = u.shape
+        Uu = self.Wu(u)                       # input projection for ALL steps at once (parallel, GPU-friendly)
         y = torch.zeros(B, self.d, device=u.device)
         z = torch.zeros(B, self.d, device=u.device)
         g, a, dt = self.log_gamma.exp(), self.log_alpha.exp(), self.log_dt.exp()
         outs = []
-        for t in range(T):
-            drive = torch.tanh(self.Wy(y) + self.Wu(u[:, t]))
+        for t in range(T):                    # only the truly-sequential recurrence stays in the loop
+            drive = torch.tanh(self.Wy(y) + Uu[:, t])
             z = z + dt * (drive - g * y - a * z)
             y = y + dt * z
             outs.append(y)
