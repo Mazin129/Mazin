@@ -167,10 +167,14 @@ def main():
         p = (step - WARMUP) / max(1, STEPS - WARMUP)
         return 0.1 * LR + 0.9 * LR * 0.5 * (1 + math.cos(math.pi * p))
 
+    offsets = torch.arange(SEQ + 1, device=DEVICE)
+
     def get_batch(d):
+        # Build the batch in ONE vectorized gather — no Python loop over a CUDA
+        # tensor (that would force a GPU->CPU sync per element and starve the GPU).
         ix = torch.randint(0, len(d) - SEQ - 1, (BATCH,), device=DEVICE)
-        return (torch.stack([d[i:i+SEQ] for i in ix]),
-                torch.stack([d[i+1:i+SEQ+1] for i in ix]))
+        seq = d[ix[:, None] + offsets[None, :]]        # (BATCH, SEQ+1), single op
+        return seq[:, :-1], seq[:, 1:]
 
     @torch.no_grad()
     def val_loss():

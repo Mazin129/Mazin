@@ -132,10 +132,12 @@ class LM(nn.Module):
 def train_model(model, train, val, V, steps, tag):
     opt = torch.optim.Adam(model.parameters(), lr=LR)
 
+    offsets = torch.arange(SEQ + 1, device=DEVICE)
+
     def get_batch(d):
         ix = torch.randint(0, len(d) - SEQ - 1, (BATCH,), device=DEVICE)
-        x = torch.stack([d[i:i+SEQ] for i in ix]); y = torch.stack([d[i+1:i+SEQ+1] for i in ix])
-        return x, y
+        seq = d[ix[:, None] + offsets[None, :]]        # one vectorized gather (no GPU->CPU sync)
+        return seq[:, :-1], seq[:, 1:]
 
     for step in range(1, steps + 1):
         x, y = get_batch(train)
@@ -158,10 +160,12 @@ def main():
     @torch.no_grad()
     def final_val(model):
         model.eval()
+        offs = torch.arange(SEQ + 1, device=DEVICE)
+
         def gb():
             ix = torch.randint(0, len(val) - SEQ - 1, (BATCH,), device=DEVICE)
-            return (torch.stack([val[i:i+SEQ] for i in ix]),
-                    torch.stack([val[i+1:i+SEQ+1] for i in ix]))
+            s = val[ix[:, None] + offs[None, :]]
+            return s[:, :-1], s[:, 1:]
         t = 0.0
         for _ in range(10):
             xb, yb = gb(); t += F.cross_entropy(model(xb).reshape(-1, V), yb.reshape(-1)).item()

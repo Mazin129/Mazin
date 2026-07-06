@@ -90,11 +90,12 @@ def main():
     opt = torch.optim.Adam(model.parameters(), lr=4e-3)
     T, B = 48, 48
 
+    offsets = torch.arange(T + 1, device=DEVICE)
+
     def batch():
         ix = torch.randint(0, len(data) - T - 1, (B,), device=DEVICE)
-        x = torch.stack([data[i:i+T] for i in ix])
-        y = torch.stack([data[i+1:i+T+1] for i in ix])
-        return x, y
+        seq = data[ix[:, None] + offsets[None, :]]     # one vectorized gather (no GPU->CPU sync)
+        return seq[:, :-1], seq[:, 1:]
 
     @torch.no_grad()
     def sample(prompt="the brain ", n=220, temp=0.5):

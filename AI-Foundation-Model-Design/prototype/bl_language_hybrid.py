@@ -148,12 +148,13 @@ def main():
           f"({N_BLOCK} blocks: oscillator + attention + MLP each).\n")
     opt = torch.optim.Adam(model.parameters(), lr=LR)
 
+    offsets = torch.arange(SEQ + 1, device=DEVICE)
+
     def get_batch(split):
         d = train if split == "train" else val
         ix = torch.randint(0, len(d) - SEQ - 1, (BATCH,), device=DEVICE)
-        x = torch.stack([d[i:i+SEQ] for i in ix])
-        y = torch.stack([d[i+1:i+SEQ+1] for i in ix])
-        return x, y
+        seq = d[ix[:, None] + offsets[None, :]]        # one vectorized gather (no GPU->CPU sync)
+        return seq[:, :-1], seq[:, 1:]
 
     @torch.no_grad()
     def val_loss():
