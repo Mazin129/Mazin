@@ -46,24 +46,32 @@ class MathReasoner:
         ql = q.lower().strip()
         trace = []
         try:
-            # solve an equation:  "solve x^2 - 4 = 0"  /  "x^2 = 4"
+            # equation or "expr =" / "expr = ?"  (e.g. "solve x^2=4", "333+98=?")
             if "solve" in ql or ("=" in q and "==" not in q):
-                body = re.sub(r"^\s*solve\s*", "", q, flags=re.I)
+                body = re.sub(r"^\s*solve\s*", "", q, flags=re.I).strip().rstrip("?").strip()
+                if body.endswith("="):
+                    body = body[:-1].strip()            # "333+98=" -> "333+98" (just evaluate)
                 if "=" in body:
                     lhs, rhs = body.split("=", 1)
                     eq = sp.Eq(self._parse(lhs), self._parse(rhs))
-                else:
-                    eq = sp.Eq(self._parse(body), 0)
-                syms = list(eq.free_symbols) or [X]
-                sol = sp.solve(eq, syms[0])
-                trace.append(f"parsed equation: {sp.pretty(eq, use_unicode=False)}")
-                # VERIFY: substitute each solution back
-                checks = []
-                for s in sol:
-                    ok = sp.simplify(eq.lhs.subs(syms[0], s) - eq.rhs.subs(syms[0], s)) == 0
-                    checks.append(f"{syms[0]}={s}  ->  {'verified' if ok else 'CHECK FAILED'}")
-                trace += ["verification:"] + ["  " + c for c in checks]
-                return f"{syms[0]} = " + ", ".join(map(str, sol)), trace, all("verified" in c for c in checks)
+                    syms = list(eq.free_symbols)
+                    if syms:                            # a real equation in a variable -> solve
+                        sol = sp.solve(eq, syms[0])
+                        trace.append(f"parsed equation: {sp.pretty(eq, use_unicode=False)}")
+                        checks = []
+                        for s in sol:                   # VERIFY: substitute each solution back
+                            ok = sp.simplify(eq.lhs.subs(syms[0], s) - eq.rhs.subs(syms[0], s)) == 0
+                            checks.append(f"{syms[0]}={s}  ->  {'verified' if ok else 'CHECK FAILED'}")
+                        trace += ["verification:"] + ["  " + c for c in checks]
+                        return (f"{syms[0]} = " + ", ".join(map(str, sol)), trace,
+                                all("verified" in c for c in checks))
+                    val = sp.simplify(eq.lhs - eq.rhs)  # numeric "a = b" -> true/false
+                    return f"{body}  is  {'TRUE' if val == 0 else 'FALSE'}", trace, True
+                # no '=' left after stripping -> just evaluate the expression
+                e = self._parse(body); val = sp.simplify(e)
+                if val.free_symbols:
+                    return f"{e} = {val}", trace, True
+                return f"{body} = {val}   (≈ {float(val):.6g})", ["evaluated exactly"], True
 
             # calculus / algebra keywords
             if any(k in ql for k in ("integrate", "integral of")):

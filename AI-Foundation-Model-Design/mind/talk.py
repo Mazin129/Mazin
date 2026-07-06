@@ -17,7 +17,37 @@ with learned routing. It needs no market model and runs instantly on a laptop.
 """
 
 import re
+import datetime
 from reasoner import Mind
+
+# UTC offsets for a few places (Vio computes time from your machine's clock, no internet)
+TZ = {"ksa": 3, "saudi": 3, "riyadh": 3, "makkah": 3, "mecca": 3, "jeddah": 3,
+      "السعودية": 3, "الرياض": 3, "uae": 4, "dubai": 4, "abu dhabi": 4,
+      "egypt": 2, "cairo": 2, "مصر": 2, "qatar": 3, "kuwait": 3, "bahrain": 3,
+      "uk": 0, "london": 0, "utc": 0, "gmt": 0, "turkey": 3, "istanbul": 3,
+      "germany": 1, "france": 1, "paris": 1, "india": 5.5, "new york": -5, "est": -5}
+
+
+def time_answer(text):
+    t = text.lower()
+    if not re.search(r"\b(time|clock|date|day|الوقت|الساعة|التاريخ|اليوم)\b", t):
+        return None
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    place, off = None, None
+    for name, o in TZ.items():
+        if name in t:
+            place, off = name, o
+            break
+    when = now_utc + datetime.timedelta(hours=off) if off is not None else \
+        datetime.datetime.now()
+    where = f" in {place.upper()}" if place else " (your machine's local time)"
+    if re.search(r"\b(date|day|التاريخ|اليوم)\b", t):
+        return f"Today{where} is {when.strftime('%A, %d %B %Y')}."
+    return f"The time{where} is {when.strftime('%H:%M')} ({when.strftime('%I:%M %p')})."
+
+
+CAPS = re.compile(r"what can you do|your (skills|capabilit|abilit)|what are you capable|"
+                  r"how can you help|قدرات|ماذا تستطيع|ماذا يمكنك|وش تسوي", re.I)
 
 # spoken-math -> symbols (English)
 WORD_MATH = [
@@ -144,9 +174,31 @@ def reply(mind, text):
                           f"verify maths, remember what you tell me, retrieve what you teach me, "
                           f"and I say 'I don't know' rather than guess. (English / العربية)",
                 "how": "identity", "verified": True, "trace": []}
+    # capabilities — honest list of what it can and can't do
+    if CAPS.search(t):
+        return {"answer":
+                f"I'm {mind.name()}. Here's what I can actually do — reliably and verified:\n"
+                "• Maths, exactly: arithmetic (333+98), algebra (solve x^2-5x+6=0), calculus "
+                "(integrate/derivative), simplify/factor/expand — and I check my own answers.\n"
+                "• Remember facts about you ('remember that …' or just 'my name is …').\n"
+                "• Learn facts you teach me ('teach: …') and retrieve them later.\n"
+                "• Tell the time/date (e.g. 'what time is it in KSA').\n"
+                "• Be honest: I say 'I don't know' instead of guessing.\n"
+                "What I can't do: I run 100% on your machine with no internet, so I don't know "
+                "live world facts (news, prices, someone's biography) unless you teach me — and "
+                "I'm not a chit-chat model. That's by design: everything I tell you is verified "
+                "or something you gave me.",
+                "how": "capabilities", "verified": True, "trace": []}
+
+    # time / date
+    ta = time_answer(t)
+    if ta:
+        return {"answer": ta, "how": "clock", "verified": True, "trace": []}
+
     if GREET.match(t):
         return {"answer": f"Hello — I'm {mind.name()}. Ask me to solve/integrate something, tell "
-                          f"me a fact ('remember that …'), or ask what I know. (English / العربية)",
+                          f"me a fact ('remember that …'), ask the time, or ask what I can do. "
+                          f"(English / العربية)",
                 "how": "greeting", "verified": True, "trace": []}
     return mind.ask(route(text))
 
