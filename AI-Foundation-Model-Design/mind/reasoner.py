@@ -151,6 +151,14 @@ class Mind:
         self.lib = Library()
         self.mem = json.load(open(MEM_FILE, encoding="utf-8")) if os.path.exists(MEM_FILE) \
             else {"facts": [], "solved": {}}
+        self.mem.setdefault("identity", {"name": "Vio"})   # the assistant's own name
+
+    def name(self):
+        return self.mem.get("identity", {}).get("name", "Vio")
+
+    def set_name(self, n):
+        self.mem.setdefault("identity", {})["name"] = n
+        self._save()
 
     def _save(self):
         json.dump(self.mem, open(MEM_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)

@@ -120,12 +120,33 @@ def route(text):
 
 
 GREET = re.compile(r"^(hi|hello|hey|salam|salaam|مرحبا|سلام|اهلا|أهلا)\b", re.I)
+# name the assistant:  "your name is Vio" / "i'll call you Vio" / "اسمك ڤيو"
+NAME_ME = re.compile(r"(?:your name is|you are called|i'?ll call you|i will call you|"
+                     r"let me call you|اسمك|سمّيتك|سميتك)\s+([^\s،.?!]+)", re.I)
+# ask who it is
+WHO_ARE_YOU = re.compile(r"\b(what'?s your name|what is your name|who are you|"
+                         r"what are you|ما اسمك|ما إسمك|من انت|من أنت)\b", re.I)
 
 
 def reply(mind, text):
-    if GREET.match(text.strip()):
-        return {"answer": "Hello. Ask me to solve/integrate/simplify something, teach me a "
-                          "fact ('remember that ...'), or ask what I know. (English or العربية)",
+    t = text.strip()
+
+    # identity: name the assistant
+    m = NAME_ME.search(t)
+    if m:
+        new = m.group(1).strip("؟?.،")
+        mind.set_name(new)
+        return {"answer": f"Understood — I'm {new} now. Nice to meet you.",
+                "how": "identity", "verified": True, "trace": []}
+    # identity: who are you
+    if WHO_ARE_YOU.search(t):
+        return {"answer": f"I'm {mind.name()}, your own local reasoning assistant. I solve and "
+                          f"verify maths, remember what you tell me, retrieve what you teach me, "
+                          f"and I say 'I don't know' rather than guess. (English / العربية)",
+                "how": "identity", "verified": True, "trace": []}
+    if GREET.match(t):
+        return {"answer": f"Hello — I'm {mind.name()}. Ask me to solve/integrate something, tell "
+                          f"me a fact ('remember that …'), or ask what I know. (English / العربية)",
                 "how": "greeting", "verified": True, "trace": []}
     return mind.ask(route(text))
 

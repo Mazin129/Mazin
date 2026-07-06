@@ -41,7 +41,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  details{margin-top:10px;font-size:12px;color:#9aa0ad}
  details summary{cursor:pointer}
 </style></head><body>
-<h1>🧠 The Mind <span class="sub">— reasons &amp; verifies · English / العربية · runs on your machine</span></h1>
+<h1>🧠 <span id="who">Vio</span> <span class="sub">— your local assistant · reasons &amp; verifies · English / العربية</span></h1>
 <div class="sub">Try: <b>what are the roots of x squared minus 5x plus 6</b> · <b>integrate 1/x</b> ·
  <b>remember that my name is Mazin</b> · <b>teach: the capital of France is Paris</b> · <b>what do you know about me</b></div>
 <div id="log"></div>
@@ -62,6 +62,7 @@ async function send(){const t=inp.value.trim();if(!t)return;inp.value='';add(t,'
  add(j.answer,'bot',badge);loadMem()}
 inp.addEventListener('keydown',e=>{if(e.key==='Enter')send()});
 async function loadMem(){const j=await(await fetch('/api/memory')).json();
+ if(j.name){document.getElementById('who').textContent=j.name;document.title=j.name;}
  document.getElementById('mem').innerHTML=
   '<b>About you:</b><br>'+((j.facts||[]).map(f=>'• '+f).join('<br>')||'(nothing yet)')+
   '<br><br><b>Library:</b><br>'+((j.library||[]).map(d=>'• '+d).join('<br>')||'(empty)')}
@@ -82,7 +83,8 @@ class H(BaseHTTPRequestHandler):
             self._s(200, PAGE, "text/html; charset=utf-8")
         elif self.path == "/api/memory":
             lib = json.load(open(KB_FILE, encoding="utf-8")) if os.path.exists(KB_FILE) else []
-            self._s(200, json.dumps({"facts": MIND.mem["facts"], "library": lib}, ensure_ascii=False))
+            self._s(200, json.dumps({"name": MIND.name(), "facts": MIND.mem["facts"],
+                                     "library": lib}, ensure_ascii=False))
         else:
             self._s(404, "{}")
 
