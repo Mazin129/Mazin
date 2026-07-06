@@ -67,16 +67,23 @@ def has(t, kws):
     return any(k in t for k in kws)
 
 
+# a first-person statement of a personal fact -> store it in memory
+STATEMENT = re.compile(
+    r"^\s*(my\s+\w+.*\b(is|are|was)\b|my name\b|i\s+am\b|i'?m\b|call me\b|"
+    r"i\s+(like|love|have|prefer|live|work|enjoy|hate|study|speak|need|want to be)\b|"
+    r"اسمي|أنا\b|انا\b|احب|أحب|اعمل|أعمل)", re.I)
+
+
 def route(text):
     """Map free text -> a structured query for The Mind."""
     t = text.lower().strip()
 
     # explicit teaching / memory (natural phrasing)
     if t.startswith(("remember that", "remember")) or t.startswith(("تذكر",)):
-        fact = re.sub(r"^(remember that|remember|تذكر ان|تذكر أن|تذكر)\s*", "", text, flags=re.I).strip(" ؟?.")
+        fact = re.sub(r"^(remember that|remember|تذكر ان|تذكر أن|تذكر)\s*", "", text, flags=re.I).strip(" :؟?.")
         return f"remember: {fact}"
     if t.startswith(("teach that", "teach", "note that")) or t.startswith(("علم", "علمك")):
-        fact = re.sub(r"^(teach that|teach|note that|علم ان|علمك|علم)\s*", "", text, flags=re.I).strip(" ؟?.")
+        fact = re.sub(r"^(teach that|teach|note that|علم ان|علمك|علم)\s*", "", text, flags=re.I).strip(" :؟?.")
         return f"teach: {fact}"
 
     # math intents -> build the exact Mind command. normalize_math() strips the
@@ -96,6 +103,11 @@ def route(text):
         if "=" not in expr:
             expr += " = 0"
         return f"solve {expr}"
+
+    # a personal STATEMENT ("my name is Mazin", "I love AI", "call me X") -> remember.
+    # (Questions start with what/who/... so they don't match; typos like "my nam is" do.)
+    if not text.strip().endswith("?") and STATEMENT.match(t):
+        return f"remember: {text.strip()}"
 
     # a bare arithmetic/algebra expression ("15 times 12 plus 7") — decided by what
     # actually survives normalisation, not by question words.

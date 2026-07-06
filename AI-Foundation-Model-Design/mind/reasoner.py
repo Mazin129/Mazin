@@ -155,6 +155,19 @@ class Mind:
     def _save(self):
         json.dump(self.mem, open(MEM_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
 
+    @staticmethod
+    def _match_fact(fact, words):
+        """Match a stored fact to query words, tolerant of typos/plurals via a
+        shared 3-char prefix (so 'name' finds 'nam', 'engineers' finds 'engineer')."""
+        fl = fact.lower()
+        fwords = [w for w in re.findall(r"\w+", fl) if len(w) >= 3]
+        for w in words:
+            if w in fl:
+                return True
+            if any(fw[:3] == w[:3] for fw in fwords):
+                return True
+        return False
+
     def teach(self, text):                 # add durable knowledge to the library
         self.lib.add(text)
         return f"Learned and stored in the library: “{text[:60]}…”" if len(text) > 60 \
@@ -184,10 +197,13 @@ class Mind:
         # 2) retrieval from the growing library + personal memory
         STOP = {"the", "a", "an", "is", "are", "was", "of", "to", "in", "on", "for",
                 "what", "who", "where", "when", "why", "how", "my", "me", "and", "i",
-                "do", "does", "you", "your", "it", "that", "this", "am"}
+                "do", "does", "you", "your", "it", "that", "this", "am", "tell"}
         words = [w for w in re.findall(r"\w+", low) if len(w) > 2 and w not in STOP]
         hits = [(d, s) for d, s in self.lib.search(q) if s > 0.12]
-        facts = [f for f in self.mem["facts"] if any(w in f.lower() for w in words)]
+        if re.search(r"about (me|myself)|(who|what) am i|know about me", low):
+            facts = list(self.mem["facts"])          # "what do you know about me" -> all
+        else:
+            facts = [f for f in self.mem["facts"] if self._match_fact(f, words)]
         if hits or facts:
             parts = []
             if facts:

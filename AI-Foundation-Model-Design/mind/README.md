@@ -60,3 +60,15 @@ Honest note: this is a rule-based understander (patterns + normalisation), not a
 neural language model — precise on math/teach/recall/question shapes, not open chat.
 It is the "language cortex" slot (AXIOM direction 3); our own trained model replaces
 these rules with learned routing later.
+
+## Chat in your browser — `web.py` (recommended)
+
+Prefer a browser chat window? Run:
+
+```
+python web.py
+```
+then open **http://localhost:8100**. It's the same verified reasoning + memory, in a
+clean chat page (English / العربية, right-to-left aware), with a panel showing what it
+remembers about you and everything in its library. **No Ollama, no external model** —
+100% local. Each reply shows the tool used and a ✓ verified / … unverified badge.
