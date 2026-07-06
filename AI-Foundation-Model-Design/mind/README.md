@@ -115,6 +115,14 @@ first time it runs. So it can answer common questions immediately (e.g. *"how ma
 chambers does the heart have?"*, *"how many planets are there?"*, *"what is the longest
 river?"*) without you teaching it first. Everything you teach sits alongside this.
 
+### Arabic works too — تعمل بالعربية
+
+Vio learns from **Arabic** documents just like English: teach it Arabic text (📄 or
+`teach:`), then ask in Arabic and it answers with the exact Arabic sentences, or writes
+in Arabic (`اكتب عن القلب`, `احكي قصة عن …`). Retrieval, synthesis, and generation are all
+Arabic-aware. Note: Arabic **plain-text (.txt)** files work best — Arabic **PDFs** often
+store glyph codes instead of letters, so for those, "Save As → Plain Text (.txt)" first.
+
 ### Open-ended thinking — reason & generate (all local)
 
 Once Vio has read something, it does two "thinking" things, 100% on your machine:

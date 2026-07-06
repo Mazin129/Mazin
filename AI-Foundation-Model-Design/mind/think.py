@@ -56,7 +56,7 @@ class Thinker:
         self.starts = []
         for doc in docs:
             for sent in _sentences(doc):
-                toks = re.findall(r"[A-Za-z0-9']+|[.,;:!?]", sent)
+                toks = re.findall(r"[A-Za-z0-9'؀-ۿ]+|[.,;:!?،؛؟]", sent)
                 if len(toks) < 3:
                     continue
                 toks = toks + ["</s>"]
@@ -84,7 +84,7 @@ class Thinker:
         if not self.starts:
             return None
         # topic-aware seeding: start from a real context that mentions the topic word
-        kws = [w for w in re.findall(r"[a-z']+", prompt.lower())
+        kws = [w for w in re.findall(r"[a-z'؀-ۿ]+", prompt.lower())
                if len(w) > 2 and w not in _STOP]
         history = None
         if kws:
@@ -93,7 +93,7 @@ class Thinker:
             if cands:
                 history = random.choice(cands)
         if history is None:
-            seed = re.findall(r"[A-Za-z0-9']+|[.,;:!?]", prompt)
+            seed = re.findall(r"[A-Za-z0-9'؀-ۿ]+|[.,;:!?،؛؟]", prompt)
             history = seed[-2:] if len(seed) >= 2 else list(random.choice(self.starts))
         out = list(history)
         for _ in range(max_words):

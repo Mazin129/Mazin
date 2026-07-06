@@ -658,10 +658,11 @@ class Mind:
         # 0-) open-ended GENERATION: "write/continue/imagine/compose about …"
         #     (typo-tolerant: 'rite'/'wirte' for 'write')
         gm = re.match(r"\s*(w?rite|wirte|write|continue|compose|imagine|generate|dream|"
-                      r"make up|tell me a story)\b(.*)", low, re.I)
+                      r"make up|tell me a story|اكتب|أكتب|اكمل|أكمل|تخيل|ألّف|الف|احك|احكي)\b(.*)",
+                      low, re.I)
         if gm:
             seed = re.sub(r"\b(a|an|the|about|something|some|text|paragraph|sentence|story|"
-                          r"me|for|on)\b", " ", gm.group(2)).strip()
+                          r"me|for|on|عن|قصة|شيء|نص|فقرة)\b", " ", gm.group(2)).strip()
             out = self.thinker.generate(seed)
             if out:
                 return {"answer": out, "how": "generation (learned from your library)",

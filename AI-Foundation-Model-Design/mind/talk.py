@@ -165,7 +165,7 @@ def route(text):
     # open-ended thinking: generation + library summary -> pass through raw so The
     # Mind's thinker sees the full prompt (normalize_math would gut the sentence).
     if re.match(r"\s*(w?rite|wirte|write|continue|compose|imagine|generate|dream|"
-                r"make up|tell me a story)\b", t):
+                r"make up|tell me a story|اكتب|أكتب|اكمل|أكمل|تخيل|ألّف|الف|احك|احكي)\b", t):
         return text
     if re.search(r"what (have|did) (i|you) (taught|told|learn)|"
                  r"what('?s| is) in your (library|memory|head|brain)|"
