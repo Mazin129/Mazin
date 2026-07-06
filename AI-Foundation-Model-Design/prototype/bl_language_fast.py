@@ -22,6 +22,7 @@ fast form of the architecture.
     python bl_language_fast.py
 """
 
+import math
 import urllib.request
 import torch
 import torch.nn as nn
@@ -29,18 +30,22 @@ import torch.nn.functional as F
 
 torch.manual_seed(0)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# Defaults sized for a 2 GB laptop GPU (e.g. GeForce MX550). The complex FFT
-# roughly doubles activation memory, so keep BATCH/SEQ modest on a small card.
-# On a bigger GPU, raise D_MODEL / SEQ / BATCH for higher quality.
-D_MODEL = 192
+# QUALITY config, tuned to fit a 2 GB laptop GPU (GeForce MX550) while pushing
+# for lower loss / more fluent text. If you hit "CUDA out of memory", lower these
+# in this order: BATCH -> SEQ -> D_MODEL (the complex FFT ~doubles activation
+# memory, and activations scale with BATCH*SEQ*D_MODEL). On a bigger GPU, raise them.
+D_MODEL = 256
 N_HEAD = 4
-N_BLOCK = 2
+N_BLOCK = 3
 ATTN_EVERY = 2         # attention in every 2nd block
-WINDOW = 64            # local attention window (0 = full)
-SEQ = 128             # parallel scan makes long context cheap; 128 is light for 2 GB
-BATCH = 32
-STEPS = 3000
+WINDOW = 96            # local attention window (0 = full)
+SEQ = 160             # parallel scan makes long context cheap
+BATCH = 24
+STEPS = 6000
 LR = 3e-3
+WARMUP = 200           # linear warmup, then cosine decay -> better final loss
+PROMPT = "ROMEO:"      # generation prompt
+TEMPS = (0.7, 0.9)     # sample at these temperatures at the end
 CORPUS_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 FALLBACK = ("to be or not to be that is the question whether tis nobler in the mind ") * 120
 
@@ -151,7 +156,13 @@ def main():
     model = FastLM(V).to(DEVICE)
     print(f"Fast oscillatory LM: {sum(p.numel() for p in model.parameters())/1e6:.2f}M params, "
           f"SEQ={SEQ}, parallel-scan SSM (no Python time loop).\n")
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    opt = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
+
+    def lr_at(step):                                  # linear warmup -> cosine decay
+        if step < WARMUP:
+            return LR * step / WARMUP
+        p = (step - WARMUP) / max(1, STEPS - WARMUP)
+        return 0.1 * LR + 0.9 * LR * 0.5 * (1 + math.cos(math.pi * p))
 
     def get_batch(d):
         ix = torch.randint(0, len(d) - SEQ - 1, (BATCH,), device=DEVICE)
@@ -177,21 +188,31 @@ def main():
 
     print("Training the parallel-scan oscillatory LM (prints from step 1)...", flush=True)
     t0 = time.time()
-    for step in range(1, STEPS + 1):
-        x, y = get_batch(train)
-        loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
-        opt.zero_grad(); loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
-        # print immediately for the first steps (so you see ms/step and that it's alive)
-        if step in (1, 2, 5, 10, 25, 50, 100, 200, 300) or step % 500 == 0:
-            ms = (time.time() - t0) / step * 1000
-            msg = f"  step {step:5d}   train {loss.item():.3f}   ({ms:.0f} ms/step)"
-            if step % 500 == 0:
-                msg += f"   val {val_loss():.3f}"
-            print(msg, flush=True)
+    try:
+        for step in range(1, STEPS + 1):
+            for g in opt.param_groups:
+                g["lr"] = lr_at(step)
+            x, y = get_batch(train)
+            loss = F.cross_entropy(model(x).reshape(-1, V), y.reshape(-1))
+            opt.zero_grad(); loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0); opt.step()
+            # print immediately for the first steps (so you see ms/step and that it's alive)
+            if step in (1, 2, 5, 10, 25, 50, 100, 200, 300) or step % 500 == 0:
+                ms = (time.time() - t0) / step * 1000
+                msg = f"  step {step:5d}   train {loss.item():.3f}   ({ms:.0f} ms/step)"
+                if step % 500 == 0:
+                    msg += f"   val {val_loss():.3f}"
+                print(msg, flush=True)
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            print("\n*** CUDA out of memory. Lower BATCH (e.g. 16), then SEQ (e.g. 128),\n"
+                  "    then D_MODEL (e.g. 192) at the top of this file and rerun. ***")
+            return
+        raise
 
-    print("\n" + "=" * 60 + "\nGENERATED (fast parallel-scan oscillator):\n" + "=" * 60)
-    print(sample())
+    for temp in TEMPS:
+        print("\n" + "=" * 60 + f"\nGENERATED (prompt {PROMPT!r}, temperature {temp}):\n" + "=" * 60)
+        print(sample(prompt=PROMPT, temp=temp))
 
 
 if __name__ == "__main__":
