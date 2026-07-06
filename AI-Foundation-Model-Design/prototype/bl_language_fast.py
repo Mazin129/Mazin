@@ -38,8 +38,8 @@ MODE = "fast"
 
 if MODE == "quality":
     D_MODEL, N_BLOCK, SEQ, BATCH, STEPS = 256, 3, 192, 24, 6000
-else:  # "fast" — the config that ran well on your GPU
-    D_MODEL, N_BLOCK, SEQ, BATCH, STEPS = 192, 2, 128, 32, 3000
+else:  # "fast" — bigger BATCH uses the idle GPU headroom (same ms/step, more data/step)
+    D_MODEL, N_BLOCK, SEQ, BATCH, STEPS = 192, 2, 128, 64, 3000
 
 N_HEAD = 4
 ATTN_EVERY = 2         # attention in every 2nd block
