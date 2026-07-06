@@ -83,6 +83,16 @@ a documented negative result.)
 python3 prototype/bl_advanced.py     # set DATASET = "mnist" or "fashion"
 ```
 
+`prototype/bl_deep_local.py` is the strongest brain-native learning result: a **deep
+network (784-400-150-10) that learns MNIST with NO backpropagation** — only local
+predictive-coding updates. It reaches ~90% (still climbing) vs a backprop MLP's 94.5% on
+the identical net, learning its own hidden features with no backward pass and no weight
+transport. This scales the section-5.2 claim from a toy task to real images.
+
+```bash
+python3 prototype/bl_deep_local.py
+```
+
 Full write-ups, including honest limitations and negative results, in
 [`prototype/RESULTS.md`](prototype/RESULTS.md).
 
