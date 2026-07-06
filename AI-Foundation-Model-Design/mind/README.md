@@ -119,3 +119,8 @@ More skills added: **number theory** (`is 97 prime`, `factorize 360`, `gcd of 48
 - **Finance**: `compound interest 1000 5% 3 years`, `simple interest 1000 5% 3 years`, `percent change from 80 to 100`.
 - **More conversions**: data (`500 mb to gb`), area (`2 acres to sqm`) — on top of length/mass/time/temperature.
 - **Text**: `count words in <text>`, `reverse <text>`, `uppercase <text>` / `lowercase <text>`.
+- **Function plots** (ASCII): `plot x^2`, `graph sin(x)`, `draw x^3 - 2x` — renders the
+  curve over x∈[-10,10] right in the chat, expression safely parsed.
+- **Coordinate geometry**: `distance between (0,0) and (3,4)`, `midpoint of (2,4) and (6,8)`,
+  `slope of line through (1,2) and (4,8)`.
+- **Quadratic analysis**: `vertex of x^2-4x+3` → vertex, opens up/down, discriminant, and roots.

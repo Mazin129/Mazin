@@ -412,6 +412,25 @@ def try_round(q):
     return None
 
 
+def try_geometry(q):
+    ql = q.lower()
+    pts = re.findall(r"\(\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)\s*\)", q)   # numbers only (safe)
+    if len(pts) < 2:
+        return None
+    (x1, y1), (x2, y2) = [(float(a), float(b)) for a, b in pts[:2]]
+    if "distance" in ql:
+        import math
+        return f"distance ({_fmt(x1)},{_fmt(y1)})–({_fmt(x2)},{_fmt(y2)}) = {_fmt(math.hypot(x2-x1, y2-y1))}"
+    if "midpoint" in ql:
+        return f"midpoint = ({_fmt((x1+x2)/2)}, {_fmt((y1+y2)/2)})"
+    if "slope" in ql or "line" in ql:
+        if x2 == x1:
+            return f"vertical line, undefined slope, x = {_fmt(x1)}"
+        m = (y2 - y1) / (x2 - x1); b = y1 - m * x1
+        return f"slope = {_fmt(m)}, line: y = {_fmt(m)}x + {_fmt(b)}"
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Retrieval tool — a growing knowledge base, searched by TF-IDF.
 # --------------------------------------------------------------------------- #
@@ -507,6 +526,74 @@ class Mind:
         where = f" from {source}" if source else ""
         return f"Learned {len(chunks)} passages{where}. You can now ask me about it."
 
+    def _plot(self, q):
+        """ASCII plot of y = f(x) over x∈[-10,10]. Expression is safely parsed."""
+        m = re.search(r"(?:plot|graph|draw)\s+(?:of\s+|the\s+)?(?:y\s*=\s*)?(.+)", q, re.I)
+        if not m:
+            return None
+        try:
+            expr = self.math._parse(m.group(1).strip().strip("?.").replace("^", "**"))
+        except Exception:
+            return None
+        syms = list(expr.free_symbols)
+        if len(syms) > 1:
+            return None
+        xs = syms[0] if syms else sp.Symbol("x")
+        W, H = 61, 15
+        xvals = [-10 + 20 * i / (W - 1) for i in range(W)]
+        ys = []
+        for xv in xvals:
+            try:
+                v = float(expr.subs(xs, xv))
+                ys.append(v if abs(v) < 1e7 else None)
+            except Exception:
+                ys.append(None)
+        finite = [v for v in ys if v is not None]
+        if not finite:
+            return None
+        ymin, ymax = min(finite), max(finite)
+        if ymax - ymin < 1e-9:
+            ymin, ymax = ymin - 1, ymax + 1
+        grid = [[" "] * W for _ in range(H)]
+        if ymin <= 0 <= ymax:                       # x-axis
+            grid[H - 1 - round((0 - ymin) / (ymax - ymin) * (H - 1))] = ["-"] * W
+        zc = round(10 / 20 * (W - 1))               # y-axis at x=0
+        for r in range(H):
+            grid[r][zc] = "|"
+        for i, v in enumerate(ys):                  # the curve
+            if v is None:
+                continue
+            r = H - 1 - round((v - ymin) / (ymax - ymin) * (H - 1))
+            if 0 <= r < H:
+                grid[r][i] = "●"
+        art = "\n".join("".join(row) for row in grid)
+        return (f"y = {expr}   (x: -10..10,  y: {ymin:g}..{ymax:g})\n" + art)
+
+    def _analyze(self, q):
+        m = re.search(r"(?:vertex|analy[sz]e|roots and vertex)\s+(?:of\s+)?(.+)", q, re.I)
+        if not m:
+            return None
+        try:
+            expr = self.math._parse(m.group(1).strip().strip("?.").replace("^", "**"))
+        except Exception:
+            return None
+        x = sp.Symbol("x")
+        if x not in expr.free_symbols:
+            return None
+        try:
+            poly = sp.Poly(expr, x)
+        except Exception:
+            return None
+        if poly.degree() != 2:
+            return None
+        a, b, c = [poly.coeff_monomial(x ** 2), poly.coeff_monomial(x), poly.coeff_monomial(1)]
+        xv = sp.nsimplify(-b / (2 * a)); yv = sp.nsimplify(expr.subs(x, xv))
+        disc = sp.simplify(b * b - 4 * a * c)
+        roots = sp.solve(expr, x)
+        opens = "upward" if a > 0 else "downward"
+        return (f"{expr}: vertex ({xv}, {yv}), opens {opens}; "
+                f"discriminant = {disc}; roots: {', '.join(map(str, roots)) or 'none real'}")
+
     def remember(self, fact):              # store a personal fact (memory)
         self.mem["facts"].append(fact); self._save()
         return f"I'll remember: {fact}"
@@ -520,9 +607,19 @@ class Mind:
         if low.startswith("remember:"):
             return {"answer": self.remember(q[9:].strip()), "how": "memory-write", "verified": True, "trace": []}
 
+        # 1-) visual/analysis skills first (they consume "plot …", "vertex …")
+        if re.match(r"\s*(plot|graph|draw)\b", low):
+            r = self._plot(q)
+            if r:
+                return {"answer": r, "how": "function plot", "verified": True, "trace": []}
+        if re.match(r"\s*(vertex|analy[sz]e)\b", low):
+            r = self._analyze(q)
+            if r:
+                return {"answer": r, "how": "quadratic analysis", "verified": True, "trace": []}
+
         # 1a) everyday exact tools (order matters: most specific first)
         for tool in (try_percent, try_interest, try_combinatorics, try_roman, try_base,
-                     try_numtheory, try_matrix, try_range, try_round, try_random,
+                     try_numtheory, try_geometry, try_matrix, try_range, try_round, try_random,
                      try_units, try_stats, try_text):
             r = tool(q)
             if r:

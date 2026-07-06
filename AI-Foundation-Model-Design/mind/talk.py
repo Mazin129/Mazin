@@ -158,6 +158,14 @@ def route(text):
     # "solve … for x" (rearrange a formula) or a matrix [[..]] -> pass through raw
     if re.search(r"\bsolve\b.*\bfor\s+[a-zA-Z]\b", text) or "[[" in text:
         return text
+    # plot/graph/draw and vertex/analyze -> pass through raw (normalize_math would
+    # strip the keyword and mangle "plot x^2" into bare arithmetic)
+    if re.match(r"\s*(plot|graph|draw|vertex|analy[sz]e)\b", t):
+        return text
+    # coordinate geometry between points "(x,y) and (x,y)" -> pass through raw
+    if re.search(r"\(\s*-?\d.*,.*-?\d\s*\).*\(\s*-?\d", text) and \
+            re.search(r"distance|midpoint|slope|line", t):
+        return text
 
     # explicit teaching / memory (natural phrasing)
     if t.startswith(("remember that", "remember")) or t.startswith(("تذكر",)):
