@@ -30,22 +30,25 @@ import torch.nn.functional as F
 
 torch.manual_seed(0)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-# QUALITY config, tuned to fit a 2 GB laptop GPU (GeForce MX550) while pushing
-# for lower loss / more fluent text. If you hit "CUDA out of memory", lower these
-# in this order: BATCH -> SEQ -> D_MODEL (the complex FFT ~doubles activation
-# memory, and activations scale with BATCH*SEQ*D_MODEL). On a bigger GPU, raise them.
-D_MODEL = 256
+# ---- CHOOSE SPEED vs QUALITY (one word) ----
+#   "fast"    : light, ~55 ms/step on an MX550, finishes in a few minutes (start here)
+#   "quality" : bigger/slower, lower loss & more fluent text (run when you have time)
+# Both modes use the same free quality boosts (AdamW + cosine LR schedule).
+MODE = "fast"
+
+if MODE == "quality":
+    D_MODEL, N_BLOCK, SEQ, BATCH, STEPS = 256, 3, 192, 24, 6000
+else:  # "fast" — the config that ran well on your GPU
+    D_MODEL, N_BLOCK, SEQ, BATCH, STEPS = 192, 2, 128, 32, 3000
+
 N_HEAD = 4
-N_BLOCK = 3
 ATTN_EVERY = 2         # attention in every 2nd block
-WINDOW = 96            # local attention window (0 = full)
-SEQ = 160             # parallel scan makes long context cheap
-BATCH = 24
-STEPS = 6000
+WINDOW = 64            # local attention window (0 = full)
 LR = 3e-3
-WARMUP = 200           # linear warmup, then cosine decay -> better final loss
-PROMPT = "ROMEO:"      # generation prompt
+WARMUP = 200           # linear warmup, then cosine decay -> lower loss, same speed
+PROMPT = "ROMEO:"      # generation prompt (change to anything)
 TEMPS = (0.7, 0.9)     # sample at these temperatures at the end
+# If "quality" ever says CUDA out of memory: lower BATCH -> SEQ -> D_MODEL above.
 CORPUS_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
 FALLBACK = ("to be or not to be that is the question whether tis nobler in the mind ") * 120
 
