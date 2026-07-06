@@ -22,6 +22,7 @@ system.
 | [`03-inference-memory-hardware.md`](03-inference-memory-hardware.md) | Inference pipeline, hierarchical memory system, CPU/GPU optimization, quantization |
 | [`04-evaluation-deployment-roadmap.md`](04-evaluation-deployment-roadmap.md) | Benchmarks, deployment plan, open-source roadmap, risks and mitigations, future research |
 | [`05-brain-native-redesign.md`](05-brain-native-redesign.md) | **Brain-native redesign (codename CORTEX):** spiking neurons, predictive coding / free energy, complementary learning systems, oscillatory phase codes, neuromodulation, global workspace, self-organized criticality — the real neuroscience and math/physics for each |
+| [`06-first-principles-architecture.md`](06-first-principles-architecture.md) | **Clean-sheet, first-principles architecture (codename AXIOM):** interrogates the transformer's hidden assumptions, then 13 new mechanisms (sparse/event-driven compute, weights-on-demand, external memory, predictive world models, local continual learning, symbolic self-verification…) — each with bio inspiration, math, complexity, energy, and **which are already BUILT & measured here**. Includes an honest analysis of the 100–1000× efficiency claim |
 | [`prototype/`](prototype/) | **Working, runnable code.** Three prototypes: a physics-grounded sequence mixer, a brain-native (no-backprop) learner, and **BL** — a brain-like model that learns real handwritten digits. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
 
 ## Runnable prototype (laptop-scale)
