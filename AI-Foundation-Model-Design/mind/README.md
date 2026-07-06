@@ -78,3 +78,9 @@ remembers about you and everything in its library. **No Ollama, no external mode
 On Windows, just **double-click `Vio.bat`** (in this `mind` folder). It starts Vio and
 opens the browser automatically — no typing. A small console window stays open; close it
 to stop Vio. (First time only: right-click → keep, if Windows asks.)
+
+### One-time: make a Desktop icon
+
+Double-click **`Create Vio Desktop Icon.bat`** once. It puts a **Vio** icon on your
+Desktop. After that, just double-click the Desktop **Vio** icon to start chatting —
+no folders, no commands.
