@@ -41,3 +41,22 @@ now. Direction 3 — a natural-language front-end / our own trained model — pl
 top as the "language cortex" that turns free-form sentences into these tool calls; it
 is the one piece that genuinely needs a trained model, and it's the next build.
 Files `mind_memory.json` / `knowledge.json` hold your private memory & library (git-ignored).
+
+## Talk to it in plain language — `talk.py`
+
+`python talk.py` adds a natural-language front-end (English + العربية): it reads
+free-form sentences, works out your intent, extracts the payload (even spoken math
+like "x squared minus five x plus six"), and drives The Mind's verified tools.
+
+```
+you › what are the roots of x squared minus 5x plus 6      -> x = 2, 3  (verified)
+you › what is 15 times 12 plus 7                            -> 187
+you › remember that my favourite language is Arabic         -> stored
+you › what is my favourite language                         -> recalled
+you › who is the king of the moon                           -> honestly: "I don't know"
+```
+
+Honest note: this is a rule-based understander (patterns + normalisation), not a
+neural language model — precise on math/teach/recall/question shapes, not open chat.
+It is the "language cortex" slot (AXIOM direction 3); our own trained model replaces
+these rules with learned routing later.

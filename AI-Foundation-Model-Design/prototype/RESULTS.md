@@ -647,3 +647,29 @@ The learning is faster per step, and the compute is now parallel over time.
 - Making the recurrence linear (input-driven, no `tanh(Wy·y)`) is what enables the
   scan; the per-channel damped-rotation dynamics keep the oscillatory memory. This
   is the same trade modern SSMs make for speed.
+
+---
+
+# 13. Dynamic Weight Generation (M2) — neurons that generate weights on demand
+
+`dynamic_weights.py`. Breaks the assumption that weights are fixed after training.
+A small **hypernetwork** reads a few examples of a task and *outputs the weights* of
+a target network that solves it — instantly, with NO gradient descent at test time
+(fast-weights / hypernetworks; AXIOM mechanism M2, doc 06).
+
+Testbed: the classic meta-learning sinusoid — each task is `y = A*sin(x+phase)` with
+random `A`, `phase`. Given 10 points from a NEW wave, the model fits the whole wave
+in one forward pass.
+
+### Result (adapting to 500 unseen sine waves)
+
+| Method | Test-time gradient steps | MSE |
+|---|---|---|
+| **Hypernetwork (weights generated)** | **0** | **0.027** |
+| From-scratch network | 10 | 0.705 |
+| From-scratch network | 100 | 0.242 |
+
+The generator adapts to a brand-new task **instantly and ~9× better** than 100 steps
+of gradient descent from scratch. This is the M2 principle: weights *produced from
+context*, not stored and frozen. The next frontier is generating the language/skill
+core's weights per context (the biggest unbuilt lever in the efficiency analysis).

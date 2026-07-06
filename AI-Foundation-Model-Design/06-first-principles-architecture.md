@@ -111,9 +111,13 @@ Format per mechanism: **Bio → Math → Complexity → Memory → Energy → vs
   most of it is irrelevant to any given token.
 - **Implementation.** Hypernetwork emits per-token/per-context LoRA-style rank-r
   updates; slow weights consolidated rarely.
-- **Validation.** ⚠️ Not yet built here (LoRA-adjacent). *This is one of the most
-  radical and highest-upside pieces — the direct answer to "can neurons generate
-  temporary weights on demand?" (yes). Flagged as the top new build.*
+- **Validation.** ✅ **BUILT** — `prototype/dynamic_weights.py`: a hypernetwork
+  reads 10 examples of a never-seen task and *generates* a target network's weights
+  in one forward pass — **MSE 0.027 with zero gradient steps**, vs 0.24 for a
+  from-scratch net given 100 gradient steps. The direct answer to "can neurons
+  generate temporary weights on demand?" — yes, and it adapts far faster than
+  training. (Scaling this to generate the language core's weights per context is the
+  open frontier.)
 
 ### M3 — Long-term, expandable external memory
 - **Bio.** Hippocampus (fast, one-shot, pattern-separated) + neocortex (slow); memory
