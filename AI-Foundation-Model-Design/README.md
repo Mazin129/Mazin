@@ -111,6 +111,15 @@ recall). This breaks the pure oscillator's plateau — val loss **2.02 → 1.59*
 fluent Shakespeare — demonstrating the thesis that cheap memory + periodic attention beats
 either alone.
 
+`prototype/bl_language_sparse.py` makes the attention **efficient** — used only in every
+k-th block and over a local window — recovering ~90% of full attention's benefit at **~1/9th
+the attention cost** (val 1.75 vs 1.67).
+
+`prototype/bl_language_fast.py` makes it **GPU-efficient**: the oscillator becomes a linear
+complex-diagonal state space computed by a **parallel scan (FFT)** instead of a Python
+time-loop — no serial per-step kernels, so it saturates the GPU. It reaches val ~1.72 in
+**500 steps** (the sequential version needed ~2500+), the LinOSS/S5/Mamba-style approach.
+
 ```bash
 python3 prototype/bl_system.py       # the full stack
 python3 prototype/bl_language.py     # the oscillatory language model

@@ -606,3 +606,44 @@ The proper fix for true GPU speed is a **parallel associative scan** (as in Mamb
 LinOSS), which requires a *linear* recurrence; the current cell's nonlinearity
 (`tanh(Wy·y + ...)`) blocks that. Converting the oscillator to a linear,
 scan-parallelisable form is the clear next step for GPU efficiency.
+
+---
+
+# 12. BL-Language-Fast — parallel-scan oscillator (GPU-efficient)
+
+`bl_language_fast.py`. The fix for the sequential oscillator's low GPU utilisation.
+Instead of a Python loop over timesteps, the oscillator is made a **linear
+complex-diagonal state space** and computed with a **parallel scan via the FFT**:
+
+```
+w_t = lambda ⊙ w_{t-1} + drive_t ,  lambda = exp(-softplus(nu) + i*theta)   (per channel)
+```
+
+a damped complex rotation per channel (magnitude < 1 = decay, theta = frequency).
+Being linear and time-invariant, this equals a causal convolution with kernel
+`lambda^n`, done in one FFT — O(T log T), **no Python loop** — so it runs as a few
+large parallel kernels that keep a GPU busy (LinOSS / S5 / Mamba-family approach).
+Combined with periodic windowed attention (section 1.2).
+
+### Result (validated on CPU, tiny-shakespeare, 1.42M params, SEQ=96)
+
+| step | val loss |
+|---|---|
+| 100 | 2.089 |
+| 300 | 1.812 |
+| 500 | **1.724** |
+
+It reaches val ~1.72 in **500 steps** — the sequential hybrid needed ~2500-3000
+steps for the same — and generates coherent Shakespeare (speaker turns, real words).
+The learning is faster per step, and the compute is now parallel over time.
+
+### Honest status
+
+- The big speed win is on a **GPU**: the old sequential loop launched hundreds of
+  tiny serial kernels (GPU mostly idle); the FFT scan is a handful of large parallel
+  ops (high utilisation). On a CPU (few cores) the wall-clock gain is smaller, but
+  the loop — the thing that starves the GPU — is gone. Run it on the GPU and watch
+  utilisation rise.
+- Making the recurrence linear (input-driven, no `tanh(Wy·y)`) is what enables the
+  scan; the per-channel damped-rotation dynamics keep the oscillatory memory. This
+  is the same trade modern SSMs make for speed.
