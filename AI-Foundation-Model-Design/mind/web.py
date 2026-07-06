@@ -81,13 +81,28 @@ loadMem();
 </script></body></html>"""
 
 
+MAX_BODY = 32 * 1024 * 1024        # 32 MB cap (big enough for a book, small enough to be safe)
+
+
 class H(BaseHTTPRequestHandler):
     def _s(self, code, body, ctype="application/json"):
         b = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(code); self.send_header("Content-Type", ctype)
+        # security headers: don't let this local page be embedded or sniffed
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
+    def _host_ok(self):
+        # SECURITY: only accept requests addressed to localhost. Blocks DNS-rebinding
+        # attacks where a malicious site's domain resolves to 127.0.0.1 (its Host
+        # header would be the attacker's domain, not localhost).
+        host = (self.headers.get("Host") or "").split(":")[0]
+        return host in ("localhost", "127.0.0.1", "")
+
     def do_GET(self):
+        if not self._host_ok():
+            self._s(403, "{}"); return
         if self.path == "/":
             self._s(200, PAGE, "text/html; charset=utf-8")
         elif self.path == "/api/memory":
@@ -98,8 +113,15 @@ class H(BaseHTTPRequestHandler):
             self._s(404, "{}")
 
     def do_POST(self):
+        if not self._host_ok():
+            self._s(403, "{}"); return
         n = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(n) or "{}")
+        if n > MAX_BODY:                                   # SECURITY: reject huge uploads (DoS)
+            self._s(413, '{"answer":"That file is too large."}'); return
+        try:
+            body = json.loads(self.rfile.read(n) or "{}")
+        except (ValueError, json.JSONDecodeError):
+            self._s(400, "{}"); return
         if self.path == "/api/ask":
             r = reply(MIND, (body.get("message") or "").strip())
             self._s(200, json.dumps(r, ensure_ascii=False))

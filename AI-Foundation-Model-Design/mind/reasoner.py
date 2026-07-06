@@ -38,8 +38,24 @@ X = sp.symbols("x")
 # --------------------------------------------------------------------------- #
 # Symbolic reasoning tool — exact, and self-verifying.
 # --------------------------------------------------------------------------- #
+# SECURITY: sympy.parse_expr uses eval() internally, so unsanitized input is a
+# remote-code-execution risk (e.g. "1+eval(...)"). We whitelist strictly BEFORE
+# parsing: no quotes/underscores/brackets, and every multi-letter name must be a
+# known maths function. This turns the parser into a maths-only surface.
+_MATH_NAMES = {"pi", "sqrt", "cbrt", "root", "sin", "cos", "tan", "cot", "sec", "csc",
+               "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh", "log", "ln",
+               "exp", "abs", "sign", "floor", "ceiling", "ceil", "factorial", "gamma",
+               "deg", "rad", "re", "im", "conjugate", "gcd", "lcm", "mod"}
+_BAD_CHARS = re.compile(r"""["'\[\]{}\\;:@#$%&`~|<>!?_]""")
+
+
 class MathReasoner:
     def _parse(self, s):
+        if _BAD_CHARS.search(s):
+            raise ValueError("unsafe characters in expression")
+        for name in re.findall(r"[A-Za-z]{2,}", s):      # multi-letter names must be maths
+            if name.lower() not in _MATH_NAMES:
+                raise ValueError(f"unknown name in expression: {name}")
         return parse_expr(s, transformations=TRANSFORMS, evaluate=True)
 
     def handle(self, q):
