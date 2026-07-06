@@ -108,6 +108,14 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"🧠 The Mind — browser chat.  Open  http://localhost:{PORT}")
+    import threading
+    import webbrowser
+    url = f"http://localhost:{PORT}"
+    print(f"🧠 {MIND.name()} is starting — opening {url} in your browser...")
     print("   Runs entirely locally (verified reasoning + memory). No external model.")
-    ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+    print("   Keep this window open while you chat; close it to stop Vio.")
+    threading.Timer(1.0, lambda: webbrowser.open(url)).start()   # auto-open the browser
+    try:
+        ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+    except KeyboardInterrupt:
+        pass

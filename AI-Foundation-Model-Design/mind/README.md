@@ -72,3 +72,9 @@ then open **http://localhost:8100**. It's the same verified reasoning + memory, 
 clean chat page (English / العربية, right-to-left aware), with a panel showing what it
 remembers about you and everything in its library. **No Ollama, no external model** —
 100% local. Each reply shows the tool used and a ✓ verified / … unverified badge.
+
+### Easiest: double-click `Vio.bat`
+
+On Windows, just **double-click `Vio.bat`** (in this `mind` folder). It starts Vio and
+opens the browser automatically — no typing. A small console window stays open; close it
+to stop Vio. (First time only: right-click → keep, if Windows asks.)
