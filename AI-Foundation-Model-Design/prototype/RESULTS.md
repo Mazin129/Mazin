@@ -703,17 +703,18 @@ pip install torch
 python bl_self_train.py       # resumes automatically if checkpoints/self_train.pt exists
 ```
 
-### Result (0.6M-param model, D_HID=256, validated on CPU)
+### Result (0.23M-param model, D_HID=256, validated on CPU, real tiny-shakespeare)
 
 | Run | Val loss | Steps |
 |---|---|---|
-| Bootstrap (real data only) | see run output | 1500 |
-| **Self-trained** (real + self-generated pseudo-labels) | see run output | 2700 total |
-| **Control** (real data only, same total step budget) | see run output | 2700 total |
+| Bootstrap (real data only) | 2.315 | 1500 |
+| **Self-trained** (real + self-generated pseudo-labels), round 1→4 | 2.325 → 2.309 → 2.280 → **2.267** | 2700 total |
+| **Control** (real data only, same total step budget) | **2.259** | 2700 total |
 
 Mean self-confidence of the *kept* half of generated candidates was consistently
-higher than the mean over *all* candidates each round, confirming the filter is
-doing its job (it is not passing through low-quality generations unfiltered).
+higher than the mean over *all* candidates each round (round 1: 0.251 vs 0.239;
+round 4: 0.270 vs 0.256), confirming the filter is doing its job (it is not
+passing through low-quality generations unfiltered).
 
 Checkpoint/resume was verified directly: killing the process mid-bootstrap and
 re-invoking the script resumed training from the last saved step rather than
@@ -722,12 +723,14 @@ rounds while preserving accumulated self-generated data and history.
 
 ### Honest status
 
-- At this toy scale (0.6M params, ~1500-2700 steps), self-training on a
+- At this toy scale (0.23M params, 2700 total steps), self-training landed a
+  hair **behind** the real-data-only control (2.267 vs 2.259 val loss) — not
+  ahead of it. Reported as-is rather than cherry-picked: self-training on a
   character-level LM's own generations is **not guaranteed to beat** training
-  longer on real data alone — the control is the same total compute and is a
-  fair, sometimes-winning baseline. The point demonstrated is the *mechanism*
-  (confidence-filtered pseudo-labeling loop with an honest control), not a claim
-  that self-training beats more real data at this scale.
+  longer on real data alone, and didn't here. The point demonstrated is the
+  *mechanism* (confidence-filtered pseudo-labeling loop with an honest control
+  that can, and did, win), not a claim that self-training beats more real data
+  at this scale.
 - The self-confidence filter is a simple average-softmax-probability score, not a
   learned reward model or external verifier; at larger scale (or with a real
   verifier / task with checkable answers, as in STaR) the filter would need to be
