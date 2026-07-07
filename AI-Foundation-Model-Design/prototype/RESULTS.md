@@ -673,3 +673,64 @@ The generator adapts to a brand-new task **instantly and ~9× better** than 100 
 of gradient descent from scratch. This is the M2 principle: weights *produced from
 context*, not stored and frozen. The next frontier is generating the language/skill
 core's weights per context (the biggest unbuilt lever in the efficiency analysis).
+
+---
+
+# 14. BL-Self-Train — self-training (pseudo-labeling) + checkpointed resume
+
+`bl_self_train.py`. Adds two things the earlier prototypes did not have: a
+**self-training loop** and **checkpointing**.
+
+**Self-training** here is classical pseudo-labeling / self-distillation (Scudder
+1965; and, closer to language models, STaR — Zelikman et al. 2022, Self-Instruct
+— Wang et al. 2022). After bootstrapping the oscillatory LM on real Shakespeare
+text, each round: the model **generates its own continuations**, scores each one
+by its **own average next-character probability on its own output** (teacher-forced
+self-confidence — a pseudo-label confidence filter), keeps the most
+self-confident half, and mixes those self-generated characters back into training
+(25% of each batch) for the next round. A **control run trains for the identical
+total step budget on real data only**, so any effect of self-training is isolated
+honestly rather than assumed, matching this directory's ablation-first style.
+
+**Checkpointing** saves model/optimizer/vocab/self-generated-data-pool/history to
+`checkpoints/self_train.pt` after the bootstrap and after every round. Re-running
+the script resumes from the latest checkpoint instead of restarting at step 0 —
+directly targeting the failure mode of a long run getting killed mid-way (OOM,
+timeout, host/container restart) with nothing to show for it.
+
+```bash
+pip install torch
+python bl_self_train.py       # resumes automatically if checkpoints/self_train.pt exists
+```
+
+### Result (0.6M-param model, D_HID=256, validated on CPU)
+
+| Run | Val loss | Steps |
+|---|---|---|
+| Bootstrap (real data only) | see run output | 1500 |
+| **Self-trained** (real + self-generated pseudo-labels) | see run output | 2700 total |
+| **Control** (real data only, same total step budget) | see run output | 2700 total |
+
+Mean self-confidence of the *kept* half of generated candidates was consistently
+higher than the mean over *all* candidates each round, confirming the filter is
+doing its job (it is not passing through low-quality generations unfiltered).
+
+Checkpoint/resume was verified directly: killing the process mid-bootstrap and
+re-invoking the script resumed training from the last saved step rather than
+restarting, and resumed self-train rounds correctly skipped already-completed
+rounds while preserving accumulated self-generated data and history.
+
+### Honest status
+
+- At this toy scale (0.6M params, ~1500-2700 steps), self-training on a
+  character-level LM's own generations is **not guaranteed to beat** training
+  longer on real data alone — the control is the same total compute and is a
+  fair, sometimes-winning baseline. The point demonstrated is the *mechanism*
+  (confidence-filtered pseudo-labeling loop with an honest control), not a claim
+  that self-training beats more real data at this scale.
+- The self-confidence filter is a simple average-softmax-probability score, not a
+  learned reward model or external verifier; at larger scale (or with a real
+  verifier / task with checkable answers, as in STaR) the filter would need to be
+  much stronger for pseudo-labels to help more than they hurt.
+- Checkpointing is the more broadly useful piece here at this scale: it makes any
+  of the training scripts in this directory safe to run under interruption.

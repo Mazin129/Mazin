@@ -23,7 +23,7 @@ system.
 | [`04-evaluation-deployment-roadmap.md`](04-evaluation-deployment-roadmap.md) | Benchmarks, deployment plan, open-source roadmap, risks and mitigations, future research |
 | [`05-brain-native-redesign.md`](05-brain-native-redesign.md) | **Brain-native redesign (codename CORTEX):** spiking neurons, predictive coding / free energy, complementary learning systems, oscillatory phase codes, neuromodulation, global workspace, self-organized criticality — the real neuroscience and math/physics for each |
 | [`06-first-principles-architecture.md`](06-first-principles-architecture.md) | **Clean-sheet, first-principles architecture (codename AXIOM):** interrogates the transformer's hidden assumptions, then 13 new mechanisms (sparse/event-driven compute, weights-on-demand, external memory, predictive world models, local continual learning, symbolic self-verification…) — each with bio inspiration, math, complexity, energy, and **which are already BUILT & measured here**. Includes an honest analysis of the 100–1000× efficiency claim |
-| [`prototype/`](prototype/) | **Working, runnable code.** Three prototypes: a physics-grounded sequence mixer, a brain-native (no-backprop) learner, and **BL** — a brain-like model that learns real handwritten digits. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
+| [`prototype/`](prototype/) | **Working, runnable code.** A physics-grounded sequence mixer, a brain-native (no-backprop) learner, **BL** — a brain-like model that learns real handwritten digits, oscillatory/hybrid/sparse/fast language models, and a self-training + checkpointed-resume loop. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
 
 ## Runnable prototype (laptop-scale)
 
@@ -121,9 +121,17 @@ complex-diagonal state space computed by a **parallel scan (FFT)** instead of a 
 time-loop — no serial per-step kernels, so it saturates the GPU. It reaches val ~1.72 in
 **500 steps** (the sequential version needed ~2500+), the LinOSS/S5/Mamba-style approach.
 
+`prototype/bl_self_train.py` adds **self-training** (the model generates its own text,
+keeps only the continuations it is most confident about via a teacher-forced self-confidence
+score — classical pseudo-labeling / STaR-style self-distillation — and mixes them back into
+training) plus **checkpointed resume**, so a run survives interruption (OOM, timeout, host
+restart) instead of losing all progress. A control run at the identical total step budget on
+real data only keeps the self-training comparison honest.
+
 ```bash
 python3 prototype/bl_system.py       # the full stack
 python3 prototype/bl_language.py     # the oscillatory language model
+python3 prototype/bl_self_train.py   # self-training + checkpointed resume
 ```
 
 Full write-ups, including honest limitations and negative results, in
