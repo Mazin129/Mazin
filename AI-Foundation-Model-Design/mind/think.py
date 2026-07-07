@@ -134,13 +134,21 @@ class Thinker:
     _LABEL = re.compile(r"^\s*(syntax|example|examples|usage|parameters?|options?|"
                         r"description|note|notes|default|arguments?|values?)\s*[:\-]", re.I)
 
+    def _subject(self, question):
+        """The thing being asked about, e.g. 'what does execute ping do?' -> 'execute
+        ping'. Strips leading question words and trailing filler verbs."""
+        q = question.strip().lower().rstrip("?.! ")
+        q = re.sub(r"^(what('?s| is| are| does| do)?|who('?s| is| are)?|define|explain|"
+                   r"tell me about|how do(es)?|how to)\s+", "", q)
+        q = re.sub(r"\s+(do|does|mean|means|work|works|used for|used|for|is|are)$", "", q)
+        return re.sub(r"^(the|a|an)\s+", "", q).strip()
+
     def _lead(self, question):
         """A short, natural opener matched to a clean 'what is X' / 'how' question.
         It only frames the retrieved facts — it never adds information."""
         q = question.strip().lower()
-        m = re.match(r"(what\s+(is|are)|who\s+(is|are)|define|explain)\s+(the\s+)?(.+?)[\s?.]*$", q)
-        if m:
-            subj = m.group(5).strip()
+        if re.match(r"(what\s+(is|are|does|do)|who\s+(is|are)|define|explain)\b", q):
+            subj = self._subject(question)
             if 0 < len(subj.split()) <= 5:
                 return f"{subj[:1].upper()}{subj[1:]} — "
         # only procedural "how do/to/can…" gets this lead — NOT "how many/much/long"
@@ -162,38 +170,57 @@ class Thinker:
                       r"\n\1:", text, flags=re.I)
         return text.strip()
 
-    def _related(self, passages, used_pi, per, kw):
+    def _related(self, passages, used_pi, per, subj):
         """Short titles of OTHER retrieved entries the user might ask about next —
-        the first few words of passages that didn't feed the answer."""
+        the leading words of passages that didn't feed the answer."""
         out = []
         seen = set()
         for pi, sents in enumerate(per):
             if pi in used_pi or not sents:
                 continue
-            title = re.split(r"\bdescription\b|\bsyntax\b|[:\-–]", sents[0], 1, re.I)[0]
-            title = re.sub(r"\s+", " ", title).strip(" .,:;")
-            words = title.split()
-            if not (1 <= len(words) <= 7):
-                title = " ".join(words[:6])
+            title = re.split(r"\b(description|syntax|parameter|type|size|note|example|"
+                             r"usage|default)\b|[:\-–]", sents[0], 1, re.I)[0]
+            title = " ".join(re.sub(r"\s+", " ", title).strip(" .,:;").split()[:6])
             key = title.lower()
-            if title and key not in seen and len(title) > 2:
-                seen.add(key)
-                out.append(title)
+            if not title or len(title) <= 2 or key in seen:
+                continue
+            if subj and (subj in key or key in subj):      # skip what they already asked
+                continue
+            seen.add(key)
+            out.append(title)
             if len(out) >= 3:
                 break
         return out
+
+    _NOISE = re.compile(r"on page\s+\d+|this topic includes the following", re.I)
+
+    def _is_noise(self, s):
+        # only true navigation cruft — NOT table headers like "Parameter Description
+        # Type Size", which sit next to real content and were over-filtering entries.
+        return bool(self._NOISE.search(s))
 
     def synthesize(self, question, passages, facts=()):
         kw = set(_keywords(question))
         if not kw:
             return None
+        subj = self._subject(question)
+        # exact-phrase matcher: 'execute ping' must NOT also fire on 'execute ping-options'
+        phrase_rx = None
+        if subj and 1 <= len(subj.split()) <= 5:
+            phrase_rx = re.compile(r"\b" + re.escape(subj) + r"\b(?![-\w])", re.I)
+
         per = [_sentences(p) for p in passages]        # sentences per passage
-        scored = []                                    # (overlap, passage_idx, sent_idx)
+        scored = []                                    # (score, passage_idx, sent_idx)
         for pi, sents in enumerate(per):
             for si, s in enumerate(sents):
+                if self._is_noise(s):                  # drop TOC/index/table cruft
+                    continue
                 ov = len(kw & set(_keywords(s)))
-                if ov:
-                    scored.append((ov, pi, si))
+                if not ov:
+                    continue
+                if phrase_rx and phrase_rx.search(s):  # exact command/subject present
+                    ov += 3                            # strongly prefer the real entry
+                scored.append((ov, pi, si))
         rel_facts = [f for f in facts if kw & set(_keywords(f))]
         if not scored and not rel_facts:
             return None
@@ -203,14 +230,18 @@ class Thinker:
         used_pi = set()
         if scored:
             best = max(o for o, _, _ in scored)
-            anchors = [(pi, si) for o, pi, si in scored if o == best]
+            anchors = [(o, pi, si) for o, pi, si in scored if o >= best]
             if len(anchors) < 2:                       # broaden slightly if too thin
-                anchors = [(pi, si) for o, pi, si in scored if o >= best - 1]
-            # defining/description sentence first, then document order
-            anchors.sort(key=lambda t: (0 if self._DEF_CUE.search(per[t[0]][t[1]]) else 1,
-                                        t[0], t[1]))
+                anchors = [(o, pi, si) for o, pi, si in scored if o >= best - 1]
+            # rank: most query-keyword overlap first, then the higher-ranked passage
+            # (passages arrive in retrieval-score order), then a defining sentence,
+            # then document order. Overlap must dominate so the most on-topic sentence
+            # leads — not a lower-overlap sentence that merely contains "is".
+            anchors.sort(key=lambda t: (-t[0], t[1],
+                                        0 if self._DEF_CUE.search(per[t[1]][t[2]]) else 1,
+                                        t[2]))
             starters = {self._first_word(p) for p in passages if p}
-            for pi, si in anchors[:3]:
+            for _o, pi, si in anchors[:3]:
                 if (pi, si) in chosen:
                     continue
                 picked.append((pi, si)); chosen.add((pi, si)); used_pi.add(pi)
@@ -252,7 +283,7 @@ class Thinker:
             parts.append(self._format_body(lead + " ".join(sentences)))
         answer = "\n\n".join(parts) if parts else None
         if answer:
-            related = self._related(passages, used_pi, per, kw)
+            related = self._related(passages, used_pi, per, subj)
             if related:
                 answer += "\n\nRelated topics I can explain: " + ", ".join(related) + "."
         return answer

@@ -539,10 +539,40 @@ class Mind:
                 return True
         return False
 
+    # table-of-contents / index / cross-reference noise common in manuals — these
+    # lines are navigation, not content, and they pollute retrieval badly.
+    _NOISE_LINE = re.compile(
+        r"on page\s+\d+"                                   # "… on page 3448" cross-refs
+        r"|this topic includes the following"              # index preamble
+        r"|^\s*l\s+\S+\s+\S+.*\bon page\b"                 # "l execute … on page N" bullets
+        r"|^\s*(table of contents|index)\b"
+        r"|^\s*(chapter|section|page|figure|table)\s+\d+\s*$"
+        r"|^\s*\d{1,5}\s*$"                                # bare page numbers
+        r"|^\s*(fortios|fortinet|copyright|©).{0,40}$",    # running headers/footers
+        re.I)
+
+    def _denoise(self, text):
+        """Drop manual boilerplate (TOC, index, cross-references, headers) so the
+        library holds real content, not navigation cruft."""
+        kept = []
+        for ln in text.splitlines():
+            s = ln.strip()
+            if not s or self._NOISE_LINE.search(s):
+                continue
+            s = re.sub(r"^\s*l\s+", "", s)                 # strip leftover "l " bullet glyph
+            kept.append(s)
+        return "\n".join(kept)
+
+    # a line that begins a new reference entry (CLI command heading, etc.). Keeping
+    # each entry in its own passage is what lets retrieval answer about one command
+    # without dragging in the next.
+    _HEADING = re.compile(r"^(execute|config|set|unset|get|show|diagnose|diag|edit|"
+                          r"delete|append|end|next)\b.{0,70}$", re.I)
+
     @staticmethod
-    def _chunk(text, size=320):
-        """Group a long passage/book into ~size-char passages for good retrieval."""
-        sents = [s.strip() for s in re.split(r"(?<=[.!?؟])\s+|\n+", text.strip()) if len(s.strip()) > 2]
+    def _size_split(text, size):
+        sents = [s.strip() for s in re.split(r"(?<=[.!?؟])\s+|\n+", text.strip())
+                 if len(s.strip()) > 2]
         chunks, cur = [], ""
         for s in sents:
             if not cur or len(cur) + len(s) + 1 <= size:
@@ -551,6 +581,33 @@ class Mind:
                 chunks.append(cur); cur = s
         if cur:
             chunks.append(cur)
+        return chunks
+
+    def _chunk(self, text, size=320):
+        """Split into passages, keeping each reference ENTRY together: a new entry
+        heading (or a blank line) starts a new passage. Long free-prose blocks are
+        then split by size, so ordinary books/articles still chunk sensibly."""
+        blocks, cur = [], []
+        for ln in text.split("\n"):
+            s = ln.strip()
+            if not s:                                   # blank line = block boundary
+                if cur:
+                    blocks.append(cur); cur = []
+                continue
+            if cur and self._HEADING.match(s):          # a new entry heading
+                blocks.append(cur); cur = [s]
+            else:
+                cur.append(s)
+        if cur:
+            blocks.append(cur)
+
+        chunks = []
+        for blk in blocks:
+            joined = " ".join(blk)
+            if len(joined) <= size * 2:
+                chunks.append(joined)                   # a whole entry / short paragraph
+            else:
+                chunks.extend(self._size_split(joined, size))   # long prose -> by size
         return chunks or [text.strip()]
 
     def teach(self, text):                 # add durable knowledge to the library
@@ -561,6 +618,7 @@ class Mind:
                 else f"Learned: “{chunks[0]}”")
 
     def learn_text(self, text, source=""):
+        text = self._denoise(text)                  # strip manual boilerplate first
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
         self._retrain()
@@ -763,6 +821,17 @@ class Mind:
                 "do", "does", "you", "your", "it", "that", "this", "am", "tell"}
         words = [w for w in re.findall(r"\w+", low) if len(w) > 2 and w not in STOP]
         hits = [(d, s) for d, s in self.lib.search(q, k=6) if s > 0.10]
+        # PRECISION GATE: don't answer from a passage that only shares a common word
+        # with the question (e.g. "who won the 2050 world cup" matching "the largest
+        # desert in the world" on just "world"). Trust a hit only if it is strong, or
+        # covers >=2 distinct query keywords, or the question is single-topic.
+        if hits:
+            qkw = set(words)
+            top = hits[0][1]
+            multi = any(len(qkw & set(re.findall(r"[a-z؀-ۿ]+", d.lower()))) >= 2
+                        for d, _ in hits)
+            if not (top >= 0.28 or multi or len(qkw) <= 1):
+                hits = []
         if re.search(r"about (me|myself)|(who|what) am i|know about me", low):
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
         else:
