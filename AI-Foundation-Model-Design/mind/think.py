@@ -70,6 +70,16 @@ class Thinker:
         self._trained_on = len(docs)
         return self._trained_on
 
+    def stats(self):
+        """Real, inspectable size of the trained language model."""
+        contexts = sum(len(m) for m in self.models)
+        vocab = set()
+        for m in self.models:
+            for ctx, dist in m.items():
+                vocab.update(dist.keys())
+        return {"passages": self._trained_on, "contexts": contexts,
+                "vocab": len(vocab), "order": self.order}
+
     def _next(self, history):
         """Pick the next word using the longest context we have data for (backoff)."""
         for o in range(self.order, 0, -1):

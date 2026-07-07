@@ -28,6 +28,7 @@ from sympy.parsing.sympy_parser import (parse_expr, standard_transformations,
                                         implicit_multiplication_application,
                                         convert_xor)
 from think import Thinker
+from skills import SkillBook, parse_skill_definition
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -269,9 +270,13 @@ def try_combinatorics(q):
     m = re.search(r"permutations?\s+of\s+(\d+)\s+(?:take|pick|choose)?\s*(\d+)", ql)
     if m:
         n, r = int(m[1]), int(m[2]); return f"P({n}, {r}) = {sp.factorial(n)//sp.factorial(n-r)}"
-    m = re.search(r"factorial\s+of\s+(\d+)", ql) or re.search(r"\b(\d+)\s*!", q)
+    m = (re.search(r"factorial\s+of\s+(\d+)", ql) or re.search(r"(\d+)\s+factorial", ql)
+         or re.search(r"\b(\d+)\s*!", q))
     if m:
-        n = int(m[1]); return f"{n}! = {sp.factorial(n)}"
+        n = int(m[1])
+        if n > 10000:
+            return "That factorial is too large to display."
+        return f"{n}! = {sp.factorial(n)}"
     m = re.search(r"(\d+)(?:st|nd|rd|th)?\s+fibonacci", ql)
     if m:
         n = int(m[1]); return f"Fibonacci #{n} = {sp.fibonacci(n)}"
@@ -489,11 +494,27 @@ class Mind:
             else {"facts": [], "solved": {}}
         self.mem.setdefault("identity", {"name": "Vio"})   # the assistant's own name
         self.thinker = Thinker()                           # open-ended thinking engine
+        self.skills = SkillBook()                          # user-teachable reflexes
         self._retrain()
 
     def _retrain(self):
         """(Re)train the open-ended thinker on everything Vio has learned."""
         self.thinker.train(self.lib.docs + self.mem.get("facts", []))
+
+    def train_model(self, extra_text=None):
+        """Explicitly (re)train Vio's own language model on everything it knows,
+        optionally folding in extra text (e.g. the current chat) as new knowledge
+        first. Returns real, inspectable training statistics."""
+        added = 0
+        if extra_text and extra_text.strip():
+            chunks = self._chunk(extra_text)
+            self.lib.add_many(chunks)
+            added = len(chunks)
+        self._retrain()
+        stats = self.thinker.stats()
+        stats["added"] = added
+        stats["library"] = len(self.lib.docs)
+        return stats
 
     def name(self):
         return self.mem.get("identity", {}).get("name", "Vio")
@@ -646,6 +667,17 @@ class Mind:
             return {"answer": self.teach(q[6:].strip()), "how": "library-write", "verified": True, "trace": []}
         if low.startswith("remember:"):
             return {"answer": self.remember(q[9:].strip()), "how": "memory-write", "verified": True, "trace": []}
+
+        # define a new skill from chat:  "skill: name | when: trigger | reply: text"
+        sdef = parse_skill_definition(q)
+        if sdef:
+            ok, msg = self.skills.add(*sdef)
+            return {"answer": msg, "how": "skill-write", "verified": ok, "trace": []}
+
+        # a user-taught skill reflex fires before the built-in tools
+        sk = self.skills.match(q)
+        if sk:
+            return {"answer": sk[1], "how": f"skill: {sk[0]}", "verified": True, "trace": []}
 
         # 0) "what have I taught you / what do you know / what's in your library"
         if re.search(r"what (have i|did i) (taught|told)|what do you know$|"
