@@ -737,3 +737,63 @@ rounds while preserving accumulated self-generated data and history.
   much stronger for pseudo-labels to help more than they hurt.
 - Checkpointing is the more broadly useful piece here at this scale: it makes any
   of the training scripts in this directory safe to run under interruption.
+
+---
+
+# 15. Gated Selective Oscillatory Memory — solving the adding problem
+
+`selective_oscillatory_memory_gated.py`. Section 1's honest limitation was that the
+oscillator solves pure long-range **memory** but not the classic **adding problem**
+(sum the two values marked by a second "marker" channel), because that task needs
+memory **and** input **selection** (value x marker) — flagged as "the obvious next
+experiment." This adds exactly that: an input-dependent multiplicative gate on the
+drive, `g_t = sigmoid(Wg u_t + bg)`, so the gate can learn to open only on marked
+timesteps — the "selective forgetting" idea from blueprint section 1.2 (Mamba-style
+selective SSMs), grafted onto the oscillator physics. Pure NumPy, hand-derived BPTT,
+verified against finite differences (max relative error ~9e-6) before running.
+
+```bash
+python3 selective_oscillatory_memory_gated.py     # ~5-6 min on 4 CPU cores
+```
+
+### Result — the adding problem (T=120), no-selection baseline MSE ~= 0.167
+
+| Model | Final val MSE (6000 steps, LR decay) | Verdict |
+|---|---|---|
+| **Gated SOM** (multiplicative input-dependent gate) | **0.097** | clearly below baseline |
+| Ungated SOM (same physics, no selection) | 0.170 | stuck at the baseline — confirms section 1's finding |
+
+A first pass (constant LR, 3000 steps) showed the gate barely edging the baseline,
+bouncing noisily between ~0.15-0.21 — an optimization artifact, not a mechanism
+failure: annealing the LR (halved every 2000 steps) over a longer 6000-step run lets
+the gate's selection signal actually converge, taking gated SOM to **0.097** (a ~42%
+reduction from baseline) while the ungated model, given the identical extra budget,
+never leaves the baseline band (0.170). The gate is doing real, mechanism-specific
+work, not just benefiting from more compute.
+
+### Regression check — the pure memory task must still be solved
+
+| Task | Val MSE |
+|---|---|
+| Pure long-range memory (gated model, 2500 steps, same as section 1) | **0.00005** |
+
+Adding the gate does not cost the memory property section 1 established (0.00005,
+same order as the ungated 0.0017 result) — the gate multiplies the *drive*, not the
+oscillator's damping/timestep dynamics that give it long-range gradient flow.
+
+### Honest status
+
+- **Improved, not solved.** 0.097 is a real, mechanism-driven win over both the
+  no-selection baseline (0.167) and the matched-budget ungated model (0.170), but it
+  is not the near-zero error the pure memory task reaches (0.00005). A simple scalar
+  sigmoid gate per unit, conditioned only on the current input, is evidently not a
+  full solution — it likely needs to condition on more context (e.g. a small gate
+  MLP, or gate state carried across time) to sharpen its marker/non-marker decision
+  further. Reported as a genuine partial fix, not oversold as "solved."
+- The first (unannealed) training recipe reproducibly understates the gate's effect
+  — a reminder that a "negative result" can sometimes be an optimization artifact
+  rather than a mechanism limitation; the fix here was diagnosing that before
+  concluding the idea didn't work.
+- This is the direct, concrete instantiation of blueprint section 1.2's "selective"
+  claim (input-dependent Delta / selective forgetting) validated at toy scale on the
+  exact task section 1 left unsolved.

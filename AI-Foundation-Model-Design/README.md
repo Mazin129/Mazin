@@ -23,7 +23,7 @@ system.
 | [`04-evaluation-deployment-roadmap.md`](04-evaluation-deployment-roadmap.md) | Benchmarks, deployment plan, open-source roadmap, risks and mitigations, future research |
 | [`05-brain-native-redesign.md`](05-brain-native-redesign.md) | **Brain-native redesign (codename CORTEX):** spiking neurons, predictive coding / free energy, complementary learning systems, oscillatory phase codes, neuromodulation, global workspace, self-organized criticality — the real neuroscience and math/physics for each |
 | [`06-first-principles-architecture.md`](06-first-principles-architecture.md) | **Clean-sheet, first-principles architecture (codename AXIOM):** interrogates the transformer's hidden assumptions, then 13 new mechanisms (sparse/event-driven compute, weights-on-demand, external memory, predictive world models, local continual learning, symbolic self-verification…) — each with bio inspiration, math, complexity, energy, and **which are already BUILT & measured here**. Includes an honest analysis of the 100–1000× efficiency claim |
-| [`prototype/`](prototype/) | **Working, runnable code.** A physics-grounded sequence mixer, a brain-native (no-backprop) learner, **BL** — a brain-like model that learns real handwritten digits, oscillatory/hybrid/sparse/fast language models, and a self-training + checkpointed-resume loop. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
+| [`prototype/`](prototype/) | **Working, runnable code.** A physics-grounded sequence mixer (plain + gated/selective), a brain-native (no-backprop) learner, **BL** — a brain-like model that learns real handwritten digits, oscillatory/hybrid/sparse/fast language models, and a self-training + checkpointed-resume loop. See [`prototype/RESULTS.md`](prototype/RESULTS.md) |
 
 ## Runnable prototype (laptop-scale)
 
@@ -38,6 +38,18 @@ Result: on a pure long-range memory task (T=120), the oscillatory mixer reaches 
 0.0017** while an equal-size vanilla RNN stays stuck at the **0.337** forgetful baseline —
 because the oscillator physics keeps gradients-through-time `O(1)` (measured: 61× vs the
 RNN's `3e-5`).
+
+`prototype/selective_oscillatory_memory_gated.py` fixes that file's one documented
+failure — the "adding problem" (needs memory **and** selection) — by adding an
+input-dependent multiplicative gate (§1.2's "selective forgetting," the Mamba-style
+selective-SSM idea) to the oscillator's drive. With a properly annealed learning-rate
+schedule the gated model reaches **MSE 0.097** vs an ungated model stuck at **0.170**
+(no-selection baseline ≈0.167) — a real, mechanism-driven improvement, though not yet
+the near-zero error the pure memory task reaches.
+
+```bash
+python3 prototype/selective_oscillatory_memory_gated.py     # ~5-6 min on 4 CPU cores
+```
 
 `prototype/predictive_coding_brain.py` backs the brain-native redesign (§5): a
 **predictive-coding** network that learns with **only local updates — no backpropagation**
