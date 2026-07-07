@@ -29,6 +29,10 @@ from sympy.parsing.sympy_parser import (parse_expr, standard_transformations,
                                         convert_xor)
 from think import Thinker
 from skills import SkillBook, parse_skill_definition
+from memory.episodic import EpisodicMemory
+from memory.working import WorkingMemory
+from memory.semantic import SemanticMemory
+from memory.procedural import ProceduralMemory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -493,8 +497,15 @@ class Mind:
         self.mem = json.load(open(MEM_FILE, encoding="utf-8")) if os.path.exists(MEM_FILE) \
             else {"facts": [], "solved": {}}
         self.mem.setdefault("identity", {"name": "Vio"})   # the assistant's own name
+        self.mem.setdefault("solved", {})
         self.thinker = Thinker()                           # open-ended thinking engine
         self.skills = SkillBook()                          # user-teachable reflexes
+        # CORTEX-OS Phase 1 — the four memory tiers (§3). Working/Semantic/Procedural
+        # are live adapters over existing stores; Episodic is a new autobiographical log.
+        self.wm = WorkingMemory()
+        self.episodic = EpisodicMemory()
+        self.semantic = SemanticMemory(self.lib)
+        self.procedural = ProceduralMemory(self.skills, self.mem["solved"])
         self._retrain()
 
     def _retrain(self):
@@ -751,7 +762,63 @@ class Mind:
                     "book/notes, or say 'teach: <a fact>'. Then ask me about it.")
         return "\n".join(parts)
 
+    # ---- episodic wrapper (CORTEX-OS §3.3, §15 step 10) --------------------
     def ask(self, q):
+        """Public entry: recall past chats on request, run the core reasoner, then
+        write the interaction to episodic memory so Vio remembers it."""
+        q = (q or "").strip()
+        low = q.lower()
+        # "what did we talk about", "have we discussed…", "did I ask you before" -> recall
+        if re.search(r"\bwhat did we\b|\bwhat have we\b|\bdid we (talk|discuss)|"
+                     r"what did i ask|talked about|(have we|did we) discuss|"
+                     r"remember when|last time we|our (past |previous )?(chat|conversation)", low):
+            r = self._episodic_recall(q)
+            if r:
+                return r                                # recall itself is not recorded
+        r = self._ask_core(q)
+        self._remember_episode(q, r)
+        return r
+
+    def _episodic_recall(self, q):
+        eps = self.episodic.recall(q, k=3)
+        if not eps:
+            eps = self.episodic.recent(6, kind="chat")
+            if not eps:
+                return {"answer": "We haven't talked about anything yet — ask me something "
+                        "and I'll remember it.", "how": "episodic recall",
+                        "verified": True, "trace": []}
+            lines = ["Recently you asked me about:"] + [f"  • {e['cue']}" for e in eps]
+            return {"answer": "\n".join(lines), "how": "episodic recall",
+                    "verified": True, "trace": []}
+        lines = ["Here's what I recall from our past chats:"]
+        for e in eps:
+            d = e["detail"].replace("\n", " ")
+            lines.append(f"  • You asked “{e['cue']}” — I said: {d[:100]}"
+                         + ("…" if len(d) > 100 else ""))
+        return {"answer": "\n".join(lines), "how": "episodic recall",
+                "verified": True, "trace": [f"recalled {len(eps)} past episode(s)"]}
+
+    def _remember_episode(self, q, r):
+        """Turn a completed interaction into an episode (one-shot write)."""
+        how = r.get("how", "")
+        if how in ("episodic recall", "welcome"):
+            return
+        if how.endswith("-write") or how in ("skill-write", "learned from GitHub", "github"):
+            outcome, reward = "learned", 0.3
+        elif how == "no-source":
+            outcome, reward = "unknown", 0.0
+        elif r.get("verified") and ("symbolic" in how or "exact tool" in how):
+            outcome, reward = "solved", 1.0
+        elif r.get("verified"):
+            outcome, reward = "answered", 0.5
+        else:
+            outcome, reward = "answered", 0.2
+        try:
+            self.episodic.record(q, r.get("answer", ""), outcome, reward)
+        except Exception:
+            pass
+
+    def _ask_core(self, q):
         q = q.strip()
         low = q.lower()
         # commands

@@ -1,4 +1,6 @@
 mind_memory.json
 knowledge.json
 skills.json
+episodic.json
 __pycache__/
+data/

@@ -650,10 +650,14 @@ Each phase ships something usable and testable; no big-bang.
 - **Phase 0 — Today [DONE].** Vio: verified math tools, TF-IDF retrieval + precision gate,
   grounded synthesis, skills, the solve-agent, PDF/GitHub ingestion, memory, the browser UI.
   *This is System-1 + seed retrieval + seed procedural memory.*
-- **Phase 1 — Workspace & memory tiers.** Introduce the Cognitive Workspace (blackboard) and
-  refactor existing pieces into modules that publish/subscribe. Split memory into WM/EPI/SEM/PRO;
-  add the episodic log + one-shot write; add embeddings alongside TF-IDF. *Grounds on
-  `bl_advanced.py` episodic memory.*
+- **Phase 1 — Workspace & memory tiers. [IN PROGRESS]** Introduce the Cognitive Workspace
+  (blackboard) and split memory into WM/EPI/SEM/PRO. **Shipped:** `kernel/workspace.py` (cognits,
+  pub/sub, salience-gated ignition, decay/GC), `memory/working.py` (bounded slots),
+  `memory/episodic.py` (autobiographical log with one-shot write + content/recency/reward recall),
+  and Semantic/Procedural adapters over the existing library + skills. Wired into `Mind`: every
+  interaction is now recorded as an episode, and Vio recalls past chats ("what did we talk
+  about?", "did we discuss X?"). *Remaining:* migrate modules onto the Workspace bus; add
+  embeddings alongside TF-IDF. *Grounds on `bl_advanced.py` episodic memory.*
 - **Phase 2 — Executive, Confidence, Self-Critic.** Add the difficulty-priced Executive
   (two-clock), the calibrated Confidence Engine, and the Self-Critic loop. Generalize "I don't
   know" to every path. *Biggest single quality jump.*

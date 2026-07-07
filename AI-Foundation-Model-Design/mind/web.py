@@ -269,7 +269,7 @@ async function upload(){
 async function loadStatus(){
  try{const j=await(await fetch('/api/status')).json();
   if(j.name){document.getElementById('who').textContent=j.name;document.title=j.name;}
-  statusEl.innerHTML='model: <b>'+j.vocab+'</b> words · <b>'+j.library+'</b> passages · <b>'+j.skills+'</b> skills';
+  statusEl.innerHTML='model: <b>'+j.vocab+'</b> words · <b>'+j.library+'</b> passages · <b>'+j.skills+'</b> skills · <b>'+(j.memories||0)+'</b> memories';
  }catch(e){}
 }
 async function train(withChat){
@@ -332,7 +332,8 @@ MAX_BODY = 32 * 1024 * 1024
 def _status():
     st = MIND.thinker.stats()
     return {"name": MIND.name(), "vocab": st["vocab"], "library": len(MIND.lib.docs),
-            "contexts": st["contexts"], "skills": len(MIND.skills.skills)}
+            "contexts": st["contexts"], "skills": len(MIND.skills.skills),
+            "memories": len(MIND.episodic.episodes)}
 
 
 class H(BaseHTTPRequestHandler):
@@ -465,6 +466,9 @@ class H(BaseHTTPRequestHandler):
             if os.path.exists(KB_FILE):
                 os.remove(KB_FILE)
             MIND.lib.docs = []; MIND.lib.vec = None
+            MIND.episodic.clear()                       # wipe the autobiographical log too
+            MIND.procedural.solved = MIND.mem["solved"]  # re-point after mem reset
+            MIND.wm.clear()
             MIND._retrain()
             self._s(200, "{}")
         else:
