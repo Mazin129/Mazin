@@ -762,7 +762,7 @@ class Mind:
                 "what", "who", "where", "when", "why", "how", "my", "me", "and", "i",
                 "do", "does", "you", "your", "it", "that", "this", "am", "tell"}
         words = [w for w in re.findall(r"\w+", low) if len(w) > 2 and w not in STOP]
-        hits = [(d, s) for d, s in self.lib.search(q) if s > 0.12]
+        hits = [(d, s) for d, s in self.lib.search(q, k=6) if s > 0.10]
         if re.search(r"about (me|myself)|(who|what) am i|know about me", low):
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
         else:

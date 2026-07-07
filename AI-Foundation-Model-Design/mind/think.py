@@ -131,6 +131,8 @@ class Thinker:
 
     _DEF_CUE = re.compile(r"\b(is|are|means?|refers to|description|defined|used to|"
                           r"lets you|allows|enables|tests?|displays?|configures?)\b", re.I)
+    _LABEL = re.compile(r"^\s*(syntax|example|examples|usage|parameters?|options?|"
+                        r"description|note|notes|default|arguments?|values?)\s*[:\-]", re.I)
 
     def _lead(self, question):
         """A short, natural opener matched to a clean 'what is X' / 'how' question.
@@ -141,54 +143,119 @@ class Thinker:
             subj = m.group(5).strip()
             if 0 < len(subj.split()) <= 5:
                 return f"{subj[:1].upper()}{subj[1:]} — "
-        if re.match(r"how\b", q):
+        # only procedural "how do/to/can…" gets this lead — NOT "how many/much/long"
+        if re.match(r"how\s+(do|to|can|could|would|should|does|did|will|i)\b", q):
             return "Here's how: "
         return ""
+
+    @staticmethod
+    def _first_word(s):
+        w = re.findall(r"[A-Za-z؀-ۿ]+", s)
+        return w[0].lower() if w else ""
+
+    @staticmethod
+    def _format_body(text):
+        """Light structure for reference-style answers: put field labels
+        (Syntax:, Example:, …) on their own line. Plain prose is unaffected."""
+        text = re.sub(r"\s+(Syntax|Example|Examples|Usage|Parameters?|Options?|"
+                      r"Note|Notes|Default|Arguments?|Values?)\s*:",
+                      r"\n\1:", text, flags=re.I)
+        return text.strip()
+
+    def _related(self, passages, used_pi, per, kw):
+        """Short titles of OTHER retrieved entries the user might ask about next —
+        the first few words of passages that didn't feed the answer."""
+        out = []
+        seen = set()
+        for pi, sents in enumerate(per):
+            if pi in used_pi or not sents:
+                continue
+            title = re.split(r"\bdescription\b|\bsyntax\b|[:\-–]", sents[0], 1, re.I)[0]
+            title = re.sub(r"\s+", " ", title).strip(" .,:;")
+            words = title.split()
+            if not (1 <= len(words) <= 7):
+                title = " ".join(words[:6])
+            key = title.lower()
+            if title and key not in seen and len(title) > 2:
+                seen.add(key)
+                out.append(title)
+            if len(out) >= 3:
+                break
+        return out
 
     def synthesize(self, question, passages, facts=()):
         kw = set(_keywords(question))
         if not kw:
             return None
-        cand = []
-        seen = set()
-        for p in passages:
-            for s in _sentences(p):
-                key = s.lower()[:60]
-                if key in seen:
-                    continue
-                seen.add(key)
-                overlap = len(kw & set(_keywords(s)))
-                if overlap:
-                    cand.append((overlap, s))
+        per = [_sentences(p) for p in passages]        # sentences per passage
+        scored = []                                    # (overlap, passage_idx, sent_idx)
+        for pi, sents in enumerate(per):
+            for si, s in enumerate(sents):
+                ov = len(kw & set(_keywords(s)))
+                if ov:
+                    scored.append((ov, pi, si))
         rel_facts = [f for f in facts if kw & set(_keywords(f))]
-        if not cand and not rel_facts:
+        if not scored and not rel_facts:
             return None
 
-        picked = []
-        if cand:
-            best = max(o for o, _ in cand)
-            # keep only the top relevance tier — this is what stops a query for one
-            # command/topic from pulling in sentences that are really about another.
-            tier = [s for o, s in cand if o >= best] or [s for _, s in cand]
-            if len(tier) < 2:                       # broaden slightly if too thin
-                tier = [s for o, s in cand if o >= best - 1]
-            # order: a defining/description sentence first, then by original appearance
-            tier.sort(key=lambda s: (0 if self._DEF_CUE.search(s) else 1, len(s)))
-            for s in tier[:3]:
-                t = self._tidy_sentence(s)
-                if t not in picked:
-                    picked.append(t)
+        picked = []                                    # (pi, si) in reading order
+        chosen = set()
+        used_pi = set()
+        if scored:
+            best = max(o for o, _, _ in scored)
+            anchors = [(pi, si) for o, pi, si in scored if o == best]
+            if len(anchors) < 2:                       # broaden slightly if too thin
+                anchors = [(pi, si) for o, pi, si in scored if o >= best - 1]
+            # defining/description sentence first, then document order
+            anchors.sort(key=lambda t: (0 if self._DEF_CUE.search(per[t[0]][t[1]]) else 1,
+                                        t[0], t[1]))
+            starters = {self._first_word(p) for p in passages if p}
+            for pi, si in anchors[:3]:
+                if (pi, si) in chosen:
+                    continue
+                picked.append((pi, si)); chosen.add((pi, si)); used_pi.add(pi)
+                # RICHER: pull the immediate follow-on detail from the SAME passage
+                # (e.g. "The host can be an IP address…" after a Syntax line), but
+                # stop at the next entry so we never bleed into another command.
+                j, added = si + 1, 0
+                while j < len(per[pi]) and added < 2:
+                    nxt = per[pi][j]
+                    # a sentence that opens with an entry-starter word (e.g. another
+                    # "execute …" command) begins a NEW entry — stop, so one command's
+                    # answer never bleeds into the next. Label lines (Syntax:/Example:)
+                    # are part of the SAME entry, so they don't count as a boundary.
+                    starts_new = (self._first_word(nxt) in starters
+                                  and not self._LABEL.match(nxt))
+                    if starts_new:
+                        break
+                    if (pi, j) not in chosen:
+                        picked.append((pi, j)); chosen.add((pi, j))
+                        added += 1
+                    j += 1
+
+        # assemble, de-duplicated, in reading order
+        sentences, seen = [], set()
+        for pi, si in picked:
+            t = self._tidy_sentence(per[pi][si])
+            k = t.lower()[:50]
+            if k not in seen:
+                seen.add(k); sentences.append(t)
+        sentences = sentences[:5]
 
         parts = []
         if rel_facts:
             parts.append(" ".join(self._tidy_sentence(f) for f in rel_facts))
-        if picked:
-            body = " ".join(picked)
+        if sentences:
             lead = self._lead(question) if not rel_facts else ""
-            if lead and picked[0].lower().startswith(lead.rstrip(" —").lower()):
-                lead = ""                            # avoid "Ping — Ping is…"
-            parts.append(lead + body)
-        return "\n\n".join(parts) if parts else None
+            if lead and sentences[0].lower().startswith(lead.rstrip(" —").lower()):
+                lead = ""
+            parts.append(self._format_body(lead + " ".join(sentences)))
+        answer = "\n\n".join(parts) if parts else None
+        if answer:
+            related = self._related(passages, used_pi, per, kw)
+            if related:
+                answer += "\n\nRelated topics I can explain: " + ", ".join(related) + "."
+        return answer
 
 
 if __name__ == "__main__":
