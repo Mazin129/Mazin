@@ -150,19 +150,25 @@ class GatedOscillatoryModel:
         return loss, grads
 
 
-def train(model, task, T=120, B=64, steps=3000, lr=3e-3, tag=""):
+def train(model, task, T=120, B=64, steps=6000, lr=3e-3, lr_decay_every=2000, tag=""):
+    """lr_decay_every halves the learning rate every N steps (None = constant LR).
+    The adding problem needs this: with a constant LR, validation MSE bounces in a
+    noisy band around the no-selection baseline instead of settling; annealing lets
+    the gate's selection signal actually converge (see RESULTS.md section 11)."""
     opt = Adam(model.p, lr=lr)
     hist = []
     for it in range(steps):
+        if lr_decay_every:
+            opt.lr = lr * (0.5 ** (it // lr_decay_every))
         u, y = task(B, T)
         loss, grads = model.loss_and_grads(u, y)
         opt.step(model.p, grads)
-        if it % 400 == 0 or it == steps - 1:
-            uv, yv = task(512, T)
+        if it % 500 == 0 or it == steps - 1:
+            uv, yv = task(1024, T)
             vpred, _ = model.forward(uv, keep_cache=False)
             vmse = np.mean((vpred - yv) ** 2)
             hist.append((it, vmse))
-            print(f"  [{tag}] step {it:4d}  val_MSE = {vmse:.5f}")
+            print(f"  [{tag}] step {it:5d}  lr={opt.lr:.2e}  val_MSE = {vmse:.5f}")
     return hist
 
 
@@ -174,12 +180,12 @@ if __name__ == "__main__":
     print("No-selection baseline MSE ~= 0.167 (sum ignoring which values are marked)")
     print("=" * 66)
 
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(1)
     print("Gated Selective Oscillatory Memory (multiplicative input-dependent gate):")
     gated = GatedOscillatoryModel(d=64, dt=0.1, gamma=0.3, alpha=0.05)
     train(gated, make_batch, T=T, tag="gated-SOM")
 
-    rng = np.random.default_rng(0)
+    rng = np.random.default_rng(1)
     print("\nUngated SOM, for comparison (same physics, no selection mechanism):")
     from selective_oscillatory_memory import OscillatoryModel
     ungated = OscillatoryModel(d=64, dt=0.1, gamma=0.3, alpha=0.05)
@@ -191,4 +197,4 @@ if __name__ == "__main__":
     print("=" * 66)
     rng = np.random.default_rng(0)
     gated_mem = GatedOscillatoryModel(d=64, dt=0.1, gamma=0.3, alpha=0.05)
-    train(gated_mem, make_memory, T=T, steps=2500, tag="gated-SOM/memory")
+    train(gated_mem, make_memory, T=T, steps=2500, lr_decay_every=None, tag="gated-SOM/memory")
