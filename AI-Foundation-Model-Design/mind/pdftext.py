@@ -1,45 +1,97 @@
 """
-pdftext  —  a tiny, dependency-free PDF text extractor (stdlib zlib only).
+pdftext  —  robust PDF text extraction for Vio.
 
-So Vio can learn from a real book/PDF, not just .txt — with NO external library.
-It inflates the PDF's content streams and reconstructs the visible text from the
-text-showing operators (Tj / TJ / ' / "). This covers most ordinary text PDFs
-(exported from Word, LaTeX, most manuals/articles). It cannot read scanned/image-only
-PDFs (there is no text to extract) or unusual font encodings — in those cases it
-returns what it can and the caller falls back to asking for a .txt.
+Reads a real book/manual PDF into text. It tries, in order of quality:
+  1. PyMuPDF (fitz)   — best: decodes embedded/CID font CMaps, columns, tables.
+                        This is what correctly reads professional manuals (e.g. the
+                        FortiOS CLI reference) whose glyphs are NOT plain ASCII.
+  2. pdfminer.six     — pure-Python, also decodes font encodings well.
+  3. a stdlib zlib    — dependency-free last resort for simple PDFs.
+     fallback
 
-WHY THIS IS NOT A NAIVE REGEX GRAB. In PDF, the space between words is very often
-NOT a space character — it is a small negative number inside a TJ array (kerning),
-e.g. `[(execute) -250 (ping)]`. A naive extractor concatenates the strings and gets
-"executeping", which then matches no search query (the bug this file fixes). Here we:
-  • turn a sufficiently-negative TJ adjustment into a real space, and
-  • start a new line on text-positioning operators (Td/TD/T*/Tm/'/"),
-so words stay separated and lines stay apart — which is what retrieval needs.
+Then `looks_readable()` sanity-checks the result: if a PDF's fonts can't be mapped
+to real letters, extraction yields garbage (glued/garbled characters). Rather than
+letting Vio "learn" thousands of unreadable passages and then answer nothing, the
+caller checks readability and tells the user honestly.
 
-Not a security risk: it never executes anything, only decompresses and scans bytes.
-Input size is capped by the web layer.
+    pip install pymupdf            # strongly recommended
+    # (pdfminer.six also works;  the stdlib fallback needs nothing)
 """
 
 import re
 import zlib
+from io import BytesIO
 
-# A TJ number more negative than this denotes a word gap -> emit a space.
-# (Units are 1/1000 of an em; a real space is ~250-330, inter-word kerning often
-#  -120..-400. 100 is a safe, slightly generous threshold.)
+
+# --------------------------------------------------------------------------- #
+# 1) PyMuPDF  (best quality)
+# --------------------------------------------------------------------------- #
+# Each backend is probed for importability at most ONCE and the result cached, so a
+# broken optional dependency doesn't repeatedly raise (and spam stderr) on every PDF.
+# NB: we catch BaseException, not just Exception — a broken native binding can raise
+# non-Exception errors at import (e.g. pdfminer -> cryptography -> a Rust pyo3
+# PanicException). That must never take Vio down; we fall through to the next backend.
+_backend = {}          # name -> callable / False (unavailable) / absent (untried)
+
+
+def _load(name, importer):
+    if name not in _backend:
+        try:
+            _backend[name] = importer()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:
+            _backend[name] = False
+    return _backend[name]
+
+
+def _extract_pymupdf(data: bytes):
+    fitz = _load("fitz", lambda: __import__("fitz"))
+    if not fitz:
+        return None
+    try:
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            return "\n".join(page.get_text("text") for page in doc)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# 2) pdfminer.six
+# --------------------------------------------------------------------------- #
+def _extract_pdfminer(data: bytes):
+    def _imp():
+        from pdfminer.high_level import extract_text as _pm
+        return _pm
+    pm = _load("pdfminer", _imp)
+    if not pm:
+        return None
+    try:
+        return pm(BytesIO(data))
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# 3) stdlib fallback — parse text-showing operators, reconstruct spaces from
+#    TJ kerning and line breaks from positioning operators (handles simple PDFs).
+# --------------------------------------------------------------------------- #
 _TJ_SPACE = 100
-
 _STR = rb"\((?:\\.|[^()\\])*\)|<[0-9A-Fa-f\s]*>"
-# ordered scan: a TJ array, or a single show-string + its operator, or a line-mover.
 _SCAN = re.compile(
     rb"(?P<arr>\[(?:" + _STR + rb"|[^\[\]])*\])\s*TJ"
     rb"|(?P<s>" + _STR + rb")\s*(?P<op>Tj|'|\")"
     rb"|(?P<mv>Td|TD|T\*|Tm|ET|BT)",
     re.DOTALL,
 )
+_ELEM = re.compile(_STR + rb"|-?\d+\.?\d*")
 
 
 def _decode_string(tok: bytes) -> str:
-    """Decode one PDF string token: (literal) or <hex>."""
     if tok.startswith(b"("):
         s = tok[1:-1]
         s = re.sub(rb"\\n", b"\n", s)
@@ -49,7 +101,7 @@ def _decode_string(tok: bytes) -> str:
         s = re.sub(rb"\\([0-7]{1,3})", lambda m: bytes([int(m.group(1), 8) & 0xFF]), s)
         s = re.sub(rb"\\([()\\])", rb"\1", s)
         return s.decode("latin-1", "ignore")
-    hx = re.sub(rb"\s+", b"", tok[1:-1])          # <hex>
+    hx = re.sub(rb"\s+", b"", tok[1:-1])
     if len(hx) % 2:
         hx += b"0"
     try:
@@ -58,13 +110,9 @@ def _decode_string(tok: bytes) -> str:
         return ""
 
 
-_ELEM = re.compile(_STR + rb"|-?\d+\.?\d*")
-
-
 def _decode_tj_array(arr: bytes) -> str:
-    """Decode a TJ array, turning big negative kerns into spaces."""
     out = []
-    for m in _ELEM.finditer(arr[1:-1]):           # strip the [ ]
+    for m in _ELEM.finditer(arr[1:-1]):
         tok = m.group(0)
         if tok[:1] in (b"(", b"<"):
             out.append(_decode_string(tok))
@@ -80,19 +128,18 @@ def _decode_tj_array(arr: bytes) -> str:
 def _decode_stream(chunk: bytes) -> str:
     out = []
     for m in _SCAN.finditer(chunk):
-        if m.lastgroup == "arr" or m.group("arr"):
+        if m.group("arr"):
             out.append(_decode_tj_array(m.group("arr")))
         elif m.group("s"):
             out.append(_decode_string(m.group("s")))
-            if m.group("op") in (b"'", b'"'):     # show-and-move-to-next-line
+            if m.group("op") in (b"'", b'"'):
                 out.append("\n")
-        elif m.group("mv"):                        # line movement / block edges
+        elif m.group("mv"):
             out.append("\n")
     return "".join(out)
 
 
-def extract_text(data: bytes) -> str:
-    """Return the best-effort extracted text of a PDF given as raw bytes."""
+def _extract_stdlib(data: bytes):
     if not data[:5].startswith(b"%PDF"):
         return ""
     texts = []
@@ -100,17 +147,64 @@ def extract_text(data: bytes) -> str:
         raw = m.group(1)
         chunk = None
         try:
-            chunk = zlib.decompress(raw)                   # FlateDecode (common)
+            chunk = zlib.decompress(raw)
         except zlib.error:
-            if re.search(rb"\bTj\b|\bTJ\b|\bT\*\b", raw):  # maybe uncompressed
+            if re.search(rb"\bTj\b|\bTJ\b|\bT\*\b", raw):
                 chunk = raw
         if not chunk:
             continue
         piece = _decode_stream(chunk)
         if piece.strip():
             texts.append(piece)
-    text = "\n".join(texts)
-    text = re.sub(r"[ \t]+", " ", text)               # collapse runs of spaces
-    text = re.sub(r" *\n *", "\n", text)              # trim spaces around newlines
-    text = re.sub(r"\n{3,}", "\n\n", text)            # cap blank runs
+    return "\n".join(texts)
+
+
+def _tidy(text: str) -> str:
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+# common English words — their presence is a strong signal the text is real prose
+_COMMON = {"the", "and", "to", "of", "a", "in", "is", "for", "on", "with", "that",
+           "this", "or", "be", "are", "as", "at", "by", "an", "it", "from", "can",
+           "you", "your", "not", "if", "when", "use", "set", "all"}
+
+
+def looks_readable(text: str) -> bool:
+    """True if the extracted text looks like real language rather than the
+    garbled character soup a failed font-decode produces."""
+    if not text or len(text) < 20:
+        return False
+    words = re.findall(r"[A-Za-z]+", text)
+    if len(words) < 10:
+        return False
+    avg = sum(len(w) for w in words) / len(words)
+    long_ratio = sum(1 for w in words if len(w) > 18) / len(words)
+    space_ratio = text.count(" ") / len(text)
+    common_ratio = sum(1 for w in words if w.lower() in _COMMON) / len(words)
+    # real prose: modest average word length, some spaces, and common words present
+    return avg < 12 and long_ratio < 0.10 and space_ratio > 0.04 and common_ratio > 0.015
+
+
+def extract_text(data: bytes) -> str:
+    """Best-quality text from a PDF, trying the strongest reader available.
+    Returns whichever result looks readable; if none do, returns the best raw
+    attempt (the caller decides what to tell the user via looks_readable)."""
+    best = ""
+    for fn in (_extract_pymupdf, _extract_pdfminer, _extract_stdlib):
+        try:
+            txt = fn(data)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException:
+            txt = None
+        if not txt:
+            continue
+        txt = _tidy(txt)
+        if looks_readable(txt):
+            return txt                 # first readable result wins (highest quality first)
+        if len(txt) > len(best):
+            best = txt
+    return best

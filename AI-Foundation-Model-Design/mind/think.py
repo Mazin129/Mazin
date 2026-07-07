@@ -120,12 +120,36 @@ class Thinker:
             text += " …"
         return text[0].upper() + text[1:] if text else None
 
-    # ---- synthesis: compose a grounded answer from many passages at once ----
+    # ---- synthesis: compose a grounded, natural-language answer ----
+    @staticmethod
+    def _tidy_sentence(s):
+        s = re.sub(r"\s+", " ", s.strip())
+        s = re.sub(r"\s+([.,;:!?])", r"\1", s)
+        if s and s[-1] not in ".!?:":
+            s += "."
+        return s
+
+    _DEF_CUE = re.compile(r"\b(is|are|means?|refers to|description|defined|used to|"
+                          r"lets you|allows|enables|tests?|displays?|configures?)\b", re.I)
+
+    def _lead(self, question):
+        """A short, natural opener matched to a clean 'what is X' / 'how' question.
+        It only frames the retrieved facts — it never adds information."""
+        q = question.strip().lower()
+        m = re.match(r"(what\s+(is|are)|who\s+(is|are)|define|explain)\s+(the\s+)?(.+?)[\s?.]*$", q)
+        if m:
+            subj = m.group(5).strip()
+            if 0 < len(subj.split()) <= 5:
+                return f"{subj[:1].upper()}{subj[1:]} — "
+        if re.match(r"how\b", q):
+            return "Here's how: "
+        return ""
+
     def synthesize(self, question, passages, facts=()):
         kw = set(_keywords(question))
         if not kw:
             return None
-        scored = []
+        cand = []
         seen = set()
         for p in passages:
             for s in _sentences(p):
@@ -133,22 +157,38 @@ class Thinker:
                 if key in seen:
                     continue
                 seen.add(key)
-                swords = set(_keywords(s))
-                overlap = len(kw & swords)
+                overlap = len(kw & set(_keywords(s)))
                 if overlap:
-                    scored.append((overlap / (1 + 0.03 * len(swords)), s))
-        scored.sort(key=lambda t: -t[0])
-        picked = [s for _, s in scored[:3]]
-        if not picked and not facts:
-            return None
-        lines = []
+                    cand.append((overlap, s))
         rel_facts = [f for f in facts if kw & set(_keywords(f))]
+        if not cand and not rel_facts:
+            return None
+
+        picked = []
+        if cand:
+            best = max(o for o, _ in cand)
+            # keep only the top relevance tier — this is what stops a query for one
+            # command/topic from pulling in sentences that are really about another.
+            tier = [s for o, s in cand if o >= best] or [s for _, s in cand]
+            if len(tier) < 2:                       # broaden slightly if too thin
+                tier = [s for o, s in cand if o >= best - 1]
+            # order: a defining/description sentence first, then by original appearance
+            tier.sort(key=lambda s: (0 if self._DEF_CUE.search(s) else 1, len(s)))
+            for s in tier[:3]:
+                t = self._tidy_sentence(s)
+                if t not in picked:
+                    picked.append(t)
+
+        parts = []
         if rel_facts:
-            lines.append("From what I know about you: " + "; ".join(rel_facts) + ".")
+            parts.append(" ".join(self._tidy_sentence(f) for f in rel_facts))
         if picked:
-            lines.append("Putting together what you've taught me:")
-            lines += [f"  • {s}" for s in picked]
-        return "\n".join(lines) if lines else None
+            body = " ".join(picked)
+            lead = self._lead(question) if not rel_facts else ""
+            if lead and picked[0].lower().startswith(lead.rstrip(" —").lower()):
+                lead = ""                            # avoid "Ping — Ping is…"
+            parts.append(lead + body)
+        return "\n\n".join(parts) if parts else None
 
 
 if __name__ == "__main__":

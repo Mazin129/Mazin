@@ -229,6 +229,14 @@ WHO_ARE_YOU = re.compile(r"\b(what'?s your name|what is your name|who are you|"
 def reply(mind, text):
     t = text.strip()
 
+    # a user-taught skill reflex wins over every built-in intent below — the user
+    # defined it on purpose, so it should fire even for words like "hi" that would
+    # otherwise be caught by the greeting/identity rules. (Skill DEFINITIONS, which
+    # start with "skill:", fall through to Mind.ask which parses and stores them.)
+    sk = mind.skills.match(t)
+    if sk:
+        return {"answer": sk[1], "how": f"skill: {sk[0]}", "verified": True, "trace": []}
+
     # identity: name the assistant
     m = NAME_ME.search(t)
     if m:

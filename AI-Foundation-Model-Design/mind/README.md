@@ -104,8 +104,20 @@ no folders, no commands.
 In the browser, click the **📄** button next to Send and choose a **.txt / .md / .pdf**
 file (your notes, an article, a whole book). Vio reads it, splits it into passages, and you
 can then **ask questions about it** — answered only from what the document actually says.
-PDF reading is built in (dependency-free); scanned/image-only PDFs have no text to
-extract, so for those "Save As → Plain Text .txt" first.
+
+**For real PDFs (manuals, textbooks), install a proper reader:**
+
+```bash
+pip install pymupdf        # strongly recommended; reads embedded-font PDFs correctly
+```
+
+Vio uses the best reader available: **PyMuPDF** → **pdfminer.six** → a built-in
+dependency-free fallback. Professional PDFs (e.g. a vendor CLI reference) embed custom
+fonts where the raw bytes are glyph codes, not letters — only a real library decodes them.
+Without one, such a PDF extracts as garbage; Vio now **checks readability and tells you
+honestly** ("I couldn't read usable text… install pymupdf, or save as .txt") instead of
+pretending it learned thousands of unreadable passages. Scanned/image-only PDFs have no
+text layer at all — for those, "Save As → Plain Text .txt" (or OCR) first.
 
 ### Knows things out of the box
 

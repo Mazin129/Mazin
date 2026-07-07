@@ -434,15 +434,17 @@ class H(BaseHTTPRequestHandler):
             text = body.get("text") or ""
             if body.get("pdf_b64"):
                 import base64
-                from pdftext import extract_text
+                from pdftext import extract_text, looks_readable
                 try:
                     text = extract_text(base64.b64decode(body["pdf_b64"]))
                 except Exception:
                     text = ""
-                if len(text.split()) < 5:
+                if not looks_readable(text):
                     self._s(200, json.dumps({"answer":
-                        f"I couldn't read text from {name} — it may be a scanned/image PDF. "
-                        "Please 'Save As → Plain Text (.txt)' and upload that."}, ensure_ascii=False))
+                        f"I couldn't read usable text from {name}. It's likely a scanned/image "
+                        "PDF (no text layer) or uses fonts I can't decode. Options: install a "
+                        "stronger reader (pip install pymupdf) and retry, or open the PDF and "
+                        "'Save As → Plain Text (.txt)' and upload that."}, ensure_ascii=False))
                     return
             msg = MIND.learn_text(text, name)
             self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
