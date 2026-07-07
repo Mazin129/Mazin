@@ -564,6 +564,9 @@ class Mind:
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
         self._retrain()
+        if source:                                  # remember the most recent source
+            self.mem["last_learned"] = {"source": source, "count": len(chunks)}
+            self._save()
         where = f" from {source}" if source else ""
         return f"Learned {len(chunks)} passages{where}. You can now ask me about it."
 
@@ -644,6 +647,10 @@ class Mind:
         """'What have I taught you?' — Vio summarises its whole library + memory."""
         docs = self.lib.docs
         parts = []
+        last = self.mem.get("last_learned")
+        if last:
+            parts.append(f"Most recently I learned {last['count']} passage(s) "
+                         f"from {last['source']}.")
         if self.mem.get("facts"):
             parts.append(f"I remember {len(self.mem['facts'])} thing(s) about you:")
             parts += [f"  • {f}" for f in self.mem["facts"][:12]]
@@ -679,11 +686,13 @@ class Mind:
         if sk:
             return {"answer": sk[1], "how": f"skill: {sk[0]}", "verified": True, "trace": []}
 
-        # 0) "what have I taught you / what do you know / what's in your library"
+        # 0) "what have I taught you / what did you learn / what's in your library"
+        #    (NOT "what do you know about X" — that is a topic query -> retrieval below)
         if re.search(r"what (have i|did i) (taught|told)|what do you know$|"
                      r"what('?s| is) in your (library|memory|head|brain)|"
-                     r"what have you learn|summari[sz]e (your |the )?(library|knowledge|memory)",
-                     low):
+                     r"what\s+(did\s+|have\s+)?(you|u)\s+(learn|lern|learnt|learned|read)"
+                     r"(?!\s+about)|"
+                     r"summari[sz]e (your |the )?(library|knowledge|memory)", low):
             return {"answer": self._library_summary(), "how": "library summary",
                     "verified": True, "trace": []}
 
