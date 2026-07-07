@@ -193,7 +193,7 @@ function fmt(t){ // minimal, safe markdown: code fences, `inline`, **bold**
  return s;
 }
 const CHIPS=["solve x^2 - 5x + 6 = 0","15% of 200 and 12 factorial","5 km to miles",
- "integrate 1/x","is 97 prime","remember: my name is Mazin","teach: The Nile is the longest river."];
+ "integrate 1/x","is 97 prime","learn from github owner/repo","teach: The Nile is the longest river."];
 function renderChips(){document.getElementById('chips').innerHTML=
  CHIPS.map(c=>`<span class="chip" onclick="chip(this)">${esc(c)}</span>`).join('')}
 function chip(e){inp.value=e.textContent;inp.focus();autosize()}

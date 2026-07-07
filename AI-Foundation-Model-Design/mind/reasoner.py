@@ -552,15 +552,18 @@ class Mind:
         re.I)
 
     def _denoise(self, text):
-        """Drop manual boilerplate (TOC, index, cross-references, headers) so the
-        library holds real content, not navigation cruft."""
+        """Drop manual/markdown boilerplate (TOC, cross-references, headers, badges)
+        while PRESERVING blank lines — they are paragraph/section boundaries that the
+        chunker needs to keep sections apart."""
         kept = []
         for ln in text.splitlines():
             s = ln.strip()
-            if not s or self._NOISE_LINE.search(s):
+            if s and self._NOISE_LINE.search(s):
                 continue
-            s = re.sub(r"^\s*l\s+", "", s)                 # strip leftover "l " bullet glyph
-            kept.append(s)
+            if s:
+                s = re.sub(r"^\s*l\s+", "", s)             # leftover "l " bullet glyph
+                s = re.sub(r"(?<!\w)#(\w+)", r"\1", s)     # #hashtag -> hashtag (keep word)
+            kept.append(s)                                 # keep blank lines as boundaries
         return "\n".join(kept)
 
     # a line that begins a new reference entry (CLI command heading, etc.). Keeping
@@ -627,6 +630,30 @@ class Mind:
             self._save()
         where = f" from {source}" if source else ""
         return f"Learned {len(chunks)} passages{where}. You can now ask me about it."
+
+    def learn_github(self, spec):
+        """Clone a public GitHub repo and learn its docs (Markdown/txt/PDF). Reads
+        only — never runs repo code. Returns a summary dict."""
+        from gitlearn import fetch_repo_docs
+        owner, repo, docs, skipped = fetch_repo_docs(spec)
+        if not docs:
+            return {"ok": False,
+                    "answer": f"I cloned {owner}/{repo} but found no readable docs "
+                              f"(Markdown/text/PDF) to learn — it may be mostly images or code. "
+                              f"({skipped} file(s) skipped.)"}
+        all_chunks = []
+        for source, text in docs:
+            all_chunks.extend(self._chunk(self._denoise(text)))
+        self.lib.add_many(all_chunks)                  # one add + one retrain (efficient)
+        self._retrain()
+        self.mem["last_learned"] = {"source": f"github:{owner}/{repo}",
+                                    "count": len(all_chunks)}
+        self._save()
+        return {"ok": True, "owner": owner, "repo": repo, "files": len(docs),
+                "passages": len(all_chunks), "skipped": skipped,
+                "answer": f"✓ Learned {len(all_chunks)} passages from {len(docs)} document(s) "
+                          f"in {owner}/{repo}. You can now ask me about it. "
+                          f"(Skipped {skipped} non-text file(s) like images/code.)"}
 
     def _plot(self, q):
         """ASCII plot of y = f(x) over x∈[-10,10]. Expression is safely parsed."""
@@ -743,6 +770,23 @@ class Mind:
         sk = self.skills.match(q)
         if sk:
             return {"answer": sk[1], "how": f"skill: {sk[0]}", "verified": True, "trace": []}
+
+        # learn from a GitHub repo: "gh repo clone owner/repo", "learn from github owner/repo",
+        # "learn https://github.com/owner/repo" — clones and learns its docs (never runs code).
+        gh = re.match(r"^\s*(?:gh|git)\s+(?:repo\s+)?clone\s+(.+)$", q, re.I) or \
+            re.match(r"^\s*(?:learn|read|study|ingest)\s+(?:from\s+)?(?:the\s+)?"
+                     r"(?:github|git|repo|repository)\s*[:\-]?\s*(.+)$", q, re.I) or \
+            re.match(r"^\s*(?:learn|read|study)\s+(?:from\s+)?"
+                     r"(https?://github\.com/\S+)\s*$", q, re.I)
+        if gh:
+            from gitlearn import parse_spec
+            if parse_spec(gh.group(1)):
+                try:
+                    r = self.learn_github(gh.group(1).strip())
+                    return {"answer": r["answer"], "how": "learned from GitHub",
+                            "verified": r.get("ok", False), "trace": []}
+                except (ValueError, RuntimeError) as e:
+                    return {"answer": str(e), "how": "github", "verified": False, "trace": []}
 
         # 0) "what have I taught you / what did you learn / what's in your library"
         #    (NOT "what do you know about X" — that is a topic query -> retrieval below)

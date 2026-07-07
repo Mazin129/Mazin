@@ -171,6 +171,13 @@ def route(text):
                  r"what('?s| is) in your (library|memory|head|brain)|"
                  r"summari[sz]e (your |the )?(library|knowledge|memory)", t):
         return text
+    # GitHub-learn commands -> pass through raw (normalize_math would mangle a repo
+    # name like "…-123" into arithmetic). The Mind's ask() handles the actual clone.
+    if re.match(r"\s*(?:gh|git)\s+(?:repo\s+)?clone\b", t) or \
+            re.match(r"\s*(?:learn|read|study|ingest)\s+(?:from\s+)?(?:the\s+)?"
+                     r"(?:github|git|repo|repository)\b", t) or \
+            re.match(r"\s*(?:learn|read|study)\s+(?:from\s+)?https?://github\.com/", t):
+        return text
     # coordinate geometry between points "(x,y) and (x,y)" -> pass through raw
     if re.search(r"\(\s*-?\d.*,.*-?\d\s*\).*\(\s*-?\d", text) and \
             re.search(r"distance|midpoint|slope|line", t):

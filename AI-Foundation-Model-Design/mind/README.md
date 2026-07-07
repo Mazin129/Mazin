@@ -105,6 +105,23 @@ In the browser, click the **📄** button next to Send and choose a **.txt / .md
 file (your notes, an article, a whole book). Vio reads it, splits it into passages, and you
 can then **ask questions about it** — answered only from what the document actually says.
 
+## Learn from a GitHub repo
+
+Just tell Vio in chat to learn a **public** repo — any of these work:
+
+```
+gh repo clone owner/repo
+learn from github owner/repo
+learn https://github.com/owner/repo
+```
+
+Vio shallow-clones the repo and learns its documentation (Markdown, text, reStructuredText,
+AsciiDoc, and PDFs), then you can ask about it. Requires `git` on your machine.
+
+**Safety:** Vio only **reads** the repo's text/doc files — it never runs any code, scripts,
+or build steps from the repo, and it skips images and binaries. Network access happens only
+when you ask it to learn a repo; the rest of Vio stays fully local.
+
 **For real PDFs (manuals, textbooks), install a proper reader:**
 
 ```bash
