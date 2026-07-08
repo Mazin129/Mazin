@@ -27,15 +27,18 @@ HERE = os.environ.get("VIO_DATA_DIR") or os.path.dirname(os.path.dirname(os.path
 GRAPH_FILE = os.path.join(HERE, "graph.json")
 MAX_EDGES = 100000
 
-# "<subject> <relation cue> <object>" — subjects/objects kept short (concept-like).
+# "<subject> <relation cue> <object>". The object ends at a CLAUSE boundary — not
+# only at end-of-sentence — so natural prose like "Congestion causes packet loss
+# because …" still yields the edge (congestion -causes-> packet loss).
+_BND = r"(?=\s+(?:because|which|that|when|while|and|for|so|using|based|by)\b|[.,;:!؟?]|$)"
 _PATTERNS = [
-    (re.compile(r"^(.{2,40}?)\s+(?:is|are)\s+(?:a|an)\s+(.{2,60}?)[.،؟?]?$", re.I), "is_a"),
-    (re.compile(r"^(.{2,40}?)\s+(?:is|are)\s+(?:the\s+)?(.{2,60}?)[.،؟?]?$", re.I), "is"),
-    (re.compile(r"(.{2,40}?)\s+(?:causes?|triggers?|leads?\s+to|results?\s+in|"
-                r"produces?)\s+(.{2,60}?)[.،؟?]?$", re.I), "causes"),
-    (re.compile(r"(.{2,40}?)\s+(?:uses?|use)\s+(?:a\s+|an\s+|the\s+)?(.{2,60}?)[.،؟?]?$", re.I), "uses"),
-    (re.compile(r"(.{2,40}?)\s+(?:has|have|contains?)\s+(?:a\s+|an\s+)?(.{2,60}?)[.،؟?]?$", re.I), "has"),
-    (re.compile(r"(.{2,40}?)\s+is\s+part\s+of\s+(?:a\s+|an\s+|the\s+)?(.{2,60}?)[.،؟?]?$", re.I), "part_of"),
+    (re.compile(r"^(.{2,40}?)\s+(?:is|are)\s+(?:a|an)\s+(.{2,55}?)" + _BND, re.I), "is_a"),
+    (re.compile(r"^(.{2,40}?)\s+(?:causes?|triggers?|leads?\s+to|results?\s+in|"
+                r"produces?)\s+(.{2,55}?)" + _BND, re.I), "causes"),
+    (re.compile(r"^(.{2,40}?)\s+(?:uses?|use)\s+(?:a\s+|an\s+|the\s+)?(.{2,55}?)" + _BND, re.I), "uses"),
+    (re.compile(r"^(.{2,40}?)\s+(?:has|have|contains?)\s+(?:a\s+|an\s+)?(.{2,55}?)" + _BND, re.I), "has"),
+    (re.compile(r"^(.{2,40}?)\s+is\s+part\s+of\s+(?:a\s+|an\s+|the\s+)?(.{2,55}?)" + _BND, re.I), "part_of"),
+    (re.compile(r"^(.{2,40}?)\s+(?:is|are)\s+(?:the\s+)?(.{2,55}?)" + _BND, re.I), "is"),
 ]
 _STOPHEAD = re.compile(r"^(the|a|an|this|that|these|those|it|there|here|they|we|you|i)\b", re.I)
 

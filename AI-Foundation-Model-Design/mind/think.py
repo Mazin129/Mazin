@@ -208,6 +208,16 @@ class Thinker:
         phrase_rx = None
         if subj and 1 <= len(subj.split()) <= 5:
             phrase_rx = re.compile(r"\b" + re.escape(subj) + r"\b(?![-\w])", re.I)
+        # definition matcher: for "what is X", the sentence "X is a …" should LEAD, not a
+        # "to configure X …" sentence that merely mentions X.
+        ql = question.strip().lower()
+        defn_rx = None
+        if subj and re.match(r"(what\s+(is|are)|who\s+(is|are)|define|explain)\b", ql):
+            # anchored at the sentence start: "A VLAN is a…" matches, "The native VLAN
+            # is…" does NOT (so the real definition leads, not a tangential mention).
+            defn_rx = re.compile(r"^\s*(?:a|an|the)?\s*" + re.escape(subj) +
+                                 r"\b\s*(?:\([^)]*\))?\s*"
+                                 r"(is|are|means?|refers?\s+to|stands?\s+for)\b", re.I)
 
         per = [_sentences(p) for p in passages]        # sentences per passage
         scored = []                                    # (score, passage_idx, sent_idx)
@@ -220,6 +230,8 @@ class Thinker:
                     continue
                 if phrase_rx and phrase_rx.search(s):  # exact command/subject present
                     ov += 3                            # strongly prefer the real entry
+                if defn_rx and defn_rx.search(s):      # "X is a …" — the actual definition
+                    ov += 4                            # leads over "to configure X …"
                 scored.append((ov, pi, si))
         rel_facts = [f for f in facts if kw & set(_keywords(f))]
         if not scored and not rel_facts:

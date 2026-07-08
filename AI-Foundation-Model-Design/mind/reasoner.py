@@ -628,7 +628,13 @@ class Mind:
             s = ln.strip()
             if s and self._NOISE_LINE.search(s):
                 continue
+            # drop a stray skill-definition that got pasted into content, and strip
+            # leaked command prefixes ("teach:", "remember:") so they never appear in answers
+            if re.match(r"^\s*skill\s*:\s*.+\|.*\breply\b", s, re.I):
+                continue
             if s:
+                s = re.sub(r"^\s*(?:teach|remember|note)\s*:\s*", "", s, flags=re.I)
+                s = re.sub(r"\s+(?:teach|remember)\s*:\s*", ". ", s, flags=re.I)  # mid-blob
                 s = re.sub(r"^\s*l\s+", "", s)             # leftover "l " bullet glyph
                 s = re.sub(r"(?<!\w)#(\w+)", r"\1", s)     # #hashtag -> hashtag (keep word)
             kept.append(s)                                 # keep blank lines as boundaries
@@ -682,6 +688,7 @@ class Mind:
         return chunks or [text.strip()]
 
     def teach(self, text):                 # add durable knowledge to the library
+        text = self._denoise(text)         # strip leaked command prefixes / skill blobs
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
         self.graph.learn_text(text)        # extract relational edges (cheap, teach-time)

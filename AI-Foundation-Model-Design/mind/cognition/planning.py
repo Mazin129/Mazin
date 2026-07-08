@@ -75,11 +75,15 @@ class Planner:
         for p in passages:
             for s in re.split(r"(?<=[.!?؟])\s+|\n+", p):
                 s = s.strip()
+                # "To configure a VLAN, first create the VLAN" -> drop the "To …," preamble
+                # so the actual first step ("first create the VLAN") is captured.
+                s = re.sub(r"^\s*to\s+\w[\w\s]{0,40}?,\s*(?=(first|then|next|create|set|"
+                           r"enable|configure|assign|add|connect|open|select)\b)", "", s, flags=re.I)
                 if len(s.split()) < 3:
                     continue
                 if action.match(s):
                     key = s.lower()[:50]
                     if key not in seen:
                         seen.add(key)
-                        steps.append(s if len(s) < 160 else s[:157] + "…")
+                        steps.append((s if len(s) < 160 else s[:157] + "…").rstrip("."))
         return steps
