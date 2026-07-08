@@ -708,10 +708,15 @@ Each phase ships something usable and testable; no big-bang.
   "re-fit against outcomes" Phase 2 promised) and `packs.py` (portable knowledge packs: export
   Vio's knowledge for a domain — or a full brain snapshot — to a shareable JSON file, import
   merges it de-duplicated; the local-first, no-cloud version of "sync a specialist"). Feedback
-  buttons, pack export/import, and a calibration report are wired into the UI + API. *Deferred by
-  choice:* a heavy transformer realizer (e.g. AirLLM) stays an optional future backend behind the
-  pluggable language layer — the small oscillatory/hybrid LM remains the default, keeping Vio fast
-  and local. **Speed contract met:** calibration/packs run on demand only; hot path unchanged.
+  buttons, pack export/import, and a calibration report are wired into the UI + API. Also shipped a
+  **live Cognitive Dashboard** (`dashboard_page.py`, served at `/dashboard`): the architecture map
+  with live module counts, the confidence-calibration plot (observed accuracy vs stated, against a
+  perfect-calibration diagonal), memory tiers, System-1/2 split, answer-quality breakdown, domain
+  usage, the confidence histogram, and the curiosity wishlist — all read from `/api/telemetry`, so
+  it grows as Vio is used. *Deferred by choice:* a heavy transformer realizer (e.g. AirLLM) stays
+  an optional future backend behind the pluggable language layer — the small oscillatory/hybrid LM
+  remains the default, keeping Vio fast and local. **Speed contract met:** calibration/packs/
+  dashboard run on demand only; hot path unchanged.
 
 Exit criteria per phase: measurable rise in first-try accuracy and System-1 hit-rate, and fall in
 energy-per-answer and calibration error, on a fixed personal benchmark that grows with use.

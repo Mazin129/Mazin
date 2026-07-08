@@ -915,12 +915,63 @@ class Mind:
         else:
             outcome, reward = "answered", 0.2
         try:
-            # confidence is logged with each episode so a later phase can re-fit the
-            # Confidence Engine's weights against real outcomes (§10 calibration).
+            # confidence/how/system/domain are logged with each episode so calibration
+            # (§10) and the dashboard can aggregate real telemetry over time.
             self.episodic.record(q, r.get("answer", ""), outcome, reward,
-                                 tags={"confidence": r.get("confidence")})
+                                 tags={"confidence": r.get("confidence"), "how": how,
+                                       "system": r.get("system"), "domain": r.get("domain")})
         except Exception:
             pass
+
+    def telemetry(self):
+        """Live snapshot of the cognitive system, for the dashboard."""
+        from collections import Counter
+        eps = self.episodic.episodes
+        st = self.thinker.stats()
+
+        # confidence histogram + system split + domain + answer-quality, from episodes
+        hist = Counter()
+        systems = Counter()
+        domains = Counter()
+        quality = Counter()
+        for e in eps:
+            t = e.get("tags") or {}
+            c = t.get("confidence")
+            if c is not None:
+                hist[min(9, int(float(c) * 10))] += 1
+            if t.get("system"):
+                systems[f"System {t['system']}"] += 1
+            if t.get("domain"):
+                domains[t["domain"]] += 1
+            quality[e.get("outcome", "?")] += 1
+
+        # calibration reliability bands (stated confidence -> observed accuracy)
+        graded = [( (e.get("tags") or {}).get("confidence"), e["outcome"])
+                  for e in eps if e.get("outcome") in ("correct", "wrong")]
+        graded = [(float(c), 1 if o == "correct" else 0) for c, o in graded if c is not None]
+        bands = {}
+        for c, k in graded:
+            b = round(c * 10) / 10
+            bands.setdefault(b, []).append(k)
+        reliability = [{"stated": b, "accuracy": sum(v) / len(v), "n": len(v)}
+                       for b, v in sorted(bands.items())]
+
+        return {
+            "name": self.name(),
+            "tiers": {"working": len(self.wm), "episodic": len(eps),
+                      "semantic": len(self.lib.docs), "procedural": len(self.skills.skills)
+                      + len(self.mem.get("solved", {}))},
+            "graph": self.graph.summary(),
+            "vocab": st["vocab"],
+            "gaps": len(self.curiosity.gaps),
+            "wishlist": self.curiosity.wishlist(6),
+            "calibration": {"scalar": self.calibration.scalar, "graded": len(graded),
+                            "reliability": reliability},
+            "confidence_hist": [{"band": i * 10, "n": hist.get(i, 0)} for i in range(10)],
+            "systems": dict(systems),
+            "domains": dict(domains.most_common(6)),
+            "quality": dict(quality),
+        }
 
     def _ask_core(self, q):
         q = q.strip()

@@ -26,6 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from reasoner import Mind, KB_FILE
 from talk import reply
 from agent import SolveAgent
+from dashboard_page import DASHBOARD
 
 PORT = int(os.environ.get("MIND_PORT", "8100"))
 MIND = Mind()
@@ -136,6 +137,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
   <button class="iconbtn" onclick="openSkills()">🧩 Skills</button>
   <button class="iconbtn" onclick="train(false)">🎓 Train</button>
   <button class="iconbtn" onclick="openMem()">📚 Memory</button>
+  <a class="iconbtn" href="/dashboard" title="Cognitive dashboard" style="text-decoration:none">📊 Brain</a>
 </header>
 <main>
   <div id="log"></div>
@@ -416,6 +418,10 @@ class H(BaseHTTPRequestHandler):
             self._s(200, PAGE, "text/html; charset=utf-8")
         elif path == "/api/status":
             self._s(200, json.dumps(_status(), ensure_ascii=False))
+        elif path == "/dashboard":
+            self._s(200, DASHBOARD, "text/html; charset=utf-8")
+        elif path == "/api/telemetry":
+            self._s(200, json.dumps(MIND.telemetry(), ensure_ascii=False))
         elif path == "/api/memory":
             lib = json.load(open(KB_FILE, encoding="utf-8")) if os.path.exists(KB_FILE) else []
             self._s(200, json.dumps({"name": MIND.name(), "facts": MIND.mem["facts"],
