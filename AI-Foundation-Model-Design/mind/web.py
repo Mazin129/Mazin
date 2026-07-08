@@ -470,6 +470,7 @@ class H(BaseHTTPRequestHandler):
                 os.remove(KB_FILE)
             MIND.lib.docs = []; MIND.lib.vec = None
             MIND.episodic.clear()                       # wipe the autobiographical log too
+            MIND.graph.clear()                          # and the knowledge graph
             MIND.procedural.solved = MIND.mem["solved"]  # re-point after mem reset
             MIND.wm.clear()
             MIND._retrain()

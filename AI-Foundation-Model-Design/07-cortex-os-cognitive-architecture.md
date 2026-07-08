@@ -667,9 +667,16 @@ Each phase ships something usable and testable; no big-bang.
   honest downgrade). Every answer now carries `confidence` + `system`, shown in the UI as
   "NN% sure". "I don't know rather than guess" is generalized from the retrieval gate to every
   deliberative path. *Biggest single quality jump.*
-- **Phase 3 — Reasoning modes & Planning.** Add the multi-mode reasoning dispatcher, the
-  Knowledge Graph + causal graph, and the recursive Planner. *Grounds on the existing sympy
-  engine as the math mode.*
+- **Phase 3 — Reasoning modes & Planning. [DONE]** Shipped `memory/graph.py` (an incremental
+  Knowledge Graph: is_a/causes/uses/has/part_of edges extracted at *teach time*, O(degree)
+  relational + one-hop queries), `cognition/reasoning.py` (the multi-mode dispatcher —
+  relational / causal / taxonomic / deductive rule-chaining — over the graph and user rules,
+  with the existing sympy engine as the mathematical mode), and `cognition/planning.py` (a
+  bounded planner that turns "how do I …" into grounded steps drawn only from learned material).
+  **Speed contract met and benchmarked:** each mode is a cheap regex trigger that returns
+  instantly for ordinary questions, so the hot path is unchanged (math 8.1 ms, retrieval 2.4 ms
+  — identical to pre-Phase-3). *Remaining for later phases:* full causal do-calculus,
+  counterfactual rollouts (need the World Model, Phase 4).
 - **Phase 4 — World Model & simulation.** Wire in the predictive-coding net
   (`predictive_coding_brain.py`) as the World Model; add internal rollouts + active inference for
   planning/abduction/counterfactuals.

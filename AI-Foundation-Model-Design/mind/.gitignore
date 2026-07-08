@@ -2,5 +2,6 @@ mind_memory.json
 knowledge.json
 skills.json
 episodic.json
+graph.json
 __pycache__/
 data/

@@ -33,8 +33,11 @@ from memory.episodic import EpisodicMemory
 from memory.working import WorkingMemory
 from memory.semantic import SemanticMemory
 from memory.procedural import ProceduralMemory
+from memory.graph import KnowledgeGraph
 from kernel.workspace import Workspace
 from kernel.executive import Executive
+from cognition.reasoning import Reasoning
+from cognition.planning import Planner, is_plan_request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -513,6 +516,12 @@ class Mind:
         # Confidence Engine and Self-Critic behind it.
         self.ws = Workspace()
         self.executive = Executive(self)
+        # CORTEX-OS Phase 3 — structured reasoning (§7), knowledge graph (§4), planning (§8).
+        # Graph edges are extracted at teach-time; the modes trigger only on their specific
+        # phrasing, so the fast path for ordinary questions is untouched.
+        self.graph = KnowledgeGraph()
+        self.reasoning = Reasoning(self.graph, self)
+        self.planner = Planner(self)
         self._retrain()
 
     def _retrain(self):
@@ -634,6 +643,7 @@ class Mind:
     def teach(self, text):                 # add durable knowledge to the library
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
+        self.graph.learn_text(text)        # extract relational edges (cheap, teach-time)
         self._retrain()                    # keep the thinker current with new knowledge
         return (f"Learned {len(chunks)} passages into the library." if len(chunks) > 1
                 else f"Learned: “{chunks[0]}”")
@@ -642,6 +652,7 @@ class Mind:
         text = self._denoise(text)                  # strip manual boilerplate first
         chunks = self._chunk(text)
         self.lib.add_many(chunks)
+        self.graph.learn_text(text)                 # relational edges (cheap, teach-time)
         self._retrain()
         if source:                                  # remember the most recent source
             self.mem["last_learned"] = {"source": source, "count": len(chunks)}
@@ -937,6 +948,18 @@ class Mind:
                 self.mem["solved"][q] = ans; self._save()      # continual: cache solutions
                 return {"answer": ans, "how": "symbolic reasoning (sympy)",
                         "verified": ok, "trace": trace}
+
+        # 1b) structured reasoning (§7) — relational / causal / taxonomic / deductive.
+        #     Cheap specific triggers; returns None instantly for ordinary questions.
+        rr = self.reasoning.answer(q)
+        if rr:
+            return rr
+
+        # 1c) planning (§8) — only fires on "how do I …" / "steps to …" phrasings.
+        if is_plan_request(q):
+            pr = self.planner.plan(q)
+            if pr:
+                return pr
 
         # 2) retrieval from the growing library + personal memory
         STOP = {"the", "a", "an", "is", "are", "was", "of", "to", "in", "on", "for",
