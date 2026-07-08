@@ -1113,6 +1113,19 @@ class Mind:
             if da:
                 return {"answer": da, "how": f"data analysis ({tbl.name})",
                         "verified": True, "trace": [f"computed over {len(tbl.rows)} rows"]}
+        # If a table is loaded and this is clearly a data/analytical question that no
+        # table could answer, say so honestly — do NOT fall through to text retrieval
+        # (that is what returned networking facts for an airline question).
+        if self.tables and re.search(
+                r"\b(total|sum|average|mean|count|how many|top|best|worst|highest|lowest|"
+                r"most|least|maximum|minimum|per|by |rank|revenue|sales|performance|trend)\b", low):
+            t = self.tables[-1]
+            return {"answer": f"I can't compute that from the loaded data “{t.name}”. "
+                    f"Its columns are: {', '.join(t.headers)}. Ask about those "
+                    f"(e.g. total {t.numeric[0] if t.numeric else 'a column'}, "
+                    f"or top 5 by a column), or upload a dataset that has what you need.",
+                    "how": "data analysis (no matching column)", "verified": False,
+                    "confidence": 0.2, "trace": []}
 
         # 1a2) world model (§9) — "what happens if X" / "what if X didn't…". Simulates
         #      forward over learned causal edges; returns None instantly otherwise.

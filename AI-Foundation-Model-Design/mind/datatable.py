@@ -128,6 +128,37 @@ class DataTable:
                      r"row count|count.*(rows|records)", ql) and not self._find_col(ql, exclude=()):
             return f"{len(self.rows):,} rows."
 
+        # "best-selling / top-selling / most popular <thing>" -> rank that column by units
+        # sold (Quantity) if present, else by revenue, else by row count.
+        if re.search(r"\bbest[- ]?selling|top[- ]?selling|most (?:popular|sold|purchased|"
+                     r"bought)|highest[- ]?selling|\bselling\b|\bsold\b", ql):
+            # the grouping noun named in the question (product/category/city…), else Product
+            noun = re.sub(r"\b(best|top|selling|sold|most|popular|highest|purchased|bought|"
+                          r"\d+|by|the|what|which|is|are)\b", " ", ql)
+            group = self._find_col(noun) or self._find_col("product") \
+                or next((h for h in self.headers if h not in self.numeric), None)
+            if group:
+                qty = next((h for h in self.numeric if re.search(r"quantity|qty|units|sold|count", h.lower())), None)
+                if qty:
+                    buckets = {}
+                    for r in self.rows:
+                        buckets[r[group] or "(blank)"] = buckets.get(r[group] or "(blank)", 0) + (_num(r[qty]) or 0)
+                    measure = f"units ({qty})"
+                else:
+                    rev = self._revenue()
+                    buckets = {}
+                    for i, r in enumerate(self.rows):
+                        key = r[group] or "(blank)"
+                        buckets[key] = buckets.get(key, 0) + (rev[0][i] if rev else 1)
+                    measure = "revenue" if rev else "orders"
+                rank = re.search(r"top\s+(\d+)", ql)
+                n = int(rank.group(1)) if rank else 1
+                top = sorted(buckets.items(), key=lambda kv: -kv[1])[:n]
+                if n == 1:
+                    k, v = top[0]
+                    return f"Best-selling {group}: {k} — {_fmt(v)} {measure}."
+                return f"Top {n} {group} by {measure}:\n" + "\n".join(f"  • {k}: {_fmt(v)}" for k, v in top)
+
         wants_revenue = bool(re.search(r"\b(revenue|sales|income|earnings|turnover|total sales)\b", ql))
 
         # aggregation intent
@@ -141,15 +172,20 @@ class DataTable:
 
         group = self._group_col(ql)
 
+        # when ranking groups ("top 5 X by Y"), sum the measure per group unless the
+        # user explicitly asked for an average — "top/best/highest" are RANKING words,
+        # not an instruction to take the max of each group.
+        group_agg = "avg" if agg == "avg" else "sum"
+
         # top-N ranking:  "top 5 products by revenue", "which city has most orders"
         m = re.search(r"top\s+(\d+)", ql)
         topn = int(m.group(1)) if m else (5 if re.search(r"\btop\b|\bbest\b|\branking\b|\brank\b", ql) else None)
         if group and (topn or re.search(r"\b(which|what)\b.*\b(most|highest|top|best|largest)\b", ql)):
-            return self._grouped(group, ql, wants_revenue, agg or "sum", rank=topn or 1)
+            return self._grouped(group, ql, wants_revenue, group_agg, rank=topn or 1)
 
         # grouped aggregate:  "sales by category", "average price per city"
         if group:
-            return self._grouped(group, ql, wants_revenue, agg or "sum", rank=None)
+            return self._grouped(group, ql, wants_revenue, group_agg, rank=None)
 
         # single-column / whole-table aggregate
         if wants_revenue:
