@@ -21,6 +21,7 @@ mind_memory.json / knowledge.json / skills.json next to this file.
 
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from reasoner import Mind, KB_FILE
 from talk import reply
@@ -28,6 +29,7 @@ from agent import SolveAgent
 
 PORT = int(os.environ.get("MIND_PORT", "8100"))
 MIND = Mind()
+_last_activity = time.time()          # for idle-time consolidation (§14 "sleep")
 AGENT = SolveAgent(MIND)
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -334,7 +336,25 @@ def _status():
     st = MIND.thinker.stats()
     return {"name": MIND.name(), "vocab": st["vocab"], "library": len(MIND.lib.docs),
             "contexts": st["contexts"], "skills": len(MIND.skills.skills),
-            "memories": len(MIND.episodic.episodes)}
+            "memories": len(MIND.episodic.episodes), "gaps": len(MIND.curiosity.gaps)}
+
+
+def _idle_consolidator():
+    """Background 'sleep' (§14): when Vio has been idle a while, quietly consolidate
+    memory. Idle-gated so it never competes with an active request, wrapped so a
+    failure can never take the server down. Disable with VIO_NO_SLEEP=1."""
+    if os.environ.get("VIO_NO_SLEEP"):
+        return
+    last_run = 0.0
+    while True:
+        time.sleep(60)
+        idle = time.time() - _last_activity
+        if idle > 180 and (time.time() - last_run) > 600:
+            try:
+                MIND.consolidate()
+            except Exception:
+                pass
+            last_run = time.time()
 
 
 class H(BaseHTTPRequestHandler):
@@ -359,6 +379,8 @@ class H(BaseHTTPRequestHandler):
             return {}
 
     def do_GET(self):
+        global _last_activity
+        _last_activity = time.time()
         if not self._host_ok():
             self._s(403, "{}"); return
         from urllib.parse import urlparse, parse_qs
@@ -421,6 +443,8 @@ class H(BaseHTTPRequestHandler):
             self._s(404, "{}")
 
     def do_POST(self):
+        global _last_activity
+        _last_activity = time.time()
         if not self._host_ok():
             self._s(403, "{}"); return
         body = self._body()
@@ -471,6 +495,7 @@ class H(BaseHTTPRequestHandler):
             MIND.lib.docs = []; MIND.lib.vec = None
             MIND.episodic.clear()                       # wipe the autobiographical log too
             MIND.graph.clear()                          # and the knowledge graph
+            MIND.curiosity.clear()                      # and the learning wishlist
             MIND.procedural.solved = MIND.mem["solved"]  # re-point after mem reset
             MIND.wm.clear()
             MIND._retrain()
@@ -490,6 +515,7 @@ if __name__ == "__main__":
     print("   Local reasoning + memory + your own trained model. No external model.")
     print("   Keep this window open while you chat; close it to stop Vio.")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
     try:
         ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
     except KeyboardInterrupt:

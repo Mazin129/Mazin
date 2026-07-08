@@ -39,6 +39,10 @@ from kernel.executive import Executive
 from cognition.reasoning import Reasoning
 from cognition.planning import Planner, is_plan_request
 from cognition.world_model import WorldModel
+from cognition.consolidation import Consolidator
+from cognition.learning import LearningEngine
+from cognition.curiosity import Curiosity
+from specialists import Cortex
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -526,7 +530,20 @@ class Mind:
         # CORTEX-OS Phase 4 — the World Model: forward simulation + counterfactuals
         # over the learned causal graph (§9). Only runs on prediction phrasings.
         self.world = WorldModel(self.graph)
+        # CORTEX-OS Phase 5 — self-improvement (§12–§14): learn from experience,
+        # consolidate memory at idle, notice knowledge gaps, and organize by domain.
+        self.learning = LearningEngine(self)
+        self.consolidator = Consolidator(self)
+        self.curiosity = Curiosity()
+        self.cortex = Cortex()
         self._retrain()
+
+    def consolidate(self):
+        """Run one idle 'sleep' pass: reorganize memory + promote repeated wins into
+        instant reflexes. Safe to call anytime; a no-op when there's nothing to do."""
+        report = self.consolidator.consolidate()
+        report["promoted"] = self.learning.promote_repeats()
+        return report
 
     def _retrain(self):
         """(Re)train the open-ended thinker on everything Vio has learned."""
@@ -798,7 +815,38 @@ class Mind:
             if r:
                 r.setdefault("confidence", 0.85)
                 return r                                # recall itself is not recorded
+
+        # Phase-5 commands: idle consolidation, and Vio's own learning wishlist
+        if re.search(r"\b(consolidate|organi[sz]e your (memory|knowledge)|"
+                     r"go to sleep|sleep now|clean up your memory)\b", low):
+            rep = self.consolidate()
+            return {"answer": (f"Done. Merged {rep['merged']} duplicate passage(s), mined "
+                    f"{rep['edges']} new relation(s), promoted {rep['promoted']} repeated "
+                    f"answer(s) to instant reflexes, pruned {rep['pruned']} stale memories. "
+                    f"Library: {rep['library']} passages."), "how": "consolidation",
+                    "verified": True, "confidence": 0.9, "trace": [f"{rep['ms']} ms"]}
+        if re.search(r"what do you want to learn|what are you curious|"
+                     r"what.*gaps?\b|what have you gotten good at|what are you learning", low):
+            wl = self.curiosity.wishlist()
+            lines = [self.learning.lessons()]
+            if wl:
+                lines.append("Most of all I'd like to learn: "
+                             + ", ".join(f"{w['topic']} (asked {w['count']}×)" for w in wl))
+            return {"answer": "\n".join(lines), "how": "self-reflection",
+                    "verified": True, "confidence": 0.85, "trace": []}
+
         r = self.executive.process(q)                   # two-clock: confidence + critic
+
+        # Curiosity (§12): a miss becomes a tracked knowledge gap + a teachable follow-up;
+        # a confident answer closes any gap on that topic.
+        if r.get("how", "").startswith("no-source"):
+            follow = self.curiosity.note_gap(q)
+            if follow:
+                r = dict(r, answer=r["answer"] + "\n\n" + follow)
+        elif r.get("confidence", 0) >= 0.6:
+            self.curiosity.resolved(q)
+
+        r["domain"] = self.cortex.classify(q)[0]        # tag the specialist domain
         self._remember_episode(q, r)
         return r
 

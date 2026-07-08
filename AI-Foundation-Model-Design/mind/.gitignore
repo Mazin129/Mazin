@@ -3,5 +3,6 @@ knowledge.json
 skills.json
 episodic.json
 graph.json
+gaps.json
 __pycache__/
 data/

@@ -689,10 +689,18 @@ Each phase ships something usable and testable; no big-bang.
   predictive-coding net (`prototype/predictive_coding_brain.py`) remains the substrate for
   *perceptual* prediction in a later phase; the runtime World Model reasons over explicit causal
   structure, which is what the assistant needs and can do reliably now.
-- **Phase 5 — Learning, Consolidation, Curiosity, specialists.** Turn on the Learning Engine
-  (experience→skill), the idle Consolidation "sleep", the Curiosity drive, and the specialist
-  cortex (starting with Math + Networking, which already have knowledge). *This is where lifelong
-  self-improvement begins.*
+- **Phase 5 — Learning, Consolidation, Curiosity, specialists. [DONE]** Lifelong self-improvement
+  is now switched on. Shipped: `cognition/learning.py` (extracts lessons from episodic experience
+  and promotes repeated, stable, verified answers into instant reflexes), `cognition/consolidation.py`
+  (the idle "sleep" cycle — merge duplicate passages, mine new graph relations, prune stale
+  zero-reward memories — run by a background idle daemon in `web.py` and by a "consolidate" /
+  "go to sleep" command), `cognition/curiosity.py` (a miss becomes a tracked knowledge gap with a
+  teachable follow-up; `what do you want to learn?` returns the ranked wishlist), and
+  `specialists/` (a cortex of domain experts — math/networking/security/programming/general — that
+  cheaply tag each turn's domain). **Speed contract met:** consolidation runs only at idle (gated,
+  interruptible, disable with `VIO_NO_SLEEP=1`) and the per-turn additions are a few O(1) checks;
+  hot path benchmarked unchanged. Vio now measurably reorganizes and grows what it knows the more
+  it is used.
 - **Phase 6 — Long-horizon.** Multi-device personal sync, community-shareable specialists,
   richer neural realizer (oscillatory/hybrid LM), continuous calibration dashboards.
 
