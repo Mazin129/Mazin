@@ -47,3 +47,9 @@ A byte is a unit of digital information made of eight bits.
 A bit is the smallest unit of data and holds a single 0 or 1.
 Overheating causes a computer to slow down because the CPU reduces its speed to protect itself.
 Running out of RAM causes a computer to slow down because it must swap data to the slower disk.
+Shutting down a computer closes all running programs and powers off the hardware.
+Powering off a computer erases everything in RAM because RAM is volatile.
+Data saved to a disk survives a shutdown, but unsaved work held in RAM is lost.
+Rebooting a computer restarts the operating system without fully cutting the power.
+Losing power suddenly can corrupt files because the computer had no time to finish writing them.
+Disconnecting a computer from the network stops it from reaching the internet and other devices.

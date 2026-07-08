@@ -26,7 +26,10 @@ def main():
     before_docs = len(m.lib.docs)
     before_edges = m.graph.summary()["edges"]
 
-    files = sorted(glob.glob(os.path.join(DATASETS, "*.md")))
+    # only real knowledge files — NOT the README / docs (their example questions and
+    # style-guide lines would otherwise be learned as "facts" and pollute answers).
+    files = [f for f in sorted(glob.glob(os.path.join(DATASETS, "*.md")))
+             if os.path.basename(f).lower() != "readme.md"]
     if not files:
         print("No datasets found in", DATASETS)
         return
