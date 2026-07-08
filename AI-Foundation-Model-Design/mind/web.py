@@ -517,6 +517,12 @@ class H(BaseHTTPRequestHandler):
         elif self.path == "/api/learn":
             name = body.get("name") or "a file"
             text = body.get("text") or ""
+            # a CSV is DATA, not prose — load it as an analyzable table, not memorized text
+            if name.lower().endswith((".csv", ".tsv")) and text:
+                summary = MIND.load_csv(text, name)
+                self._s(200, json.dumps({"answer": summary or
+                        f"I couldn't read {name} as a table."}, ensure_ascii=False))
+                return
             if body.get("pdf_b64"):
                 import base64
                 from pdftext import extract_text, looks_readable

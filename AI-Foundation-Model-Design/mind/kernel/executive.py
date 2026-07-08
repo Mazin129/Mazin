@@ -50,7 +50,8 @@ class Executive:
                        or how.startswith("generation")
                        or how.startswith("reasoning (")    # structured graph/rule inference
                        or how.startswith("planning (")
-                       or how.startswith("world model (")) else 2
+                       or how.startswith("world model (")
+                       or how.startswith("data analysis (")) else 2
 
         if system == 2:
             result, conf = critic_review(q, result, conf, self.mind)

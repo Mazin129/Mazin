@@ -52,6 +52,8 @@ def score(result, evidence=None):
 
     if how.startswith("skill:"):
         return 0.90                                     # user-defined reflex, exact match
+    if how.startswith("data analysis ("):
+        return 0.96                                     # exact computation over the table
     if how.startswith("reasoning ("):
         return 0.82                                     # structured inference over the graph/rules
     if how.startswith("planning ("):

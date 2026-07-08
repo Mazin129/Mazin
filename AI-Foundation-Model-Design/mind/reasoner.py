@@ -536,6 +536,7 @@ class Mind:
         # CORTEX-OS Phase 4 — the World Model: forward simulation + counterfactuals
         # over the learned causal graph (§9). Only runs on prediction phrasings.
         self.world = WorldModel(self.graph)
+        self.tables = []                    # uploaded CSV/data tables (computed answers)
         # CORTEX-OS Phase 5 — self-improvement (§12–§14): learn from experience,
         # consolidate memory at idle, notice knowledge gaps, and organize by domain.
         self.learning = LearningEngine(self)
@@ -695,6 +696,17 @@ class Mind:
         self._retrain()                    # keep the thinker current with new knowledge
         return (f"Learned {len(chunks)} passages into the library." if len(chunks) > 1
                 else f"Learned: “{chunks[0]}”")
+
+    def load_csv(self, text, name="table"):
+        """Load a CSV as an analyzable data table (not memorized text). Returns a
+        human summary, or None if it isn't a usable table."""
+        from datatable import DataTable
+        t = DataTable.from_csv(text, re.sub(r"\.csv$", "", name, flags=re.I))
+        if not t:
+            return None
+        self.tables.append(t)
+        self.tables = self.tables[-5:]              # keep the last few tables
+        return t.describe()
 
     def learn_text(self, text, source=""):
         text = self._denoise(text)                  # strip manual boilerplate first
@@ -1093,6 +1105,14 @@ class Mind:
                 self.mem["solved"][q] = ans; self._save()      # continual: cache solutions
                 return {"answer": ans, "how": "symbolic reasoning (sympy)",
                         "verified": ok, "trace": trace}
+
+        # 1a1) data-table analysis — COMPUTED answers over an uploaded CSV (counts, totals,
+        #      averages, group-by, top-N). The analyzer returns None for non-data questions.
+        for tbl in reversed(self.tables):
+            da = tbl.answer(q)
+            if da:
+                return {"answer": da, "how": f"data analysis ({tbl.name})",
+                        "verified": True, "trace": [f"computed over {len(tbl.rows)} rows"]}
 
         # 1a2) world model (§9) — "what happens if X" / "what if X didn't…". Simulates
         #      forward over learned causal edges; returns None instantly otherwise.
