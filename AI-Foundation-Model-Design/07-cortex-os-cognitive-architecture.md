@@ -658,9 +658,15 @@ Each phase ships something usable and testable; no big-bang.
   interaction is now recorded as an episode, and Vio recalls past chats ("what did we talk
   about?", "did we discuss X?"). *Remaining:* migrate modules onto the Workspace bus; add
   embeddings alongside TF-IDF. *Grounds on `bl_advanced.py` episodic memory.*
-- **Phase 2 — Executive, Confidence, Self-Critic.** Add the difficulty-priced Executive
-  (two-clock), the calibrated Confidence Engine, and the Self-Critic loop. Generalize "I don't
-  know" to every path. *Biggest single quality jump.*
+- **Phase 2 — Executive, Confidence, Self-Critic. [DONE]** Shipped the two-clock Executive
+  (`kernel/executive.py`: System-1 fast path for machine-verified/deterministic/skill/generation
+  answers; System-2 deliberation for knowledge answers), the Confidence Engine
+  (`cognition/confidence.py`: a calibrated 0..1 fused from knowledge quality + evidence breadth +
+  reasoning quality, logged per episode for later re-fitting), and the Self-Critic
+  (`cognition/critic.py`: conflict check incl. numeric contradictions → keyword re-search →
+  honest downgrade). Every answer now carries `confidence` + `system`, shown in the UI as
+  "NN% sure". "I don't know rather than guess" is generalized from the retrieval gate to every
+  deliberative path. *Biggest single quality jump.*
 - **Phase 3 — Reasoning modes & Planning.** Add the multi-mode reasoning dispatcher, the
   Knowledge Graph + causal graph, and the recursive Planner. *Grounds on the existing sympy
   engine as the math mode.*

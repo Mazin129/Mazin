@@ -133,5 +133,7 @@ class SolveAgent:
         return {"answer": "\n\n".join(lines),
                 "how": f"self-directed reasoning ({len(results)} parts)",
                 "verified": all_verified,
+                # a chain is only as sure as its weakest link
+                "confidence": round(min(rr.get("confidence", 0.5) for _, rr in results), 2),
                 "trace": [f"decomposed into {len(results)} parts and solved each"],
                 "steps": steps}

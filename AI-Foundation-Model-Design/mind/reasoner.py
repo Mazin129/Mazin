@@ -33,6 +33,8 @@ from memory.episodic import EpisodicMemory
 from memory.working import WorkingMemory
 from memory.semantic import SemanticMemory
 from memory.procedural import ProceduralMemory
+from kernel.workspace import Workspace
+from kernel.executive import Executive
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -506,6 +508,11 @@ class Mind:
         self.episodic = EpisodicMemory()
         self.semantic = SemanticMemory(self.lib)
         self.procedural = ProceduralMemory(self.skills, self.mem["solved"])
+        # CORTEX-OS Phase 2 — the deliberation kernel (§2, §5.1, §10, §11):
+        # a Cognitive Workspace trace + the two-clock Executive with the
+        # Confidence Engine and Self-Critic behind it.
+        self.ws = Workspace()
+        self.executive = Executive(self)
         self._retrain()
 
     def _retrain(self):
@@ -774,8 +781,9 @@ class Mind:
                      r"remember when|last time we|our (past |previous )?(chat|conversation)", low):
             r = self._episodic_recall(q)
             if r:
+                r.setdefault("confidence", 0.85)
                 return r                                # recall itself is not recorded
-        r = self._ask_core(q)
+        r = self.executive.process(q)                   # two-clock: confidence + critic
         self._remember_episode(q, r)
         return r
 
@@ -814,13 +822,17 @@ class Mind:
         else:
             outcome, reward = "answered", 0.2
         try:
-            self.episodic.record(q, r.get("answer", ""), outcome, reward)
+            # confidence is logged with each episode so a later phase can re-fit the
+            # Confidence Engine's weights against real outcomes (§10 calibration).
+            self.episodic.record(q, r.get("answer", ""), outcome, reward,
+                                 tags={"confidence": r.get("confidence")})
         except Exception:
             pass
 
     def _ask_core(self, q):
         q = q.strip()
         low = q.lower()
+        self._last_evidence = {}          # retrieval metadata for the Confidence Engine
         # commands
         if low.startswith("teach:"):
             return {"answer": self.teach(q[6:].strip()), "how": "library-write", "verified": True, "trace": []}
@@ -947,6 +959,8 @@ class Mind:
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
         else:
             facts = [f for f in self.mem["facts"] if self._match_fact(f, words)]
+        self._last_evidence = {"top": (hits[0][1] if hits else 0.0),
+                               "hits": len(hits), "facts": len(facts)}
         if hits or facts:
             # open-ended THINKING: synthesise the exact sentences that answer the
             # question, drawn from several passages at once (grounded, no guessing).

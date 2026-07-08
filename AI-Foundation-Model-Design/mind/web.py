@@ -206,7 +206,8 @@ function bubble(who){
  log.scrollTop=log.scrollHeight;return {row,b};
 }
 function addUser(t){const {b}=bubble('me');b.classList.toggle('rtl',isAr(t));b.textContent=t;}
-function badge(j){return (j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'');}
+function badge(j){const c=(j.confidence!=null)?' · '+Math.round(j.confidence*100)+'% sure':'';
+ return (j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c;}
 function finalize(b,j){
  b.classList.toggle('rtl',isAr(j.answer));
  b.innerHTML=fmt(j.answer);
@@ -428,6 +429,8 @@ class H(BaseHTTPRequestHandler):
 
         if self.path == "/api/ask":
             r = reply(MIND, (body.get("message") or "").strip())
+            # talk.py's own fast paths (greeting/identity/time/skills) are deterministic
+            r.setdefault("confidence", 0.9 if r.get("verified") else 0.4)
             self._s(200, json.dumps(r, ensure_ascii=False))
 
         elif self.path == "/api/learn":
