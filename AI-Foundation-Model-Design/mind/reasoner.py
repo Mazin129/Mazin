@@ -38,6 +38,7 @@ from kernel.workspace import Workspace
 from kernel.executive import Executive
 from cognition.reasoning import Reasoning
 from cognition.planning import Planner, is_plan_request
+from cognition.world_model import WorldModel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEM_FILE = os.path.join(HERE, "mind_memory.json")
@@ -522,6 +523,9 @@ class Mind:
         self.graph = KnowledgeGraph()
         self.reasoning = Reasoning(self.graph, self)
         self.planner = Planner(self)
+        # CORTEX-OS Phase 4 — the World Model: forward simulation + counterfactuals
+        # over the learned causal graph (§9). Only runs on prediction phrasings.
+        self.world = WorldModel(self.graph)
         self._retrain()
 
     def _retrain(self):
@@ -948,6 +952,12 @@ class Mind:
                 self.mem["solved"][q] = ans; self._save()      # continual: cache solutions
                 return {"answer": ans, "how": "symbolic reasoning (sympy)",
                         "verified": ok, "trace": trace}
+
+        # 1a2) world model (§9) — "what happens if X" / "what if X didn't…". Simulates
+        #      forward over learned causal edges; returns None instantly otherwise.
+        wm = self.world.answer(q)
+        if wm:
+            return wm
 
         # 1b) structured reasoning (§7) — relational / causal / taxonomic / deductive.
         #     Cheap specific triggers; returns None instantly for ordinary questions.

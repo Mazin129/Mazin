@@ -49,7 +49,8 @@ class Executive:
         system = 1 if (how in _SYSTEM1 or how.startswith("skill:")
                        or how.startswith("generation")
                        or how.startswith("reasoning (")    # structured graph/rule inference
-                       or how.startswith("planning (")) else 2
+                       or how.startswith("planning (")
+                       or how.startswith("world model (")) else 2
 
         if system == 2:
             result, conf = critic_review(q, result, conf, self.mind)

@@ -31,7 +31,8 @@ MAX_EDGES = 100000
 _PATTERNS = [
     (re.compile(r"^(.{2,40}?)\s+(?:is|are)\s+(?:a|an)\s+(.{2,60}?)[.،؟?]?$", re.I), "is_a"),
     (re.compile(r"^(.{2,40}?)\s+(?:is|are)\s+(?:the\s+)?(.{2,60}?)[.،؟?]?$", re.I), "is"),
-    (re.compile(r"(.{2,40}?)\s+causes?\s+(.{2,60}?)[.،؟?]?$", re.I), "causes"),
+    (re.compile(r"(.{2,40}?)\s+(?:causes?|triggers?|leads?\s+to|results?\s+in|"
+                r"produces?)\s+(.{2,60}?)[.،؟?]?$", re.I), "causes"),
     (re.compile(r"(.{2,40}?)\s+(?:uses?|use)\s+(?:a\s+|an\s+|the\s+)?(.{2,60}?)[.،؟?]?$", re.I), "uses"),
     (re.compile(r"(.{2,40}?)\s+(?:has|have|contains?)\s+(?:a\s+|an\s+)?(.{2,60}?)[.،؟?]?$", re.I), "has"),
     (re.compile(r"(.{2,40}?)\s+is\s+part\s+of\s+(?:a\s+|an\s+|the\s+)?(.{2,60}?)[.،؟?]?$", re.I), "part_of"),

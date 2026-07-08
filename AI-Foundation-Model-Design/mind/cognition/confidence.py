@@ -56,6 +56,8 @@ def score(result, evidence=None):
         return 0.82                                     # structured inference over the graph/rules
     if how.startswith("planning ("):
         return 0.72 if verified else 0.20               # grounded plan vs "no knowledge"
+    if how.startswith("world model ("):
+        return float(result.get("confidence", 0.72))    # depth-based, set by the simulator
     if how in VERIFIED_EXACT:
         return 0.95 if verified else 0.50               # machine-checked (or check failed)
     if how in DETERMINISTIC:

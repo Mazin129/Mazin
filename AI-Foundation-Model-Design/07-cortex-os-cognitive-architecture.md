@@ -677,9 +677,18 @@ Each phase ships something usable and testable; no big-bang.
   instantly for ordinary questions, so the hot path is unchanged (math 8.1 ms, retrieval 2.4 ms
   — identical to pre-Phase-3). *Remaining for later phases:* full causal do-calculus,
   counterfactual rollouts (need the World Model, Phase 4).
-- **Phase 4 — World Model & simulation.** Wire in the predictive-coding net
-  (`predictive_coding_brain.py`) as the World Model; add internal rollouts + active inference for
-  planning/abduction/counterfactuals.
+- **Phase 4 — World Model & simulation. [DONE]** Shipped `cognition/world_model.py`: an internal
+  simulator that rolls an event FORWARD over the learned causal graph to predict downstream
+  effects ("what happens if congestion occurs?" → *congestion → packet loss → retransmission →
+  higher latency*) and reasons COUNTERFACTUALLY ("what if X didn't happen?" → the effects that no
+  longer follow). Bounded depth/breadth walk, event→concept resolution, and a `agreement()`
+  simulation-agreement signal available to the Confidence Engine/Critic. It never invents
+  causality — with no learned cause it defers to retrieval. Causal-edge extraction now covers
+  causes/triggers/leads-to/results-in/produces. **Speed contract met:** only the "what happens
+  if / what if" trigger enters simulation; hot path unchanged (benchmarked). *Note:* the
+  predictive-coding net (`prototype/predictive_coding_brain.py`) remains the substrate for
+  *perceptual* prediction in a later phase; the runtime World Model reasons over explicit causal
+  structure, which is what the assistant needs and can do reliably now.
 - **Phase 5 — Learning, Consolidation, Curiosity, specialists.** Turn on the Learning Engine
   (experience→skill), the idle Consolidation "sleep", the Curiosity drive, and the specialist
   cortex (starting with Math + Networking, which already have knowledge). *This is where lifelong
