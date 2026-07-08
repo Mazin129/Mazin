@@ -42,6 +42,7 @@ from cognition.world_model import WorldModel
 from cognition.consolidation import Consolidator
 from cognition.learning import LearningEngine
 from cognition.curiosity import Curiosity
+from cognition.calibration import Calibration
 from specialists import Cortex
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -536,14 +537,28 @@ class Mind:
         self.consolidator = Consolidator(self)
         self.curiosity = Curiosity()
         self.cortex = Cortex()
+        # CORTEX-OS Phase 6 — close the confidence loop: calibrate against feedback.
+        self.calibration = Calibration(self)
         self._retrain()
 
     def consolidate(self):
         """Run one idle 'sleep' pass: reorganize memory + promote repeated wins into
-        instant reflexes. Safe to call anytime; a no-op when there's nothing to do."""
+        instant reflexes + recalibrate confidence against feedback. Safe anytime."""
         report = self.consolidator.consolidate()
         report["promoted"] = self.learning.promote_repeats()
+        report["calibration"] = self.calibration.refresh()
         return report
+
+    def feedback(self, correct):
+        """Grade the last answer (👍/👎) so calibration can learn how much to trust
+        Vio's confidence (§10)."""
+        ep = self.episodic.grade_last(correct)
+        self.calibration.refresh()
+        if ep is None:
+            return "Nothing to grade yet — ask me something first."
+        return ("Thanks — glad that helped. I'll trust that kind of answer a bit more."
+                if correct else
+                "Got it — I'll be more careful with that kind of answer.")
 
     def _retrain(self):
         """(Re)train the open-ended thinker on everything Vio has learned."""
@@ -825,6 +840,21 @@ class Mind:
                     f"answer(s) to instant reflexes, pruned {rep['pruned']} stale memories. "
                     f"Library: {rep['library']} passages."), "how": "consolidation",
                     "verified": True, "confidence": 0.9, "trace": [f"{rep['ms']} ms"]}
+        # Phase-6 feedback (👍/👎) — grades the previous answer for calibration
+        if re.fullmatch(r"(that('?s| is)\s+)?(correct|right|good( answer)?|yes|👍|"
+                        r"perfect|exactly|helpful)\s*[.!]*", low):
+            return {"answer": self.feedback(True), "how": "feedback",
+                    "verified": True, "confidence": 0.9, "trace": []}
+        if re.fullmatch(r"(that('?s| is)\s+)?(wrong|incorrect|not right|no|👎|"
+                        r"bad( answer)?|nope|false)\s*[.!]*", low):
+            return {"answer": self.feedback(False), "how": "feedback",
+                    "verified": True, "confidence": 0.9, "trace": []}
+        # Phase-6 calibration report — "how accurate is your confidence"
+        if re.search(r"how (calibrated|accurate|reliable) (are|is) (you|your confidence)|"
+                     r"calibration report|how much should i trust you", low):
+            return {"answer": self.calibration.report(), "how": "calibration",
+                    "verified": True, "confidence": 0.85, "trace": []}
+
         if re.search(r"what do you want to learn|what are you curious|"
                      r"what.*gaps?\b|what have you gotten good at|what are you learning", low):
             wl = self.curiosity.wishlist()

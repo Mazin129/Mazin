@@ -701,8 +701,17 @@ Each phase ships something usable and testable; no big-bang.
   interruptible, disable with `VIO_NO_SLEEP=1`) and the per-turn additions are a few O(1) checks;
   hot path benchmarked unchanged. Vio now measurably reorganizes and grows what it knows the more
   it is used.
-- **Phase 6 — Long-horizon.** Multi-device personal sync, community-shareable specialists,
-  richer neural realizer (oscillatory/hybrid LM), continuous calibration dashboards.
+- **Phase 6 — Long-horizon. [DONE]** Closed the confidence loop and made knowledge portable.
+  Shipped: `cognition/calibration.py` (👍/👎 feedback grades answers; Vio measures stated
+  confidence vs how often it was actually right, reports its reliability, and derives a
+  correction scalar the Executive applies so confidence self-tunes toward the truth — the
+  "re-fit against outcomes" Phase 2 promised) and `packs.py` (portable knowledge packs: export
+  Vio's knowledge for a domain — or a full brain snapshot — to a shareable JSON file, import
+  merges it de-duplicated; the local-first, no-cloud version of "sync a specialist"). Feedback
+  buttons, pack export/import, and a calibration report are wired into the UI + API. *Deferred by
+  choice:* a heavy transformer realizer (e.g. AirLLM) stays an optional future backend behind the
+  pluggable language layer — the small oscillatory/hybrid LM remains the default, keeping Vio fast
+  and local. **Speed contract met:** calibration/packs run on demand only; hot path unchanged.
 
 Exit criteria per phase: measurable rise in first-try accuracy and System-1 hit-rate, and fall in
 energy-per-answer and calibration error, on a fixed personal benchmark that grows with use.

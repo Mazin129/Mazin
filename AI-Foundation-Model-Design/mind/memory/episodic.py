@@ -90,6 +90,16 @@ class EpisodicMemory:
                 return ep
         return None
 
+    def grade_last(self, correct):
+        """Apply user feedback (👍/👎) to the most recent recorded episode."""
+        if not self.episodes:
+            return None
+        ep = self.episodes[-1]
+        ep["outcome"] = "correct" if correct else "wrong"
+        ep["reward"] = 1.0 if correct else -1.0
+        self._save()
+        return ep
+
     def recent(self, n=5, kind=None):
         eps = [e for e in self.episodes if kind is None or e["kind"] == kind]
         return eps[-n:][::-1]

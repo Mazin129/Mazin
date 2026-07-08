@@ -83,6 +83,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  .meta{font-size:11px;color:var(--dim);margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
  .ok{color:var(--ok)}.no{color:var(--warn)}
  .copy{cursor:pointer;opacity:.6}.copy:hover{opacity:1}
+ .fb{cursor:pointer;opacity:.55;font-size:12px}.fb:hover{opacity:1}
  .think{border-left:2px solid var(--accent);padding:6px 0 6px 12px;margin:2px 0 8px;font-size:12.5px;color:var(--dim);
         display:flex;flex-direction:column;gap:3px}
  .think .step{opacity:0;animation:fade .3s forwards}
@@ -176,6 +177,9 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
   <p class="sub">Everything is local and inspectable.</p>
   <div id="memBody" class="memlist"></div>
   <div class="rowbtns">
+    <button class="btn ghost" onclick="exportPack()">📦 Export knowledge pack</button>
+    <button class="btn ghost" onclick="document.getElementById('packfile').click()">📥 Import pack</button>
+    <input type="file" id="packfile" accept=".json" style="display:none" onchange="importPack()">
     <button class="btn ghost" onclick="train(true)">🎓 Train on this chat too</button>
     <button class="btn danger" onclick="forget()">Forget everything</button></div>
  </div>
@@ -214,8 +218,14 @@ function finalize(b,j){
  b.classList.toggle('rtl',isAr(j.answer));
  b.innerHTML=fmt(j.answer);
  const m=document.createElement('div');m.className='meta';
- m.innerHTML=badge(j)+' <span class="copy" title="copy">⧉</span>';
+ const gradable=j.how&&!['feedback','welcome','reset'].includes(j.how);
+ m.innerHTML=badge(j)+' <span class="copy" title="copy">⧉</span>'+
+   (gradable?' <span class="fb" data-g="1" title="correct">👍</span><span class="fb" data-g="0" title="wrong">👎</span>':'');
  m.querySelector('.copy').onclick=()=>navigator.clipboard.writeText(j.answer);
+ m.querySelectorAll('.fb').forEach(el=>el.onclick=async()=>{
+   await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({good:el.dataset.g==='1'})});
+   el.parentElement.querySelectorAll('.fb').forEach(x=>x.style.opacity=.3);el.style.opacity=1;});
  b.appendChild(m);log.scrollTop=log.scrollHeight;
 }
 function autosize(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,140)+'px'}
@@ -318,6 +328,23 @@ async function openMem(){document.getElementById('memM').classList.add('show');
   '<br><br><b>Library ('+(j.library||[]).length+' passages)</b><br>'+
   ((j.library||[]).slice(0,20).map(d=>'• '+esc(d.slice(0,90))).join('<br>')||'<span class="sub">empty</span>');
 }
+async function exportPack(){
+ const j=await(await fetch('/api/pack?domain=all')).json();
+ const blob=new Blob([JSON.stringify(j)],{type:'application/json'});
+ const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+ a.download='vio-knowledge-pack.json';a.click();URL.revokeObjectURL(a.href);
+}
+async function importPack(){
+ const f=document.getElementById('packfile').files[0];if(!f)return;
+ let pack;try{pack=JSON.parse(await f.text())}catch(e){alert('Not a valid pack file.');return;}
+ const j=await(await fetch('/api/pack/import',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({pack})})).json();
+ document.getElementById('packfile').value='';closeM('memM');
+ if(j.ok){const a=j.added;finalize(bubble('bot').b,{answer:`📦 Imported a knowledge pack: `+
+   `${a.docs} passages, ${a.edges} relations, ${a.facts} facts, ${a.skills} skills.`,
+   how:'pack import',verified:true});loadStatus();}
+ else alert(j.message||'Could not import pack');
+}
 function closeM(id){document.getElementById(id).classList.remove('show')}
 async function forget(){await fetch('/api/forget',{method:'POST'});closeM('memM');
  log.innerHTML='';finalize(bubble('bot').b,{answer:'Memory and library cleared.',how:'reset',verified:true});loadStatus();}
@@ -395,6 +422,11 @@ class H(BaseHTTPRequestHandler):
                                      "library": lib}, ensure_ascii=False))
         elif path == "/api/skills":
             self._s(200, json.dumps({"skills": MIND.skills.list()}, ensure_ascii=False))
+        elif path == "/api/pack":                     # export a portable knowledge pack
+            import packs
+            domain = (parse_qs(urlparse(self.path).query).get("domain", ["all"])[0])
+            pack = packs.export_pack(MIND, None if domain == "all" else domain)
+            self._s(200, json.dumps(pack, ensure_ascii=False))
         elif path == "/api/solve":
             q = (parse_qs(urlparse(self.path).query).get("q", [""])[0]).strip()
             self._solve_stream(q)
@@ -456,6 +488,18 @@ class H(BaseHTTPRequestHandler):
             # talk.py's own fast paths (greeting/identity/time/skills) are deterministic
             r.setdefault("confidence", 0.9 if r.get("verified") else 0.4)
             self._s(200, json.dumps(r, ensure_ascii=False))
+
+        elif self.path == "/api/feedback":
+            msg = MIND.feedback(bool(body.get("good")))
+            self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
+
+        elif self.path == "/api/pack/import":
+            import packs
+            try:
+                added = packs.import_pack(MIND, body.get("pack") or {})
+                self._s(200, json.dumps({"ok": True, "added": added}, ensure_ascii=False))
+            except ValueError as e:
+                self._s(200, json.dumps({"ok": False, "message": str(e)}))
 
         elif self.path == "/api/learn":
             name = body.get("name") or "a file"

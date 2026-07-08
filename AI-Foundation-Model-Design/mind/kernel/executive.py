@@ -55,6 +55,12 @@ class Executive:
         if system == 2:
             result, conf = critic_review(q, result, conf, self.mind)
 
+        # Phase-6: apply the calibration correction learned from feedback (§10), so the
+        # stated confidence self-tunes toward how often Vio is actually right.
+        scalar = getattr(self.mind, "calibration", None)
+        if scalar is not None:
+            conf = max(0.02, min(0.99, conf * scalar.scalar))
+
         result = dict(result)
         result["confidence"] = round(conf, 2)
         result["system"] = system
