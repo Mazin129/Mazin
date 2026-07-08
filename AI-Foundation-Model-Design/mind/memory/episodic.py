@@ -24,7 +24,7 @@ import os
 import re
 import time
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.environ.get("VIO_DATA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EPI_FILE = os.path.join(HERE, "episodic.json")
 MAX_EPISODES = 20000            # cap the on-disk log; oldest low-reward pruned beyond this
 

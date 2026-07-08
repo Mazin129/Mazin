@@ -24,7 +24,7 @@ import json
 import os
 import re
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.environ.get("VIO_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
 SKILLS_FILE = os.path.join(HERE, "skills.json")
 
 _SLOT = re.compile(r"\{([a-zA-Z][a-zA-Z0-9_]*)\}")

@@ -46,8 +46,13 @@ from cognition.calibration import Calibration
 from specialists import Cortex
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MEM_FILE = os.path.join(HERE, "mind_memory.json")
-KB_FILE = os.path.join(HERE, "knowledge.json")
+# All of Vio's stores live in HERE by default; set VIO_DATA_DIR to relocate them
+# (data portability, and lets a test run against a throwaway dir — see capability_test.py).
+DATA_DIR = os.environ.get("VIO_DATA_DIR", HERE)
+if DATA_DIR != HERE:
+    os.makedirs(DATA_DIR, exist_ok=True)
+MEM_FILE = os.path.join(DATA_DIR, "mind_memory.json")
+KB_FILE = os.path.join(DATA_DIR, "knowledge.json")
 TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
 X = sp.symbols("x")
 

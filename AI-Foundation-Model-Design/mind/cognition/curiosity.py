@@ -20,7 +20,7 @@ import os
 import re
 import time
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.environ.get("VIO_DATA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GAPS_FILE = os.path.join(HERE, "gaps.json")
 MAX_GAPS = 500
 

@@ -23,7 +23,7 @@ import json
 import os
 import re
 
-HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.environ.get("VIO_DATA_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GRAPH_FILE = os.path.join(HERE, "graph.json")
 MAX_EDGES = 100000
 
