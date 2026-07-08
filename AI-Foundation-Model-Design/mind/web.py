@@ -236,10 +236,17 @@ inp.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDef
 function toggleDeep(){deep=!deep;document.getElementById('deepT').classList.toggle('on',deep)}
 
 async function send(){
- const t=inp.value.trim();if(!t||busy)return;
- inp.value='';autosize();addUser(t);busy=true;sendBtn.disabled=true;
- const {b}=bubble('bot');
- if(deep){await solveStream(t,b)} else {await ask(t,b)}
+ const raw=inp.value.trim();if(!raw||busy)return;
+ // Multiple lines = multiple messages: each line is its own turn (so pasting a list
+ // of commands/questions runs them one at a time, not as one giant message). To teach
+ // a multi-line document, use the 📄 button instead.
+ const lines=raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+ inp.value='';autosize();busy=true;sendBtn.disabled=true;
+ for(const t of lines){
+   addUser(t);
+   const {b}=bubble('bot');
+   if(deep){await solveStream(t,b)} else {await ask(t,b)}
+ }
  busy=false;sendBtn.disabled=false;loadStatus();inp.focus();
 }
 async function ask(t,b){
