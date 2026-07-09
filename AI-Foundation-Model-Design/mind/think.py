@@ -30,6 +30,16 @@ _STOP = {"the", "a", "an", "is", "are", "was", "were", "be", "of", "to", "in", "
          "where", "when", "why", "how", "which", "about", "you", "your", "i", "me",
          "my", "we", "they", "he", "she", "them", "their"}
 
+# framing words describe the SHAPE of a question, not its topic — so a passage that
+# only shares a framing word ("matter", "difference", "example") must not be scored
+# as relevant ("why does encryption matter" must not pull in "the science of matter").
+_FRAMING = {"difference", "differences", "between", "versus", "compare", "compared",
+            "comparison", "matter", "matters", "importance", "important", "purpose",
+            "meaning", "definition", "explain", "explained", "describe", "description",
+            "example", "examples", "reason", "reasons", "benefit", "benefits", "point",
+            "idea", "happens", "happen", "used", "using", "kind", "sort", "thing",
+            "things", "way", "really", "actually", "mean", "means"}
+
 
 def _sentences(text):
     return [s.strip() for s in re.split(r"(?<=[.!?؟])\s+|\n+", text.strip())
@@ -38,7 +48,7 @@ def _sentences(text):
 
 def _keywords(q):
     return [w for w in re.findall(r"[a-zA-Z؀-ۿ]+", q.lower())
-            if len(w) > 2 and w not in _STOP]
+            if len(w) > 2 and w not in _STOP and w not in _FRAMING]
 
 
 class Thinker:
@@ -130,7 +140,8 @@ class Thinker:
         return s
 
     _DEF_CUE = re.compile(r"\b(is|are|means?|refers to|description|defined|used to|"
-                          r"lets you|allows|enables|tests?|displays?|configures?)\b", re.I)
+                          r"lets you|allows|enables|tests?|displays?|configures?|"
+                          r"happens?|occurs?)\b", re.I)
     _LABEL = re.compile(r"^\s*(syntax|example|examples|usage|parameters?|options?|"
                         r"description|note|notes|default|arguments?|values?)\s*[:\-]", re.I)
 
@@ -138,9 +149,15 @@ class Thinker:
         """The thing being asked about, e.g. 'what does execute ping do?' -> 'execute
         ping'. Strips leading question words and trailing filler verbs."""
         q = question.strip().lower().rstrip("?.! ")
-        q = re.sub(r"^(what('?s| is| are| does| do)?|who('?s| is| are)?|define|explain|"
-                   r"tell me about|how do(es)?|how to)\s+", "", q)
-        q = re.sub(r"\s+(do|does|mean|means|work|works|used for|used|for|is|are)$", "", q)
+        # peel leading question framing twice, so "explain what a VLAN is …" reduces
+        # past both "explain" and "what a" down to the real subject ("vlan").
+        for _ in range(2):
+            q = re.sub(r"^(what('?s| is| are| does| do)?|who('?s| is| are)?|define|"
+                       r"explain|describe|tell me about|how do(es)?|how to)\s+", "", q)
+        # strip trailing filler ("… is used for", "… does") down to the bare subject
+        for _ in range(2):
+            q = re.sub(r"\s+(do|does|mean|means|work|works|used for|used|for|is|are)$",
+                       "", q)
         return re.sub(r"^(the|a|an)\s+", "", q).strip()
 
     def _lead(self, question):
@@ -199,7 +216,7 @@ class Thinker:
         # Type Size", which sit next to real content and were over-filtering entries.
         return bool(self._NOISE.search(s))
 
-    def synthesize(self, question, passages, facts=()):
+    def synthesize(self, question, passages, facts=(), focus=None):
         kw = set(_keywords(question))
         if not kw:
             return None
@@ -217,7 +234,8 @@ class Thinker:
             # is…" does NOT (so the real definition leads, not a tangential mention).
             defn_rx = re.compile(r"^\s*(?:a|an|the)?\s*" + re.escape(subj) +
                                  r"\b\s*(?:\([^)]*\))?\s*"
-                                 r"(is|are|means?|refers?\s+to|stands?\s+for)\b", re.I)
+                                 r"(is|are|means?|refers?\s+to|stands?\s+for|"
+                                 r"happens?|occurs?)\b", re.I)
 
         per = [_sentences(p) for p in passages]        # sentences per passage
         scored = []                                    # (score, passage_idx, sent_idx)
@@ -237,6 +255,19 @@ class Thinker:
         if not scored and not rel_facts:
             return None
 
+        # FOCUS WORD: the single most distinctive (highest-idf) query word, supplied by
+        # the reasoner where the TF-IDF weights live. Every non-lead sentence must
+        # mention it, so an "OSPF" question stays on OSPF (not BGP) and a "RAM" question
+        # stays on RAM (not "shutting down"). Skipped for comparison questions, which
+        # legitimately span two topics, and when the focus word isn't actually in the
+        # retrieved text (nothing to anchor on → don't over-filter).
+        is_compare = bool(re.search(r"\b(difference|differ|versus|vs|compare[d]?|"
+                                    r"comparison)\b", question, re.I))
+        if focus:
+            focus = focus.lower()
+            if is_compare or not any(focus in p.lower() for p in passages):
+                focus = None
+
         picked = []                                    # (pi, si) in reading order
         chosen = set()
         used_pi = set()
@@ -253,10 +284,16 @@ class Thinker:
                                         0 if self._DEF_CUE.search(per[t[1]][t[2]]) else 1,
                                         t[2]))
             starters = {self._first_word(p) for p in passages if p}
-            for _o, pi, si in anchors[:3]:
+            lead_taken = False
+            for _o, pi, si in anchors[:4]:
                 if (pi, si) in chosen:
                     continue
+                # after the lead, keep only sentences that mention the focus word — so
+                # the answer stays about the thing asked, not a neighbouring topic.
+                if lead_taken and focus and focus not in per[pi][si].lower():
+                    continue
                 picked.append((pi, si)); chosen.add((pi, si)); used_pi.add(pi)
+                lead_taken = True
                 # RICHER: pull the immediate follow-on detail from the SAME passage
                 # (e.g. "The host can be an IP address…" after a Syntax line), but
                 # stop at the next entry so we never bleed into another command.
@@ -271,6 +308,12 @@ class Thinker:
                                   and not self._LABEL.match(nxt))
                     if starts_new:
                         break
+                    # a follow-on in a prose chunk is only kept if it stays on topic
+                    # (mentions the focus word) — adjacent facts in the same chunk are
+                    # often unrelated ("Running out of RAM…" next to "Shutting down…").
+                    if focus and focus not in nxt.lower():
+                        j += 1
+                        continue
                     if (pi, j) not in chosen:
                         picked.append((pi, j)); chosen.add((pi, j))
                         added += 1
@@ -293,12 +336,7 @@ class Thinker:
             if lead and sentences[0].lower().startswith(lead.rstrip(" —").lower()):
                 lead = ""
             parts.append(self._format_body(lead + " ".join(sentences)))
-        answer = "\n\n".join(parts) if parts else None
-        if answer:
-            related = self._related(passages, used_pi, per, subj)
-            if related:
-                answer += "\n\nRelated topics I can explain: " + ", ".join(related) + "."
-        return answer
+        return "\n\n".join(parts) if parts else None
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ knowledge graph. Each file is one domain:
 | `programming.md` | languages, variables, functions, algorithms, Git, AI basics |
 | `science.md` | physics, chemistry, biology |
 | `world.md` | geography, astronomy, the human body |
+| `machine_learning.md` | ML/AI, supervised/unsupervised/RL, neural nets, transformers/LLMs, training, evaluation |
 
 ## Teach it all to Vio (one command)
 

@@ -1154,7 +1154,14 @@ class Mind:
                 "used", "using", "make", "makes", "made", "work", "works", "need",
                 "want", "like", "goes", "go", "put", "take", "give", "let", "kind",
                 "sort", "thing", "things", "way", "really", "actually", "mean",
-                "means", "if", "can", "will", "would", "should", "could", "with"}
+                "means", "if", "can", "will", "would", "should", "could", "with",
+                # framing words — question shape, not the topic ("why does X matter",
+                # "difference between X and Y", "explain X", "purpose of X")
+                "difference", "differences", "between", "versus", "compare",
+                "compared", "comparison", "matter", "matters", "importance",
+                "important", "purpose", "meaning", "definition", "define", "explain",
+                "explained", "describe", "description", "example", "examples",
+                "reason", "reasons", "benefit", "benefits", "point", "idea"}
         words = [w for w in re.findall(r"\w+", low) if len(w) > 2 and w not in STOP]
         hits = [(d, s) for d, s in self.lib.search(q, k=6) if s > 0.10]
         # PRECISION GATE: don't answer from a passage that only shares a common word
@@ -1198,9 +1205,19 @@ class Mind:
         self._last_evidence = {"top": (hits[0][1] if hits else 0.0),
                                "hits": len(hits), "facts": len(facts)}
         if hits or facts:
+            # FOCUS WORD: the query's most distinctive (highest-idf) in-vocabulary word
+            # — "ram" over "computer", "encryption" over "matter". The synthesiser uses
+            # it to keep multi-passage answers on topic instead of drifting to a
+            # neighbouring fact that merely shares a common word.
+            focus = None
+            voc = getattr(self.lib.vec, "vocabulary_", {}) or {}
+            idfa = getattr(self.lib.vec, "idf_", None)
+            invocab = [w for w in words if w in voc]
+            if invocab and idfa is not None:
+                focus = max(invocab, key=lambda w: float(idfa[voc[w]]))
             # open-ended THINKING: synthesise the exact sentences that answer the
             # question, drawn from several passages at once (grounded, no guessing).
-            syn = self.thinker.synthesize(q, [d for d, _ in hits], facts)
+            syn = self.thinker.synthesize(q, [d for d, _ in hits], facts, focus=focus)
             if syn:
                 return {"answer": syn, "how": "reasoning over knowledge (synthesis)",
                         "verified": True,
