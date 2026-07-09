@@ -179,6 +179,21 @@ def _fmt(v):
     return f"{v:g}" if isinstance(v, float) else str(v)
 
 
+def _stem(w):
+    """Conservative prefix fold so word forms match: powered/powers/powering → 'power',
+    overfit/overfitting → 'overfi'. Words of 5 chars or fewer are left as-is (ram, tcp,
+    vlan, ospf), so it never over-collapses short, distinctive terms."""
+    return w[:5] if len(w) > 5 else w
+
+
+def _stem_analyzer(text):
+    """Tokenize → drop English stop words → prefix-stem. Used by the TF-IDF vectorizer
+    so retrieval matches across word forms on both documents and queries."""
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+    return [_stem(w) for w in re.findall(r"[a-z0-9؀-ۿ]+", text.lower())
+            if len(w) > 1 and w not in ENGLISH_STOP_WORDS]
+
+
 def try_percent(q):
     ql = q.lower()
     m = re.search(r"(-?\d+\.?\d*)\s*%\s*(?:of|من)\s*(-?\d+\.?\d*)", ql)
@@ -481,7 +496,12 @@ class Library:
     def _fit(self):
         from sklearn.feature_extraction.text import TfidfVectorizer
         if self.docs:
-            self.vec = TfidfVectorizer(stop_words="english").fit(self.docs)
+            # prefix-stemming analyzer so a query word matches every form of it in the
+            # library ("overfit"↔"overfitting", "powered"↔"powering"). This applies to
+            # BOTH the documents and the query, so retrieval no longer misses an answer
+            # over a verb tense or plural. Precision is still enforced downstream by the
+            # distinctive-term and multi-keyword gates.
+            self.vec = TfidfVectorizer(analyzer=_stem_analyzer).fit(self.docs)
             self.mat = self.vec.transform(self.docs)
         else:
             self.vec = None
@@ -629,6 +649,9 @@ class Mind:
             s = ln.strip()
             if s and self._NOISE_LINE.search(s):
                 continue
+            if re.match(r"^#{1,6}\s+\S", s):            # markdown section heading — a
+                kept.append("")                         # navigation label, not knowledge;
+                continue                                # drop it but keep the boundary
             # drop a stray skill-definition that got pasted into content, and strip
             # leaked command prefixes ("teach:", "remember:") so they never appear in answers
             if re.match(r"^\s*skill\s*:\s*.+\|.*\breply\b", s, re.I):
@@ -661,6 +684,29 @@ class Mind:
             chunks.append(cur)
         return chunks
 
+    # a sentence opening with one of these leans on the previous sentence (procedure
+    # step / narrative continuation), so its block must be kept whole, not split.
+    _CONT = re.compile(r"^(then|next|finally|first|second|third|fourth|lastly|also|"
+                       r"therefore|thus|hence|so|it|its|this|that|these|they|he|she|"
+                       r"their|afterwards?|meanwhile|additionally|furthermore|moreover|"
+                       r"consequently|after that|once)\b", re.I)
+
+    def _focus(self, words, passages):
+        """The query's most distinctive (highest-idf) in-vocabulary word that also
+        appears in the best passage — the topic being answered. Used to keep synthesis
+        on-topic. Returns None when there's nothing distinctive to key on."""
+        voc = getattr(self.lib.vec, "vocabulary_", {}) or {}
+        idfa = getattr(self.lib.vec, "idf_", None)
+        if not (words and voc and idfa is not None and passages):
+            return None
+        topset = {_stem(t) for t in re.findall(r"[a-z0-9؀-ۿ]+", passages[0].lower())}
+        invocab = [w for w in words if _stem(w) in voc and _stem(w) in topset]
+        if not invocab:
+            invocab = [w for w in words if _stem(w) in voc]
+        if not invocab:
+            return None
+        return max(invocab, key=lambda w: float(idfa[voc[_stem(w)]]))
+
     def _chunk(self, text, size=320):
         """Split into passages, keeping each reference ENTRY together: a new entry
         heading (or a blank line) starts a new passage. Long free-prose blocks are
@@ -682,10 +728,29 @@ class Mind:
         chunks = []
         for blk in blocks:
             joined = " ".join(blk)
-            if len(joined) <= size * 2:
-                chunks.append(joined)                   # a whole entry / short paragraph
+            is_entry = bool(blk and self._HEADING.match(blk[0]))
+            if is_entry:
+                # a reference entry (CLI command etc.) — keep the whole entry in one
+                # passage so its Syntax/Example lines stay with it.
+                if len(joined) <= size * 2:
+                    chunks.append(joined)
+                else:
+                    chunks.extend(self._size_split(joined, size))
             else:
-                chunks.extend(self._size_split(joined, size))   # long prose -> by size
+                sents = [s.strip() for s in re.split(r"(?<=[.!?؟])\s+", joined)
+                         if len(s.strip()) > 2]
+                # A block whose later sentences open with a connective ("Then …",
+                # "Finally …", "It …") is ONE coherent unit — a procedure or a narrative
+                # where sentences depend on each other — so keep it together. A block of
+                # independent declarative facts is split one-per-passage, so two unrelated
+                # facts never share a passage (what dragged a BGP fact into an OSPF answer).
+                if len(sents) > 1 and any(self._CONT.match(s) for s in sents[1:]):
+                    if len(joined) <= size * 2:
+                        chunks.append(joined)
+                    else:
+                        chunks.extend(self._size_split(joined, size))
+                else:
+                    chunks.extend(sents or [joined])
         return chunks or [text.strip()]
 
     def teach(self, text):                 # add durable knowledge to the library
@@ -1169,9 +1234,12 @@ class Mind:
         # desert in the world" on just "world"). Trust a hit only if it is strong, or
         # covers >=2 distinct query keywords, or the question is single-topic.
         if hits:
-            qkw = set(words)
+            # prefix-fold so morphological variants count as the same word ("powered"
+            # ↔ "powers" ↔ "powering", "overfit" ↔ "overfitting") — otherwise a passage
+            # that clearly answers the question gets rejected on a verb-tense mismatch.
+            qkw = {_stem(w) for w in words}
             top = hits[0][1]
-            multi = any(len(qkw & set(re.findall(r"[a-z؀-ۿ]+", d.lower()))) >= 2
+            multi = any(len(qkw & {_stem(t) for t in re.findall(r"[a-z؀-ۿ]+", d.lower())}) >= 2
                         for d, _ in hits)
             if not (top >= 0.28 or multi or len(qkw) <= 1):
                 hits = []
@@ -1179,15 +1247,16 @@ class Mind:
         # in what we retrieved. A wrong-domain hit shares only common words ("best
         # route performance") and never the distinctive one ("airline") — so if the
         # single most specific query word is absent from every passage, refuse rather
-        # than answer from the wrong domain. Skipped for very strong matches (a high
-        # TF-IDF cosine already implies the rare, high-idf terms matched).
-        if hits and words and hits[0][1] < 0.5:
+        # than answer from the wrong domain. Always applied: a short passage can score a
+        # high cosine on one shared word ("the moon") without the distinctive term
+        # ("president") ever appearing, so cosine strength is not a safe exemption.
+        if hits and words:
             vec = self.lib.vec
             vocab = getattr(vec, "vocabulary_", {}) or {}
             idf = getattr(vec, "idf_", None)
 
             def _spec(w):
-                j = vocab.get(w)
+                j = vocab.get(_stem(w))          # vocabulary is prefix-stemmed
                 if j is None:
                     return 1e9                    # out-of-vocabulary → maximally distinctive
                 return float(idf[j]) if idf is not None else 1.0
@@ -1209,12 +1278,10 @@ class Mind:
             # — "ram" over "computer", "encryption" over "matter". The synthesiser uses
             # it to keep multi-passage answers on topic instead of drifting to a
             # neighbouring fact that merely shares a common word.
-            focus = None
-            voc = getattr(self.lib.vec, "vocabulary_", {}) or {}
-            idfa = getattr(self.lib.vec, "idf_", None)
-            invocab = [w for w in words if w in voc]
-            if invocab and idfa is not None:
-                focus = max(invocab, key=lambda w: float(idfa[voc[w]]))
+            # the focus word keeps synthesis on-topic — it must appear in the best
+            # passage, so it is the topic being answered, not an incidental rare verb
+            # ("how does OSPF choose…" must key on OSPF, not on "choose").
+            focus = self._focus(words, [d for d, _ in hits])
             # open-ended THINKING: synthesise the exact sentences that answer the
             # question, drawn from several passages at once (grounded, no guessing).
             syn = self.thinker.synthesize(q, [d for d, _ in hits], facts, focus=focus)

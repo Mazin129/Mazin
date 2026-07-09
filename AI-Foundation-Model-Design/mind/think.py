@@ -51,6 +51,16 @@ def _keywords(q):
             if len(w) > 2 and w not in _STOP and w not in _FRAMING]
 
 
+def _stem(w):
+    """Conservative prefix fold so word forms match (powered/powers/powering → 'power').
+    Words of 5 chars or fewer are untouched, so short distinctive terms never collapse."""
+    return w[:5] if len(w) > 5 else w
+
+
+def _stems(q):
+    return {_stem(w) for w in _keywords(q)}
+
+
 class Thinker:
     """Synthesises grounded answers and generates text learned from the library."""
 
@@ -237,13 +247,16 @@ class Thinker:
                                  r"(is|are|means?|refers?\s+to|stands?\s+for|"
                                  r"happens?|occurs?)\b", re.I)
 
+        # prefix-fold the query keywords so a sentence matches across word forms
+        # ("powered" ↔ "powering"/"powers", "overfit" ↔ "overfitting").
+        kws = {_stem(w) for w in kw}
         per = [_sentences(p) for p in passages]        # sentences per passage
         scored = []                                    # (score, passage_idx, sent_idx)
         for pi, sents in enumerate(per):
             for si, s in enumerate(sents):
                 if self._is_noise(s):                  # drop TOC/index/table cruft
                     continue
-                ov = len(kw & set(_keywords(s)))
+                ov = len(kws & _stems(s))
                 if not ov:
                     continue
                 if phrase_rx and phrase_rx.search(s):  # exact command/subject present
@@ -251,7 +264,7 @@ class Thinker:
                 if defn_rx and defn_rx.search(s):      # "X is a …" — the actual definition
                     ov += 4                            # leads over "to configure X …"
                 scored.append((ov, pi, si))
-        rel_facts = [f for f in facts if kw & set(_keywords(f))]
+        rel_facts = [f for f in facts if kws & _stems(f)]
         if not scored and not rel_facts:
             return None
 
@@ -264,7 +277,7 @@ class Thinker:
         is_compare = bool(re.search(r"\b(difference|differ|versus|vs|compare[d]?|"
                                     r"comparison)\b", question, re.I))
         if focus:
-            focus = focus.lower()
+            focus = _stem(focus.lower())               # prefix-fold to match word forms
             if is_compare or not any(focus in p.lower() for p in passages):
                 focus = None
 

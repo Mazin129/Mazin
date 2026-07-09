@@ -50,8 +50,11 @@ class Planner:
         # 2) pull ordered, actionable sentences from what was retrieved (grounded steps)
         steps = self._extract_steps(hits)
         if not steps:
-            # fall back to a grounded summary if no imperative steps were found
-            syn = self.mind.thinker.synthesize(goal, hits, [])
+            # fall back to a grounded summary if no imperative steps were found —
+            # keyed on the goal's topic word so it doesn't drift to unrelated facts.
+            gw = [w for w in re.findall(r"\w+", goal.lower()) if len(w) > 2]
+            focus = self.mind._focus(gw, hits)
+            syn = self.mind.thinker.synthesize(goal, hits, [], focus=focus)
             if syn:
                 return {"answer": f"Here's what I know that bears on “{goal}”:\n{syn}",
                         "how": "planning (grounded summary)", "verified": True, "trace": []}
