@@ -610,6 +610,15 @@ class Mind:
         self.cortex = Cortex()
         # CORTEX-OS Phase 6 — close the confidence loop: calibrate against feedback.
         self.calibration = Calibration(self)
+        # Reasoning cortex — a local LLM (via Ollama) for genuine reasoning: grounded on
+        # Vio's retrieved facts for knowledge questions, open for logic/planning/decisions.
+        # Optional: if no local server is running, .available is False and Vio stays
+        # purely on its exact + lexical engine.
+        try:
+            from llm import LLM
+            self.llm = LLM()
+        except Exception:
+            self.llm = None
         self._retrain()
 
     def consolidate(self):
@@ -1095,6 +1104,11 @@ class Mind:
             "tiers": {"working": len(self.wm), "episodic": len(eps),
                       "semantic": len(self.lib.docs), "procedural": len(self.skills.skills)
                       + len(self.mem.get("solved", {}))},
+            "reasoning_cortex": {
+                "llm": bool(self.llm and self.llm.available),
+                "model": (self.llm.model if self.llm and self.llm.available else None),
+                "semantic": (self.lib.sem.backend if getattr(self.lib, "sem", None) else None),
+            },
             "graph": self.graph.summary(),
             "vocab": st["vocab"],
             "gaps": len(self.curiosity.gaps),
@@ -1346,6 +1360,19 @@ class Mind:
             # passage, so it is the topic being answered, not an incidental rare verb
             # ("how does OSPF choose…" must key on OSPF, not on "choose").
             focus = self._focus(words, [d for d, _ in hits])
+            # REASONING CORTEX (grounded): if a local LLM is available, let it compose
+            # the answer from ONLY the retrieved passages — real language, still no
+            # hallucination (it is told to answer from the context or say it can't).
+            if self.llm is not None and self.llm.available:
+                from llm import grounded_prompt, GROUNDED_SYSTEM
+                ctx = [d for d, _ in hits] + list(facts)
+                ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM)
+                if ans:
+                    return {"answer": ans,
+                            "how": "reasoning over knowledge (LLM, grounded)",
+                            "verified": True,
+                            "trace": [f"local LLM ({self.llm.model}) grounded on "
+                                      f"{len(hits)} passage(s) + {len(facts)} fact(s)"]}
             # open-ended THINKING: synthesise the exact sentences that answer the
             # question, drawn from several passages at once (grounded, no guessing).
             syn = self.thinker.synthesize(q, [d for d, _ in hits], facts, focus=focus)
@@ -1363,7 +1390,20 @@ class Mind:
             return {"answer": "\n".join(parts), "how": "retrieval", "verified": bool(hits or facts),
                     "trace": [f"searched {len(self.lib.docs)} docs + {len(self.mem['facts'])} memories"]}
 
-        # 3) honest "I don't know yet" + how to teach it
+        # 3) REASONING CORTEX (open): no stored knowledge matched — but this may be a
+        # reasoning task (logic, planning, decision under uncertainty), not a fact
+        # lookup. If a local LLM is available, reason it through (told to stay honest
+        # about facts it doesn't have). This is what turns "rank the missing info and
+        # decide under uncertainty" from a CIA-triad misfire into an actual answer.
+        if self.llm is not None and self.llm.available:
+            from llm import REASON_SYSTEM
+            ans = self.llm.generate(q, system=REASON_SYSTEM, temperature=0.3, max_tokens=700)
+            if ans:
+                return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
+                        "trace": [f"local LLM ({self.llm.model}) reasoning — "
+                                  "not a stored fact"]}
+
+        # 4) honest "I don't know yet" + how to teach it
         return {"answer": "I don't know that yet. Teach me with:  teach: <fact>   "
                           "(then ask again). I only claim what I can verify or retrieve.",
                 "how": "no-source", "verified": False, "trace": []}

@@ -49,6 +49,7 @@ class Executive:
         system = 1 if (how in _SYSTEM1 or how.startswith("skill:")
                        or how.startswith("generation")
                        or how.startswith("reasoning (")    # structured graph/rule inference
+                       or how.startswith("reasoning over knowledge (LLM")  # grounded LLM
                        or how.startswith("planning (")
                        or how.startswith("world model (")
                        or how.startswith("data analysis (")) else 2

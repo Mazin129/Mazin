@@ -128,6 +128,31 @@ when you ask it to learn a repo; the rest of Vio stays fully local.
 pip install pymupdf        # strongly recommended; reads embedded-font PDFs correctly
 ```
 
+## Turn on reasoning (a local LLM cortex, no cloud)
+
+By itself Vio retrieves and verifies — it does not *reason*. To make it think through
+logic, planning, comparisons and decisions-under-uncertainty (and to phrase grounded
+answers in real language), give it a local LLM via **[Ollama](https://ollama.com)** —
+runs entirely on your machine, no API key, nothing leaves the box:
+
+```bash
+# 1. install Ollama (one download), then pull a model:
+ollama pull llama3.1        # or: qwen2.5, mistral, gemma2, phi3 …
+# 2. just start Vio — it auto-detects the running server.
+```
+
+How it stays honest once the cortex is on:
+- **Exact tools still win first** — math goes to sympy, tables to the data engine, so
+  the LLM never does arithmetic it could get wrong.
+- **Knowledge answers are grounded** — the LLM is handed Vio's retrieved passages and
+  told to answer *only* from them, or say it doesn't have the information. No
+  hallucinated facts.
+- **Open reasoning is labelled** — logic/planning/decisions are answered as reasoning
+  (marked unverified), not as stored facts.
+
+Pick the model with `set VIO_LLM_MODEL=qwen2.5` (or a different `VIO_LLM_URL`). Without
+Ollama running, Vio falls back to its exact + lexical engine, unchanged.
+
 ## Turn on semantic understanding (retrieval by meaning)
 
 Out of the box Vio matches your question against what it knows by keywords (fast,

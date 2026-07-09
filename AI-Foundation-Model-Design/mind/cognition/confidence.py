@@ -50,6 +50,10 @@ def score(result, evidence=None):
     verified = bool(result.get("verified"))
     ev = evidence or {}
 
+    if how.startswith("reasoning over knowledge (LLM"):
+        return 0.80                                     # local LLM grounded on retrieved facts
+    if how == "reasoning (LLM)":
+        return 0.55                                     # open LLM reasoning — plausible, unverified
     if how.startswith("skill:"):
         return 0.90                                     # user-defined reflex, exact match
     if how.startswith("data analysis ("):
