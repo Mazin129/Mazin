@@ -503,8 +503,26 @@ class Library:
             # distinctive-term and multi-keyword gates.
             self.vec = TfidfVectorizer(analyzer=_stem_analyzer).fit(self.docs)
             self.mat = self.vec.transform(self.docs)
+            self._fit_semantic()
         else:
             self.vec = None
+            self.sem = None
+
+    def _fit_semantic(self):
+        """Build the meaning layer alongside the lexical one (best backend available).
+        Kept optional: if it can't build, retrieval quietly stays purely lexical."""
+        self.sem = None
+        try:
+            from semantic import SemanticIndex
+            # neural_only: only blend the high-quality transformer embeddings into
+            # ranking. LSA is too coarse here and destabilises the precision gates, so
+            # out of the box Vio stays purely lexical (proven) until the user installs
+            # sentence-transformers, which flips on real semantic understanding.
+            si = SemanticIndex(neural_only=True).fit(self.docs)
+            if si.ready:
+                self.sem = si
+        except Exception:
+            self.sem = None
 
     def add(self, text):
         self.add_many([text])
@@ -519,8 +537,21 @@ class Library:
             return []
         import numpy as np
         sims = (self.vec.transform([q]) @ self.mat.T).toarray()[0]
-        idx = np.argsort(-sims)[:k]
-        return [(self.docs[i], float(sims[i])) for i in idx if sims[i] > 0.05]
+        combined = sims
+        # HYBRID re-rank: nudge the ORDER of lexically-plausible passages by meaning, so
+        # the most on-meaning of the candidates leads. Confined to passages that already
+        # have lexical support (sims>0), and weighted below the lexical signal, so it
+        # only reorders real candidates — it never drags in an unrelated passage on a
+        # spurious meaning match. The neural (transformer) backend, when installed, is
+        # far less noisy and gets more weight.
+        if getattr(self, "sem", None) is not None and self.sem.ready:
+            qv = self.sem.encode([q])
+            if qv is not None and self.sem.mat is not None:
+                sem = np.clip(self.sem.mat @ qv[0].astype(np.float32), 0.0, None)
+                w = 0.30 if self.sem.backend == "transformer" else 0.15
+                combined = sims + w * sem * (sims > 0.0)
+        idx = np.argsort(-combined)[:k]
+        return [(self.docs[i], float(combined[i])) for i in idx if combined[i] > 0.05]
 
 
 # --------------------------------------------------------------------------- #
@@ -1109,6 +1140,25 @@ class Mind:
                      r"summari[sz]e (your |the )?(library|knowledge|memory)", low):
             return {"answer": self._library_summary(), "how": "library summary",
                     "verified": True, "trace": []}
+
+        # 0=) conversational INTENT: the user is telling me they will give me data /
+        #     teach me — that is a statement, not a question. Retrieving facts at it is
+        #     exactly the bug where "im give you data to learn" returned ML definitions.
+        #     Recognise the intent and invite the actual content instead.
+        if (not q.endswith("?")
+                and not re.match(r"^\s*(what|how|why|who|where|when|which|whose|is|are|"
+                                 r"do|does|did|can|could|should|would|will)\b", low)
+                and re.search(r"\b(?:i|i'?m|im|let\s+me|lemme|we|we'?ll)\b[\w\s'’]{0,24}?"
+                              r"\b(give|giv|gonna|feed|send|provide|share|upload|paste|"
+                              r"teach|train|show|load)\b", low)
+                and re.search(r"\b(you|u|vio|it|data|dataset|datasets|file|files|"
+                              r"document|documents|docs?|info|information|knowledge|"
+                              r"text|notes|material|content|stuff)\b", low)):
+            return {"answer": "Great — go ahead. Paste the text right here and I'll learn "
+                    "it, or drop a file (📄 PDF/TXT/MD, or a CSV to analyze). To store one "
+                    "fact, start the line with  teach:  — e.g.  teach: OSPF is a "
+                    "link-state routing protocol.",
+                    "how": "greeting", "verified": True, "trace": []}
 
         # 0-) open-ended GENERATION: "write/continue/imagine/compose about …"
         #     (typo-tolerant: 'rite'/'wirte' for 'write')

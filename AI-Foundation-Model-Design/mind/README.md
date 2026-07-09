@@ -128,6 +128,23 @@ when you ask it to learn a repo; the rest of Vio stays fully local.
 pip install pymupdf        # strongly recommended; reads embedded-font PDFs correctly
 ```
 
+## Turn on semantic understanding (retrieval by meaning)
+
+Out of the box Vio matches your question against what it knows by keywords (fast,
+exact, fully local). To make it understand **meaning** — so "how do I stop bad
+traffic" finds the firewall fact, and "turn a computer off" finds "powering off" —
+install a small local embedding model (CPU-only, ~90 MB, downloads once):
+
+```bash
+pip install sentence-transformers
+```
+
+Nothing else to do: on the next start Vio detects it and blends neural
+sentence-embeddings into retrieval automatically (`semantic.py`). No cloud, no API
+key — the model runs on your machine. Without it, Vio stays purely lexical (still
+works, just word-based). The precision gates run either way, so a wrong-domain
+question ("who is the president of the moon?") is still refused, not answered.
+
 Vio uses the best reader available: **PyMuPDF** → **pdfminer.six** → a built-in
 dependency-free fallback. Professional PDFs (e.g. a vendor CLI reference) embed custom
 fonts where the raw bytes are glyph codes, not letters — only a real library decodes them.
