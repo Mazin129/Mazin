@@ -477,7 +477,14 @@ def try_geometry(q):
 # --------------------------------------------------------------------------- #
 class Library:
     def __init__(self):
+        import threading
+        # the web UI serves requests on multiple threads; learning (add_many → _fit)
+        # rebuilds the matrices while another thread may be searching. This lock keeps
+        # a search and a refit from interleaving, so retrieval never reads a half-rebuilt
+        # index (which crashed with an IndexError).
+        self._lock = threading.RLock()
         self.docs = []
+        self.sem = None
         if os.path.exists(KB_FILE):
             self.docs = json.load(open(KB_FILE, encoding="utf-8"))
         else:
@@ -495,63 +502,70 @@ class Library:
 
     def _fit(self):
         from sklearn.feature_extraction.text import TfidfVectorizer
-        if self.docs:
-            # prefix-stemming analyzer so a query word matches every form of it in the
-            # library ("overfit"↔"overfitting", "powered"↔"powering"). This applies to
-            # BOTH the documents and the query, so retrieval no longer misses an answer
-            # over a verb tense or plural. Precision is still enforced downstream by the
-            # distinctive-term and multi-keyword gates.
-            self.vec = TfidfVectorizer(analyzer=_stem_analyzer).fit(self.docs)
-            self.mat = self.vec.transform(self.docs)
-            self._fit_semantic()
-        else:
-            self.vec = None
-            self.sem = None
+        with self._lock:
+            docs = self.docs
+            if docs:
+                # prefix-stemming analyzer so a query word matches every form of it in
+                # the library ("overfit"↔"overfitting", "powered"↔"powering"), on BOTH
+                # documents and query. Precision is still enforced by the distinctive-
+                # term and multi-keyword gates. Everything is built locally and assigned
+                # together, so a concurrent search never sees a half-rebuilt index.
+                vec = TfidfVectorizer(analyzer=_stem_analyzer).fit(docs)
+                mat = vec.transform(docs)
+                sem = self._build_semantic(docs)
+                self.vec, self.mat, self.sem = vec, mat, sem
+            else:
+                self.vec, self.mat, self.sem = None, None, None
 
-    def _fit_semantic(self):
-        """Build the meaning layer alongside the lexical one (best backend available).
-        Kept optional: if it can't build, retrieval quietly stays purely lexical."""
-        self.sem = None
+    @staticmethod
+    def _build_semantic(docs):
+        """Build the meaning layer (best backend available). Optional: on any failure
+        returns None and retrieval stays purely lexical."""
         try:
             from semantic import SemanticIndex
             # neural_only: only blend the high-quality transformer embeddings into
             # ranking. LSA is too coarse here and destabilises the precision gates, so
             # out of the box Vio stays purely lexical (proven) until the user installs
             # sentence-transformers, which flips on real semantic understanding.
-            si = SemanticIndex(neural_only=True).fit(self.docs)
-            if si.ready:
-                self.sem = si
+            si = SemanticIndex(neural_only=True).fit(docs)
+            return si if si.ready else None
         except Exception:
-            self.sem = None
+            return None
 
     def add(self, text):
         self.add_many([text])
 
     def add_many(self, texts):
-        self.docs.extend(texts)
-        json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-        self._fit()
+        with self._lock:
+            self.docs = self.docs + list(texts)     # rebind, don't mutate in place
+            json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=2)
+            self._fit()
 
     def search(self, q, k=3):
-        if not self.vec:
+        with self._lock:                    # take a coherent snapshot of the index
+            vec, mat, docs, sem = self.vec, self.mat, self.docs, self.sem
+        if not vec:
             return []
         import numpy as np
-        sims = (self.vec.transform([q]) @ self.mat.T).toarray()[0]
+        sims = (vec.transform([q]) @ mat.T).toarray()[0]
         combined = sims
         # HYBRID re-rank: nudge the ORDER of lexically-plausible passages by meaning, so
         # the most on-meaning of the candidates leads. Confined to passages that already
-        # have lexical support (sims>0), and weighted below the lexical signal, so it
-        # only reorders real candidates — it never drags in an unrelated passage on a
-        # spurious meaning match. The neural (transformer) backend, when installed, is
-        # far less noisy and gets more weight.
-        if getattr(self, "sem", None) is not None and self.sem.ready:
-            qv = self.sem.encode([q])
-            if qv is not None and self.sem.mat is not None:
-                sem = np.clip(self.sem.mat @ qv[0].astype(np.float32), 0.0, None)
-                w = 0.30 if self.sem.backend == "transformer" else 0.15
-                combined = sims + w * sem * (sims > 0.0)
+        # have lexical support (sims>0), weighted below the lexical signal, so it only
+        # reorders real candidates — never drags in an unrelated passage on a spurious
+        # meaning match. The transformer backend, when installed, is less noisy → more
+        # weight. Only blended when its row count matches, so it can never mis-index.
+        if sem is not None and sem.ready and sem.mat is not None:
+            qv = sem.encode([q])
+            if qv is not None and sem.mat.shape[0] == sims.shape[0]:
+                s = np.clip(sem.mat @ qv[0].astype(np.float32), 0.0, None)
+                w = 0.30 if sem.backend == "transformer" else 0.15
+                combined = sims + w * s * (sims > 0.0)
         idx = np.argsort(-combined)[:k]
-        return [(self.docs[i], float(combined[i])) for i in idx if combined[i] > 0.05]
+        n = len(docs)
+        return [(docs[i], float(combined[i]))
+                for i in idx if i < n and combined[i] > 0.05]
 
 
 # --------------------------------------------------------------------------- #
