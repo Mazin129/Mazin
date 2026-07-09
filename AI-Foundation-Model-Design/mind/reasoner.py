@@ -1148,7 +1148,13 @@ class Mind:
         # 2) retrieval from the growing library + personal memory
         STOP = {"the", "a", "an", "is", "are", "was", "of", "to", "in", "on", "for",
                 "what", "who", "where", "when", "why", "how", "my", "me", "and", "i",
-                "do", "does", "you", "your", "it", "that", "this", "am", "tell"}
+                "do", "does", "you", "your", "it", "that", "this", "am", "tell",
+                # generic fillers — never the distinctive topic word of a question
+                "happens", "happen", "happened", "get", "gets", "got", "off", "use",
+                "used", "using", "make", "makes", "made", "work", "works", "need",
+                "want", "like", "goes", "go", "put", "take", "give", "let", "kind",
+                "sort", "thing", "things", "way", "really", "actually", "mean",
+                "means", "if", "can", "will", "would", "should", "could", "with"}
         words = [w for w in re.findall(r"\w+", low) if len(w) > 2 and w not in STOP]
         hits = [(d, s) for d, s in self.lib.search(q, k=6) if s > 0.10]
         # PRECISION GATE: don't answer from a passage that only shares a common word
@@ -1161,6 +1167,29 @@ class Mind:
             multi = any(len(qkw & set(re.findall(r"[a-z؀-ۿ]+", d.lower()))) >= 2
                         for d, _ in hits)
             if not (top >= 0.28 or multi or len(qkw) <= 1):
+                hits = []
+        # DISTINCTIVE-TERM GATE: the query's rarest content word must actually appear
+        # in what we retrieved. A wrong-domain hit shares only common words ("best
+        # route performance") and never the distinctive one ("airline") — so if the
+        # single most specific query word is absent from every passage, refuse rather
+        # than answer from the wrong domain. Skipped for very strong matches (a high
+        # TF-IDF cosine already implies the rare, high-idf terms matched).
+        if hits and words and hits[0][1] < 0.5:
+            vec = self.lib.vec
+            vocab = getattr(vec, "vocabulary_", {}) or {}
+            idf = getattr(vec, "idf_", None)
+
+            def _spec(w):
+                j = vocab.get(w)
+                if j is None:
+                    return 1e9                    # out-of-vocabulary → maximally distinctive
+                return float(idf[j]) if idf is not None else 1.0
+
+            # rarest word wins; ties (e.g. two out-of-vocabulary words) break toward
+            # the longer one, which is the more topical content word.
+            key = max(words, key=lambda w: (_spec(w), len(w)))
+            blob = " ".join(d.lower() for d, _ in hits)
+            if key[:5] not in blob:              # prefix match tolerates morphology
                 hits = []
         if re.search(r"about (me|myself)|(who|what) am i|know about me", low):
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
