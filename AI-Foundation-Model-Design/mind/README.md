@@ -118,6 +118,22 @@ learn https://github.com/owner/repo
 Vio shallow-clones the repo and learns its documentation (Markdown, text, reStructuredText,
 AsciiDoc, and PDFs), then you can ask about it. Requires `git` on your machine.
 
+## Feed Vio real data from Hugging Face / Kaggle
+
+`data_ingest.py` pulls real public datasets, cleans each record into well-formed
+sentences (dropping junk, tables, and duplicates), and teaches them into Vio:
+
+```bash
+python data_ingest.py list                       # curated, clean starter datasets
+python data_ingest.py preset wikipedia --n 2000  # Simple-English Wikipedia
+python data_ingest.py hf ag_news --n 1000        # any Hugging Face dataset
+python data_ingest.py kaggle owner/slug --n 2000 # a Kaggle dataset
+```
+
+Hugging Face needs `pip install datasets`; Kaggle needs `pip install kaggle` plus your
+`kaggle.json` token. Everything downloads on your machine — quality-first, so prefer the
+curated presets (random noisy datasets make noisy answers).
+
 **Safety:** Vio only **reads** the repo's text/doc files — it never runs any code, scripts,
 or build steps from the repo, and it skips images and binaries. Network access happens only
 when you ask it to learn a repo; the rest of Vio stays fully local.

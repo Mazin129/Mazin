@@ -1364,9 +1364,9 @@ class Mind:
             # the answer from ONLY the retrieved passages — real language, still no
             # hallucination (it is told to answer from the context or say it can't).
             if self.llm is not None and self.llm.available:
-                from llm import grounded_prompt, GROUNDED_SYSTEM
+                from llm import grounded_prompt, GROUNDED_SYSTEM_D
                 ctx = [d for d, _ in hits] + list(facts)
-                ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM)
+                ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM_D)
                 if ans:
                     return {"answer": ans,
                             "how": "reasoning over knowledge (LLM, grounded)",
@@ -1396,8 +1396,8 @@ class Mind:
         # about facts it doesn't have). This is what turns "rank the missing info and
         # decide under uncertainty" from a CIA-triad misfire into an actual answer.
         if self.llm is not None and self.llm.available:
-            from llm import REASON_SYSTEM
-            ans = self.llm.generate(q, system=REASON_SYSTEM, temperature=0.3, max_tokens=700)
+            from llm import REASON_SYSTEM_D
+            ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3, max_tokens=700)
             if ans:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) reasoning — "

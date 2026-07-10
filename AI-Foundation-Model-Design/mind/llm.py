@@ -123,6 +123,18 @@ REASON_SYSTEM = (
     "rather than inventing them."
 )
 
+# The human-like loop the user asked for: understand the question, decide the logic,
+# THEN answer — and make those steps visible. Appended to whichever system prompt runs.
+DELIBERATE = (
+    " Think like a person before replying, and show it in exactly this shape:\n"
+    "Understanding: <one line — what the user is really asking>\n"
+    "Logic: <one line — the approach/steps you'll use to get there>\n"
+    "Answer: <your actual answer, as long as it needs to be>"
+)
+
+GROUNDED_SYSTEM_D = GROUNDED_SYSTEM + DELIBERATE
+REASON_SYSTEM_D = REASON_SYSTEM + DELIBERATE
+
 
 def grounded_prompt(question, passages):
     ctx = "\n".join(f"- {p}" for p in passages)
