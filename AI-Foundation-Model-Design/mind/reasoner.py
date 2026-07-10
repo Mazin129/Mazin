@@ -1366,7 +1366,9 @@ class Mind:
             if self.llm is not None and self.llm.available:
                 from llm import grounded_prompt, GROUNDED_SYSTEM_D
                 ctx = [d for d, _ in hits] + list(facts)
-                ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM_D)
+                budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+                ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM_D,
+                                        max_tokens=budget)
                 if ans:
                     return {"answer": ans,
                             "how": "reasoning over knowledge (LLM, grounded)",
@@ -1397,7 +1399,10 @@ class Mind:
         # decide under uncertainty" from a CIA-triad misfire into an actual answer.
         if self.llm is not None and self.llm.available:
             from llm import REASON_SYSTEM_D
-            ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3, max_tokens=700)
+            # big deliverables (root-cause tree + timeline + appendix …) need room to
+            # finish — a low cap truncates them mid-section. Configurable for slower PCs.
+            budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+            ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3, max_tokens=budget)
             if ans:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) reasoning — "

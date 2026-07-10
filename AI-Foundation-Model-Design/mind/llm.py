@@ -76,7 +76,7 @@ class LLM:
         self.available = True
 
     # ---- generation ----
-    def generate(self, prompt, system=None, temperature=0.2, max_tokens=512):
+    def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024):
         """One-shot completion. Returns the text, or None if the server/model fails."""
         if not self.available:
             return None
