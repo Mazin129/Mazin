@@ -1020,6 +1020,16 @@ class Mind:
             self.curiosity.resolved(q)
 
         r["domain"] = self.cortex.classify(q)[0]        # tag the specialist domain
+        # remember the path this answer took, so the dashboard can light up the live
+        # "how Vio answered" flow diagram (which route fired, where it stopped).
+        self._last_route = {
+            "how": r.get("how", ""),
+            "system": r.get("system"),
+            "confidence": r.get("confidence"),
+            "verified": r.get("verified"),
+            "domain": r.get("domain"),
+            "q": (q[:80] + "…") if len(q) > 80 else q,
+        }
         self._remember_episode(q, r)
         return r
 
@@ -1109,6 +1119,7 @@ class Mind:
                 "model": (self.llm.model if self.llm and self.llm.available else None),
                 "semantic": (self.lib.sem.backend if getattr(self.lib, "sem", None) else None),
             },
+            "last_route": getattr(self, "_last_route", None),
             "graph": self.graph.summary(),
             "vocab": st["vocab"],
             "gaps": len(self.curiosity.gaps),

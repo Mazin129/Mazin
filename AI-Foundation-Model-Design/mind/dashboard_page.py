@@ -63,6 +63,32 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  .wish b{color:var(--ink)}
  .foot{margin-top:26px;font-size:12px;color:var(--dim);font-family:var(--mono)}
  a{color:var(--accent)}
+ /* live "how Vio answered" flow diagram */
+ .cortex{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+ .pill{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--line);
+   border-radius:999px;padding:5px 11px;font-family:var(--mono);font-size:12px;color:var(--dim)}
+ .pill b{color:var(--ink)} .pill .on{color:var(--ok);font-weight:700} .pill .off{color:var(--warn)}
+ .stage{display:flex;align-items:center;justify-content:center;gap:10px;margin:8px 0;flex-wrap:wrap}
+ .stagebox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 14px;
+   font-size:12.5px;font-weight:600}
+ .sarrow{color:var(--dim)}
+ .routes{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0}
+ @media(max-width:820px){.routes{grid-template-columns:repeat(2,1fr)}}
+ .route{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px;
+   opacity:.45;transition:opacity .25s,border-color .25s,box-shadow .25s}
+ .route .n{font-size:12.5px;font-weight:600}
+ .route .m{font-size:10.5px;color:var(--dim);font-family:var(--mono);margin-top:1px}
+ .route.active{opacity:1;border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2));
+   box-shadow:0 0 0 1px var(--accent),0 0 22px -6px var(--accent);animation:pulse 1.8s ease-in-out infinite}
+ .route.active .m{color:var(--ink)}
+ @keyframes pulse{0%,100%{box-shadow:0 0 0 1px var(--accent),0 0 16px -8px var(--accent)}
+   50%{box-shadow:0 0 0 1px var(--accent),0 0 28px -2px var(--accent)}}
+ .flowcap{font-size:12.5px;color:var(--dim);margin-top:10px;font-family:var(--mono)}
+ .flowcap b{color:var(--ink)}
+ .badge{display:inline-block;border-radius:6px;padding:2px 8px;font-size:11px;font-family:var(--mono);
+   border:1px solid var(--line);margin-left:4px}
+ .badge.s1{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
+ .badge.s2{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 50%,var(--line))}
 </style></head><body>
 <div class="wrap">
  <header>
@@ -73,6 +99,24 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  </header>
 
  <div class="tiles" id="tiles"></div>
+
+ <div class="card full" style="margin-bottom:16px">
+  <h2>How Vio answered — live</h2>
+  <p class="cap">The path your last question took through the brain. The glowing box is
+    where it stopped. Updates automatically as you chat.</p>
+  <div class="cortex" id="cortex"></div>
+  <div class="stage">
+    <div class="stagebox">❓ Question</div><span class="sarrow">→</span>
+    <div class="stagebox">🧭 Understand</div><span class="sarrow">→</span>
+    <div class="stagebox">🔀 Route</div>
+  </div>
+  <div class="routes" id="routes"></div>
+  <div class="stage">
+    <div class="stagebox">⚖️ Confidence · Critic</div><span class="sarrow">→</span>
+    <div class="stagebox">💬 Answer</div>
+  </div>
+  <div class="flowcap" id="flowcap">Ask Vio something, then watch the path light up here.</div>
+ </div>
 
  <div class="card full">
   <h2>Cognitive architecture</h2>
@@ -175,9 +219,59 @@ function statusBars(el,rows){
  el.innerHTML=bar+leg;
 }
 
+// ---- live "how Vio answered" flow ----
+const ROUTES=[
+ {id:'math',n:'Exact math',m:'sympy · verified'},
+ {id:'data',n:'Data analysis',m:'CSV table'},
+ {id:'skill',n:'Skill reflex',m:'user-taught'},
+ {id:'world',n:'World model',m:'causal sim'},
+ {id:'plan',n:'Planner',m:'grounded steps'},
+ {id:'graph',n:'Graph reasoning',m:'rules · causal'},
+ {id:'retrieval',n:'Retrieval',m:'grounded synthesis'},
+ {id:'llm_grounded',n:'LLM · grounded',m:'reason over facts'},
+ {id:'llm_reason',n:'LLM · reasoning',m:'logic · plan · decide'},
+ {id:'generate',n:'Generation',m:'learned writer'},
+ {id:'write',n:'Memory write',m:'teach · remember'},
+ {id:'meta',n:'Self / recall',m:'identity · episodic'},
+ {id:'refuse',n:'Honest refuse',m:'no source'},
+ {id:'timeout',n:'LLM timeout',m:'model too slow'},
+];
+function routeOf(how){
+ how=(how||'').toLowerCase();
+ if(how.indexOf('reasoning over knowledge (llm')===0) return 'llm_grounded';
+ if(how==='reasoning (llm)') return 'llm_reason';
+ if(how==='llm-timeout') return 'timeout';
+ if(how.indexOf('symbolic')===0||how==='exact tool'||how.indexOf('quadratic')>=0||how.indexOf('plot')>=0||how==='clock') return 'math';
+ if(how.indexOf('data analysis')===0) return 'data';
+ if(how.indexOf('skill:')===0) return 'skill';
+ if(how.indexOf('world model')===0) return 'world';
+ if(how.indexOf('planning')===0) return 'plan';
+ if(how.indexOf('reasoning (')===0) return 'graph';
+ if(how.indexOf('synthesis')>=0||how==='retrieval'||how.indexOf('self-directed')===0) return 'retrieval';
+ if(how.indexOf('generation')===0) return 'generate';
+ if(how==='no-source') return 'refuse';
+ if(['library-write','memory-write','skill-write','training'].indexOf(how)>=0) return 'write';
+ return 'meta';
+}
+function renderFlow(d){
+ const rc=d.reasoning_cortex||{};
+ $('cortex').innerHTML=
+  `<span class="pill">Reasoning cortex ${rc.llm?`<b class="on">● ${esc(rc.model)}</b>`:'<b class="off">○ lexical only</b>'}</span>`+
+  `<span class="pill">Meaning ${rc.semantic?`<b class="on">● ${esc(rc.semantic)}</b>`:'<b class="off">○ keyword</b>'}</span>`;
+ const lr=d.last_route, active=lr?routeOf(lr.how):null;
+ $('routes').innerHTML=ROUTES.map(r=>
+   `<div class="route ${r.id===active?'active':''}"><div class="n">${r.n}</div><div class="m">${r.m}</div></div>`).join('');
+ if(lr){
+   const sys=lr.system==1?'<span class="badge s1">⚡ System 1</span>':lr.system==2?'<span class="badge s2">🧠 System 2</span>':'';
+   const conf=(lr.confidence!=null)?` · <b>${Math.round(lr.confidence*100)}%</b> sure`:'';
+   $('flowcap').innerHTML=`Last: “<b>${esc(lr.q||'')}</b>” → route <b>${esc((lr.how||'').replace(/[_]/g,' '))}</b>${conf} ${sys}`;
+ }
+}
+
 async function load(){
  let d;try{d=await(await fetch('/api/telemetry')).json()}catch(e){return}
  $('who').textContent=d.name+' — Cognitive Dashboard';
+ renderFlow(d);
  $('ts').textContent=new Date().toLocaleTimeString();
  const t=d.tiers;
  $('tiles').innerHTML=
@@ -226,4 +320,5 @@ async function load(){
  $('wish').innerHTML=wl.length?('<b>Wants to learn:</b> '+wl.map(w=>esc(w.topic)+` (${w.count}×)`).join(', ')):'';
 }
 load();
+setInterval(load, 3000);   // live: reflect the latest answer's path automatically
 </script></body></html>"""
