@@ -237,10 +237,13 @@ function toggleDeep(){deep=!deep;document.getElementById('deepT').classList.togg
 
 async function send(){
  const raw=inp.value.trim();if(!raw||busy)return;
- // Multiple lines = multiple messages: each line is its own turn (so pasting a list
- // of commands/questions runs them one at a time, not as one giant message). To teach
- // a multi-line document, use the 📄 button instead.
- const lines=raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+ // A multi-line paste is ONE message by default — a prompt like "Simulate five
+ // experts:\nScientist\nEngineer…" must NOT be chopped into separate questions.
+ // Only split into separate turns when it's clearly a BATCH of commands (every line
+ // is teach:/remember:/skill:), which is the one case where line-by-line is wanted.
+ const rawLines=raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+ const isCmd=l=>/^(teach|remember|skill)\s*:/i.test(l);
+ const lines=(rawLines.length>1 && rawLines.every(isCmd))?rawLines:[raw];
  inp.value='';autosize();busy=true;sendBtn.disabled=true;
  for(const t of lines){
    addUser(t);
