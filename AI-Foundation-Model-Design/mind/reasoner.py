@@ -1402,6 +1402,12 @@ class Mind:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) reasoning — "
                                   "not a stored fact"]}
+            # the model is running but didn't answer in time — be honest, don't fall
+            # through to lexical retrieval that would return unrelated facts.
+            return {"answer": f"My local reasoning model ({self.llm.model}) didn't finish "
+                    "in time on this one. Try a shorter prompt, or a smaller/faster model "
+                    "(e.g. `ollama pull llama3.2`) and set VIO_LLM_MODEL=llama3.2.",
+                    "how": "llm-timeout", "verified": False, "confidence": 0.2, "trace": []}
 
         # 4) honest "I don't know yet" + how to teach it
         return {"answer": "I don't know that yet. Teach me with:  teach: <fact>   "

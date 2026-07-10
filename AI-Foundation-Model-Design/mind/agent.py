@@ -80,6 +80,18 @@ class SolveAgent:
                     pass
 
         emit("🧭 Understanding your question…")
+
+        # When the LLM reasoning cortex is available, IT is the "think it through" engine
+        # — it understands the whole prompt and reasons (or answers grounded on retrieved
+        # facts) in one coherent pass. The old lexical decompose+re-search loop below is
+        # for the no-LLM case only; running it over a reasoning prompt is exactly what
+        # produced wrong-domain fragments ("Scientist" → biology). So delegate.
+        if getattr(self.mind, "llm", None) is not None and self.mind.llm.available:
+            emit(f"🧠 Reasoning it through with my local model ({self.mind.llm.model})…")
+            r = dict(self.mind.ask(question))
+            r["steps"] = steps
+            return r
+
         subs = _split_subquestions(question)
         if len(subs) > 1:
             emit(f"🧩 It has {len(subs)} parts — I'll take them one at a time.")

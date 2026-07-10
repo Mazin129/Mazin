@@ -41,6 +41,10 @@ class LLM:
     def __init__(self, url=URL, model=MODEL, timeout=6):
         self.url = url.rstrip("/")
         self.timeout = timeout
+        # local CPU inference is slow, and a big prompt (e.g. "simulate five experts
+        # and debate") can take minutes — give generation a generous, configurable
+        # ceiling so it finishes instead of silently timing out into a bad fallback.
+        self.gen_timeout = int(os.environ.get("VIO_LLM_TIMEOUT", "300"))
         self.model = model
         self.available = False
         self._detect()
@@ -85,7 +89,7 @@ class LLM:
         if system:
             body["system"] = system
         try:
-            out = self._post("/api/generate", body, timeout=self.timeout * 20)
+            out = self._post("/api/generate", body, timeout=self.gen_timeout)
         except Exception:
             return None
         text = (out or {}).get("response", "").strip()
