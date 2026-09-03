@@ -20,9 +20,9 @@ sampling. Save/load round-trips the whole thing (weights + tokenizer + config).
 from __future__ import annotations
 
 import json
-import math
 import os
 import pickle
+import re
 from dataclasses import dataclass, asdict
 
 import torch
@@ -34,16 +34,16 @@ from torch.nn import functional as F
 # Byte-level BPE tokenizer — learns its merges from your text (truly from zero)
 # --------------------------------------------------------------------------- #
 class BPETokenizer:
+    # Split text into small pieces (a word, keeping any leading space, or a run of
+    # punctuation/whitespace). Merges are learned WITHIN pieces, which is what makes
+    # training scale: the corpus collapses to its unique pieces, and identical words
+    # are counted once instead of re-scanned millions of times.
+    _SPLIT = re.compile(r" ?\w+| ?[^\w\s]+|\s+")
+
     def __init__(self):
         self.merges = {}          # (int, int) -> new_id
         self.vocab = {i: bytes([i]) for i in range(256)}
-
-    @staticmethod
-    def _stats(ids):
-        counts = {}
-        for a, b in zip(ids, ids[1:]):
-            counts[(a, b)] = counts.get((a, b), 0) + 1
-        return counts
+        self._cache = {}          # piece -> ids, so repeated words encode once
 
     @staticmethod
     def _merge(ids, pair, idx):
@@ -55,35 +55,80 @@ class BPETokenizer:
                 out.append(ids[i]); i += 1
         return out
 
-    def train(self, text, vocab_size=4096, verbose=False):
-        """Learn `vocab_size` tokens by repeatedly merging the most frequent byte pair."""
+    def train(self, text, vocab_size=4096, sample_bytes=12_000_000, verbose=False):
+        """Learn `vocab_size` tokens from your text.
+
+        Counts unique pieces once and updates only the pieces a merge actually touches,
+        so cost scales with the vocabulary of the corpus rather than its total length —
+        the difference between seconds and hours on a multi-megabyte corpus.
+        """
         assert vocab_size >= 256
-        ids = list(text.encode("utf-8"))
-        num_merges = vocab_size - 256
+        from collections import Counter
+        if len(text) > sample_bytes:      # merges generalise; no need to read it all
+            text = text[:sample_bytes]
         self.merges = {}
         self.vocab = {i: bytes([i]) for i in range(256)}
-        for k in range(num_merges):
-            stats = self._stats(ids)
-            if not stats:
+        self._cache = {}
+
+        freqs = Counter(self._SPLIT.findall(text))
+        words = [list(w.encode("utf-8")) for w in freqs]
+        counts = list(freqs.values())
+
+        pair_counts, pair_words = {}, {}
+
+        def index(i, sign):
+            w, c = words[i], counts[i]
+            for p in zip(w, w[1:]):
+                pair_counts[p] = pair_counts.get(p, 0) + sign * c
+                if sign > 0:
+                    pair_words.setdefault(p, set()).add(i)
+
+        for i in range(len(words)):
+            index(i, +1)
+
+        for k in range(vocab_size - 256):
+            if not pair_counts:
                 break
-            pair = max(stats, key=stats.get)
+            pair = max(pair_counts, key=pair_counts.get)
+            if pair_counts[pair] <= 0:                 # only stale entries left
+                pair_counts.pop(pair, None); pair_words.pop(pair, None)
+                continue
             idx = 256 + k
-            ids = self._merge(ids, pair, idx)
+            for i in list(pair_words.get(pair, ())):
+                index(i, -1)                            # withdraw this word's old pairs
+                words[i] = self._merge(words[i], pair, idx)
+                index(i, +1)                            # re-add its new pairs
             self.merges[pair] = idx
             self.vocab[idx] = self.vocab[pair[0]] + self.vocab[pair[1]]
+            pair_counts.pop(pair, None); pair_words.pop(pair, None)
             if verbose and k % 500 == 0:
-                print(f"    merge {k}/{num_merges}")
+                print(f"    merge {k}/{vocab_size - 256}")
         return self
 
-    def encode(self, text):
-        ids = list(text.encode("utf-8"))
+    def _encode_piece(self, piece):
+        ids = list(piece.encode("utf-8"))
         while len(ids) >= 2:
-            stats = self._stats(ids)
-            pair = min(stats, key=lambda p: self.merges.get(p, float("inf")))
-            if pair not in self.merges:
+            # apply the earliest-learned merge present, so encoding mirrors training
+            best, rank = None, None
+            for p in zip(ids, ids[1:]):
+                r = self.merges.get(p)
+                if r is not None and (rank is None or r < rank):
+                    best, rank = p, r
+            if best is None:
                 break
-            ids = self._merge(ids, pair, self.merges[pair])
+            ids = self._merge(ids, best, rank)
         return ids
+
+    def encode(self, text):
+        out = []
+        for piece in self._SPLIT.findall(text):
+            ids = self._cache.get(piece)
+            if ids is None:
+                ids = self._encode_piece(piece)
+                if len(self._cache) < 500_000:
+                    self._cache[piece] = ids
+            out.extend(ids)
+        return out
 
     def decode(self, ids):
         b = b"".join(self.vocab[i] for i in ids)
@@ -100,6 +145,7 @@ class BPETokenizer:
     def load_state(self, st):
         self.merges = {tuple(k): v for k, v in st["merges"]}
         self.vocab = {i: bytes([i]) for i in range(256)}
+        self._cache = {}
         for (a, b), idx in sorted(self.merges.items(), key=lambda kv: kv[1]):
             self.vocab[idx] = self.vocab[a] + self.vocab[b]
         return self
