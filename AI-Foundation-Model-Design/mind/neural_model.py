@@ -245,13 +245,28 @@ def _device():
 
 
 def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
-          vocab_size=4096, log=print):
-    """Train a fresh model from zero on `text`. Saves tokenizer + weights + config."""
-    cfg = cfg or GPTConfig(vocab_size=vocab_size)
-    dev = _device()
-    log(f"device: {dev}")
+          vocab_size=4096, save_every=500, resume=False, log=print):
+    """Train a model from zero on `text`.
 
-    tok = BPETokenizer().train(text, vocab_size=cfg.vocab_size)
+    Checkpoints every `save_every` steps AND on Ctrl+C, so a long run is never lost and
+    can be continued with resume=True. The best-scoring weights (lowest validation loss)
+    are what get kept as the model, so a late overfitting drift can't spoil the result.
+    """
+    dev = _device()
+    ck_path = os.path.join(out_dir, "checkpoint.pt")
+    resuming = resume and os.path.exists(ck_path)
+
+    if resuming:
+        # reuse the ORIGINAL tokenizer and config — retraining the tokenizer would
+        # renumber every token and make the saved weights meaningless.
+        cfg = GPTConfig(**json.load(open(os.path.join(out_dir, "config.json"))))
+        tok = BPETokenizer().load_state(pickle.load(open(os.path.join(out_dir, "tokenizer.pkl"), "rb")))
+        log(f"device: {dev}  ·  resuming from {ck_path}")
+    else:
+        cfg = cfg or GPTConfig(vocab_size=vocab_size)
+        log(f"device: {dev}")
+        tok = BPETokenizer().train(text, vocab_size=cfg.vocab_size)
+
     data = torch.tensor(tok.encode(text), dtype=torch.long)
     if len(data) < cfg.block_size + 2:
         raise RuntimeError("Not enough text to train — feed the model more data first.")
@@ -267,6 +282,21 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     log(f"model parameters: {model.num_params()/1e6:.1f}M")
     opt = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
 
+    start_step, best_val = 1, float("inf")
+    if resuming:
+        ck = torch.load(ck_path, map_location=dev)
+        model.load_state_dict(ck["model"])
+        opt.load_state_dict(ck["opt"])
+        start_step, best_val = ck["step"] + 1, ck.get("best_val", float("inf"))
+        log(f"  continuing at step {start_step} (best val so far {best_val:.3f})")
+        if start_step > steps:
+            log(f"  already trained {ck['step']} steps; raise --steps to continue.")
+            return model, tok
+
+    def checkpoint(step, best):
+        torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
+                    "step": step, "best_val": best}, ck_path)
+
     def batch(split):
         d = train_d if split == "train" else val_d
         # every window must be exactly block_size long, so the last valid start is
@@ -277,24 +307,40 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
         y = torch.stack([d[i + 1:i + 1 + cfg.block_size] for i in ix])
         return x.to(dev), y.to(dev)
 
-    model.train()
-    for step in range(1, steps + 1):
-        x, y = batch("train")
-        _, loss = model(x, y)
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        opt.step()
-        if step % max(1, steps // 20) == 0 or step == 1:
-            model.eval()
-            with torch.no_grad():
-                vx, vy = batch("val")
-                vl = model(vx, vy)[1].item()
-            model.train()
-            log(f"  step {step}/{steps}  train {loss.item():.3f}  val {vl:.3f}")
-
+    # the model files are written up front so an interrupted run still leaves a
+    # loadable model behind, then overwritten whenever validation improves.
     save(model, tok, out_dir)
-    log(f"✓ saved model to {out_dir}")
+    every = max(1, min(save_every, steps // 20 or 1))
+    model.train()
+    step = start_step - 1
+    try:
+        for step in range(start_step, steps + 1):
+            x, y = batch("train")
+            _, loss = model(x, y)
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            if step % every == 0 or step == start_step:
+                model.eval()
+                with torch.no_grad():
+                    vl = sum(model(*batch("val"))[1].item() for _ in range(3)) / 3
+                model.train()
+                star = ""
+                if vl < best_val:                     # keep the BEST weights, not the last
+                    best_val = vl
+                    save(model, tok, out_dir)
+                    star = " ✓best"
+                checkpoint(step, best_val)
+                log(f"  step {step}/{steps}  train {loss.item():.3f}  val {vl:.3f}{star}")
+    except KeyboardInterrupt:
+        checkpoint(step, best_val)
+        log(f"\n  ⏸ stopped at step {step}. Progress saved (best val {best_val:.3f}).")
+        log(f"  Continue where you left off:  --resume --steps {steps}")
+        return model, tok
+
+    checkpoint(step, best_val)
+    log(f"✓ saved model to {out_dir}  (best val {best_val:.3f})")
     return model, tok
 
 

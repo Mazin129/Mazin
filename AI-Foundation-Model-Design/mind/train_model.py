@@ -109,6 +109,10 @@ def main(argv=None):
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--extra", nargs="*", default=[], help="extra files/folders to train on")
     ap.add_argument("--out", default=MODEL_DIR)
+    ap.add_argument("--save-every", type=int, default=500,
+                    help="checkpoint every N steps (default 500)")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue a previous run from its last checkpoint")
     ap.add_argument("--scan", action="store_true", help="only report corpus size, don't train")
     ap.add_argument("--sample", default=None, help="generate from the saved model and exit")
     a = ap.parse_args(argv)
@@ -139,7 +143,8 @@ def main(argv=None):
     print(f"  Training {a.steps} steps — every weight starts random. Nothing pretrained.\n")
 
     model, tok = train(text, a.out, cfg=cfg, steps=a.steps, batch_size=a.batch,
-                       lr=a.lr, vocab_size=vocab)
+                       lr=a.lr, vocab_size=vocab, save_every=a.save_every,
+                       resume=a.resume)
 
     from neural_model import sample
     print("\n  Samples from YOUR model:\n" + "  " + "-" * 50)
