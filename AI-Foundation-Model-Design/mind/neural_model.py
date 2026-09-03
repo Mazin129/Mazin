@@ -211,6 +211,10 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
         raise RuntimeError("Not enough text to train — feed the model more data first.")
     n = int(0.9 * len(data))
     train_d, val_d = data[:n], data[n:]
+    # a small corpus can leave the 10% validation split shorter than one context window,
+    # which would make the batch stack fail — fall back to measuring val on train data.
+    if len(val_d) < cfg.block_size + 2:
+        val_d = train_d
     log(f"tokens: {len(data)} (train {len(train_d)}, val {len(val_d)}) · vocab {tok.size}")
 
     model = GPT(cfg).to(dev)
@@ -219,6 +223,8 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
 
     def batch(split):
         d = train_d if split == "train" else val_d
+        # every window must be exactly block_size long, so the last valid start is
+        # len(d) - block_size - 1 (leaving room for the shifted target).
         hi = max(1, len(d) - cfg.block_size - 1)
         ix = torch.randint(hi, (batch_size,))
         x = torch.stack([d[i:i + cfg.block_size] for i in ix])

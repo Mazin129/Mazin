@@ -22,8 +22,12 @@ curated presets in `list` — random noisy datasets make noisy answers.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get("VIO_DATA_DIR", HERE)
 
 # Curated, clean, mostly-factual datasets that teach well (name → how to pull it).
 CURATED = {
@@ -138,6 +142,59 @@ def pull_kaggle(slug, fields, limit):
 # --------------------------------------------------------------------------- #
 # teach into Vio
 # --------------------------------------------------------------------------- #
+def clean_rfc(text):
+    """RFCs are plain text with page furniture — strip it, keep the prose."""
+    text = text.replace("\r", "")
+    out = []
+    for ln in text.split("\n"):
+        s = ln.rstrip()
+        if "\f" in s:                                  # page break
+            continue
+        # running headers/footers: "RFC 4271   BGP-4   January 2006" / "[Page 12]"
+        if re.search(r"\[Page \d+\]\s*$", s) or re.match(r"^RFC \d+\s+\S.*\d{4}\s*$", s):
+            continue
+        out.append(s)
+    text = "\n".join(out)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def pull_rfcs(count=200, start=1, out_dir=None, quiet=False):
+    """Download IETF RFCs (plain text) — the real specifications of networking and
+    security. This is the highest-quality free domain corpus for training."""
+    import time
+    import urllib.error
+    import urllib.request
+    out_dir = out_dir or os.path.join(DATA_DIR, "corpus", "rfc")
+    os.makedirs(out_dir, exist_ok=True)
+    got = bytes_total = 0
+    n = start
+    while got < count and n < 9700:
+        path = os.path.join(out_dir, f"rfc{n}.txt")
+        if os.path.exists(path):
+            n += 1; got += 1; continue
+        url = f"https://www.rfc-editor.org/rfc/rfc{n}.txt"
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:
+                body = r.read().decode("utf-8", errors="ignore")
+            body = clean_rfc(body)
+            if len(body) > 2000:
+                open(path, "w", encoding="utf-8").write(body)
+                got += 1; bytes_total += len(body)
+                if not quiet and got % 25 == 0:
+                    print(f"  … {got} RFCs, {bytes_total/1e6:.1f} MB")
+            time.sleep(0.2)                            # be polite to the server
+        except urllib.error.HTTPError:
+            pass                                       # gaps in RFC numbering are normal
+        except Exception as e:
+            print(f"  ! stopped at RFC {n}: {e}")
+            break
+        n += 1
+    print(f"✓ {got} RFCs ({bytes_total/1e6:.1f} MB) in {out_dir}")
+    print(f"  Train on them:  python train_model.py --preset gpu --extra \"{out_dir}\" --steps 5000")
+    return out_dir
+
+
 def teach_into_vio(passages, source):
     if not passages:
         print("No clean, teachable sentences were extracted — nothing added.")
@@ -167,6 +224,11 @@ def main(argv=None):
     p_kg.add_argument("slug"); p_kg.add_argument("--fields", default="")
     p_kg.add_argument("--n", type=int, default=1000)
 
+    p_rfc = sub.add_parser("rfc", help="download IETF RFCs — the best free networking corpus")
+    p_rfc.add_argument("--n", type=int, default=200, help="how many RFCs")
+    p_rfc.add_argument("--start", type=int, default=1, help="starting RFC number")
+    p_rfc.add_argument("--out", default=None)
+
     p_pre = sub.add_parser("preset", help="one of the curated datasets")
     p_pre.add_argument("name"); p_pre.add_argument("--n", type=int, default=1000)
     sub.add_parser("list", help="show curated datasets")
@@ -177,6 +239,9 @@ def main(argv=None):
         for k, (_, nm, cfg, _f, desc) in CURATED.items():
             print(f"  {k:14} {desc}")
         print("\nOr any Hugging Face dataset:  python data_ingest.py hf <name> --n 1000")
+        return
+    if a.cmd == "rfc":
+        pull_rfcs(a.n, a.start, a.out)
         return
     if a.cmd == "preset":
         src, nm, cfg, fields, _ = CURATED[a.name]
