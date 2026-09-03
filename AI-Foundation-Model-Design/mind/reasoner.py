@@ -621,6 +621,42 @@ class Mind:
             self.llm = None
         self._retrain()
 
+    def _own_model_info(self):
+        """Describe Vio's own trained model for the dashboard, without loading it
+        (reading config.json is cheap; loading weights is not)."""
+        d = os.path.join(DATA_DIR, "own_model")
+        cfg_path = os.path.join(d, "config.json")
+        if not os.path.exists(os.path.join(d, "weights.pt")) or not os.path.exists(cfg_path):
+            return None
+        try:
+            c = json.load(open(cfg_path, encoding="utf-8"))
+            # parameter count ≈ embeddings + blocks (attn + mlp) — close enough to display
+            e, L, V, B = c["n_embd"], c["n_layer"], c["vocab_size"], c["block_size"]
+            params = V * e + B * e + L * (4 * e * e + 8 * e * e)
+            return {"params_m": round(params / 1e6, 1), "layers": L,
+                    "n_embd": e, "vocab": V, "ctx": B}
+        except Exception:
+            return None
+
+    def own_model(self):
+        """Vio's OWN model — the from-scratch transformer trained by train_model.py on
+        your data only (no pretrained weights). Loaded lazily on first use so startup
+        stays instant, and cached. Returns (model, tokenizer) or None if none trained."""
+        if getattr(self, "_own", "unset") == "none":
+            return None
+        if getattr(self, "_own", "unset") == "unset":
+            d = os.path.join(DATA_DIR, "own_model")
+            if not os.path.exists(os.path.join(d, "weights.pt")):
+                self._own = "none"
+                return None
+            try:
+                from neural_model import load
+                self._own = load(d)
+            except Exception:
+                self._own = "none"
+                return None
+        return self._own
+
     def consolidate(self):
         """Run one idle 'sleep' pass: reorganize memory + promote repeated wins into
         instant reflexes + recalibrate confidence against feedback. Safe anytime."""
@@ -1118,6 +1154,8 @@ class Mind:
                 "llm": bool(self.llm and self.llm.available),
                 "model": (self.llm.model if self.llm and self.llm.available else None),
                 "semantic": (self.lib.sem.backend if getattr(self.lib, "sem", None) else None),
+                # Vio's OWN from-scratch model (trained by you, on your data only)
+                "own_model": self._own_model_info(),
             },
             "last_route": getattr(self, "_last_route", None),
             "graph": self.graph.summary(),
@@ -1207,6 +1245,22 @@ class Mind:
         if gm:
             seed = re.sub(r"\b(a|an|the|about|something|some|text|paragraph|sentence|story|"
                           r"me|for|on|عن|قصة|شيء|نص|فقرة)\b", " ", gm.group(2)).strip()
+            # Vio's OWN trained model writes it, when one exists — every weight learned
+            # from your data, nothing pretrained. Falls back to the n-gram writer.
+            own = self.own_model()
+            if own:
+                try:
+                    from neural_model import sample
+                    model, tok = own
+                    txt = sample(model, tok, seed or "The", max_new_tokens=140).strip()
+                    if txt:
+                        return {"answer": txt, "how": "generation (your own trained model)",
+                                "verified": False,
+                                "trace": [f"{model.num_params()/1e6:.1f}M-parameter transformer "
+                                          f"trained from zero on your data",
+                                          "generated text — not a retrieved fact"]}
+                except Exception:
+                    pass
             out = self.thinker.generate(seed)
             if out:
                 return {"answer": out, "how": "generation (learned from your library)",
