@@ -797,6 +797,49 @@ class Mind:
             return None
         return max(invocab, key=lambda w: float(idfa[voc[_stem(w)]]))
 
+    # config-object words a "list/filter all" query can target, mapped to the token that
+    # identifies that object's config passages (per-object chunks start "config … <word>").
+    _AGG_ITEMS = {"policy": "policy", "policies": "policy", "rule": "policy",
+                  "rules": "policy", "interface": "interface", "interfaces": "interface",
+                  "vlan": "vlan", "vlans": "vlan", "address": "address",
+                  "addresses": "address", "object": "object", "objects": "object",
+                  "route": "route", "routes": "route", "vpn": "vpn", "tunnel": "phase"}
+
+    def _aggregate_answer(self, q):
+        """Answer 'show/list ALL <objects> that <condition>' by scanning EVERY matching
+        config object and letting the LLM filter — instead of returning the top few by
+        keyword match. Returns None when it isn't an aggregate query (or no LLM)."""
+        if not (self.llm is not None and self.llm.available):
+            return None
+        low = q.lower()
+        if not re.search(r"\b(all|every|each|list|which|how many|count|any)\b", low):
+            return None
+        item = next((base for w, base in self._AGG_ITEMS.items()
+                     if re.search(rf"\b{w}\b", low)), None)
+        if not item:
+            return None
+        # gather every config passage for that object type (per-object chunks make this exact)
+        cand = [d for d in self.lib.docs
+                if item in d.lower() and re.search(r"^\s*(config|edit|set)\b", d, re.M | re.I)]
+        if not cand:                                   # nothing config-shaped — let retrieval try
+            return None
+        capped = cand[:40]                             # keep the prompt within the model's window
+        ctx = "\n\n".join(f"[{i + 1}]\n{d}" for i, d in enumerate(capped))
+        system = ("You analyze device configuration objects. Examine EVERY object listed and "
+                  "select those that satisfy the request. For each match give its id/name and a "
+                  "one-line reason grounded in that object's own settings. If none match, say so. "
+                  "Use ONLY the objects shown — never invent objects, names, or settings.")
+        prompt = f"Configuration objects:\n{ctx}\n\nRequest: {q}\n\nList every matching object."
+        budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+        ans = self.llm.generate(prompt, system=system, max_tokens=budget)
+        if not ans:
+            return None
+        note = f"\n\n(Scanned the first 40 of {len(cand)} objects.)" if len(cand) > 40 else ""
+        return {"answer": ans + note,
+                "how": f"analysis over your {item} config (LLM, {self.llm.model})",
+                "verified": True,
+                "trace": [f"scanned {len(capped)} '{item}' config object(s)"]}
+
     def _chunk(self, text, size=320):
         """Split into passages, keeping each reference ENTRY together: a new entry
         heading (or a blank line) starts a new passage. Long free-prose blocks are
@@ -1502,6 +1545,14 @@ class Mind:
             pr = self.planner.plan(q)
             if pr:
                 return pr
+
+        # 1d) analyze-ALL over the config: "show all policies pointing to internet",
+        #     "which interfaces allow https", "how many rules deny FTP" — an aggregation
+        #     ACROSS every object of a type, not a single lookup. Returns None (falls
+        #     through to normal retrieval) when it isn't that kind of question.
+        agg = self._aggregate_answer(q)
+        if agg:
+            return agg
 
         # 2) retrieval from the growing library + personal memory
         STOP = {"the", "a", "an", "is", "are", "was", "of", "to", "in", "on", "for",
