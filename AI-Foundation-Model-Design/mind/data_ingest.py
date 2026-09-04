@@ -105,12 +105,15 @@ def fact_to_question(s):
         art = (m.group(1).lower() + " ") if m.group(1) else ""   # reuse the real article
         subj = m.group(2).strip()                                # keep casing: FortiGate, OSPF
         return f"What {m.group(3)} {art}{subj}?"
+    def _artfix(subj):                                 # lowercase a leading article
+        a = re.match(r"^(An|A|The)\s+(.*)", subj)
+        return f"{a.group(1).lower()} {a.group(2)}" if a else subj
     m = re.match(r"^([A-Za-z][\w /-]{1,40}?)\s+causes\s+(.+?)\.?$", s)
     if m:
-        return f"What does {m.group(1).strip()} cause?"
+        return f"What does {_artfix(m.group(1).strip())} cause?"
     m = re.match(r"^([A-Za-z][\w /-]{1,40}?)\s+(?:lets|allows|enables|helps)\s+", s)
     if m:
-        return f"What does {m.group(1).strip()} do?"
+        return f"What does {_artfix(m.group(1).strip())} do?"
     return None
 
 
