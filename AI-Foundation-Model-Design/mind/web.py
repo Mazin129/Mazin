@@ -790,6 +790,17 @@ class H(BaseHTTPRequestHandler):
                         "stronger reader (pip install pymupdf) and retry, or open the PDF and "
                         "'Save As → Plain Text (.txt)' and upload that."}, ensure_ascii=False))
                     return
+                if len(text.split()) < 60:
+                    # readable, but almost no prose — a diagram/architecture PDF whose
+                    # content lives in pictures. Learn the little text, but say so plainly
+                    # instead of a cheerful "Learned 1 passages" that hides the truth.
+                    msg = MIND.learn_text(text, name)
+                    self._s(200, json.dumps({"answer": msg +
+                        "  ⚠️ Heads-up: this PDF gave me very little text — it looks like a "
+                        "diagram, so most of its content is in pictures I can't read. Teach me "
+                        "the written design doc, the device configs, or type the key points "
+                        "into a .txt for the real content."}, ensure_ascii=False))
+                    return
             msg = MIND.learn_text(text, name)
             self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
 
