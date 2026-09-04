@@ -345,14 +345,21 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     opt = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
 
     if compile_model:
-        # torch.compile fuses the many small kernels into fewer, cutting launch overhead
-        # — the one remaining code-side speedup once the GPU is already saturated. It
-        # needs a C++/CUDA compiler; if that isn't set up, fall back rather than fail.
+        # torch.compile fuses the many small kernels into fewer, cutting launch overhead.
+        # It compiles LAZILY on the first forward, so force that here with a warmup pass
+        # and catch failures now (Triton/compiler support is patchy on Windows) — falling
+        # back to the plain model instead of crashing the whole run mid-training.
+        uncompiled = model
         try:
-            model = torch.compile(model)
-            log("  torch.compile enabled (first step is slow while it compiles)")
+            model = torch.compile(uncompiled)
+            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.float16,
+                                                 enabled=(dev == "cuda")):
+                model(torch.randint(0, cfg.vocab_size, (1, cfg.block_size), device=dev))
+            log("  torch.compile enabled")
         except Exception as e:
-            log(f"  torch.compile unavailable ({type(e).__name__}); continuing uncompiled")
+            model = uncompiled
+            log(f"  torch.compile unavailable here ({type(e).__name__}) — continuing "
+                f"uncompiled (no problem; just skip --compile).")
 
     start_step, best_val, worse = 1, float("inf"), 0
     if resuming:
