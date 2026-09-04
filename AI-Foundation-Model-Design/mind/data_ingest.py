@@ -95,6 +95,65 @@ def records_to_passages(rows, fields, limit, seen=None):
 # --------------------------------------------------------------------------- #
 # sources
 # --------------------------------------------------------------------------- #
+def fact_to_question(s):
+    """Turn a clean statement into the question it answers, so it can be trained as a
+    skill (respond to a prompt), not just as text to continue."""
+    s = s.strip()
+    m = re.match(r"^(A|An|The)?\s*([A-Za-z][\w /-]{1,40}?)\s+(is|are)\s+", s)
+    if m:
+        art = (m.group(1).lower() + " ") if m.group(1) else ""   # reuse the real article
+        subj = m.group(2).strip()
+        # lowercase an ordinary word, but keep acronyms (OSPF, VLAN, RAM) as-is
+        if not subj.isupper():
+            subj = subj[0].lower() + subj[1:]
+        return f"What {m.group(3)} {art}{subj}?"
+    m = re.match(r"^([A-Za-z][\w /-]{1,40}?)\s+causes\s+(.+?)\.?$", s)
+    if m:
+        return f"What does {m.group(1).strip()} cause?"
+    m = re.match(r"^([A-Za-z][\w /-]{1,40}?)\s+(?:lets|allows|enables|helps)\s+", s)
+    if m:
+        return f"What does {m.group(1).strip()} do?"
+    return None
+
+
+def build_skills(out=None, repeat=3):
+    """Build a question->answer 'skills' corpus from Vio's clean curated facts, so the
+    model learns the pattern of answering a question — the seed of a skill. Repeated a
+    few times so it isn't drowned by a large raw-text corpus during training."""
+    import glob
+    out = out or os.path.join(DATA_DIR, "corpus", "skills.txt")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    facts, seen = [], set()
+    for p in sorted(glob.glob(os.path.join(HERE, "datasets", "*.md"))):
+        if os.path.basename(p).lower() == "readme.md":
+            continue
+        for line in open(p, encoding="utf-8", errors="ignore").read().splitlines():
+            s = line.strip()
+            if (len(s.split()) >= 5 and re.search(r"[.!?]$", s)
+                    and not s.startswith(("#", "|", "-", "*", ">"))):
+                k = s.lower()[:60]
+                if k not in seen:
+                    seen.add(k); facts.append(s)
+    pairs = []
+    for s in facts:
+        q = fact_to_question(s)
+        if q:
+            pairs.append(f"Question: {q}\nAnswer: {s}\n")
+    if not pairs:
+        print("No facts found to build skills from."); return out
+    block = "\n".join(pairs)
+    with open(out, "w", encoding="utf-8") as fh:
+        for _ in range(repeat):                        # repeat so the skill format sticks
+            fh.write(block + "\n")
+    print(f"✓ built {len(pairs)} question->answer skills (x{repeat} = {len(pairs)*repeat} "
+          f"examples) -> {out}")
+    print("  Sample:\n    " + pairs[0].replace("\n", "\n    "))
+    print("  Train the skill (small + fast; skills-only):")
+    print(f"    python train_model.py --preset small --extra \"{out}\" --steps 2000 "
+          f"--batch 24 --patience 6")
+    return out
+
+
 def pull_huggingface(name, config, fields, limit):
     try:
         from datasets import load_dataset
@@ -157,6 +216,70 @@ def clean_rfc(text):
     text = "\n".join(out)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+def clean_prose(text):
+    """Keep only natural-language PROSE, dropping the noise a small model shouldn't waste
+    its capacity on: ASCII diagrams, packet-format tables, indented code/pseudo-code,
+    tables of contents, and reference lists. Returns clean paragraphs.
+
+    The test each line must pass: it reads like a sentence — mostly letters and spaces,
+    not a picture made of +---+ | . _ characters or a row of columns."""
+    keep = []
+    for raw in text.replace("\r", "").split("\n"):
+        s = raw.rstrip()
+        if not s.strip():
+            keep.append("")                            # blank line = paragraph break
+            continue
+        core = s.strip()
+        letters = sum(c.isalpha() for c in core)
+        # 1) too few letters relative to length -> a diagram/table/number row
+        if letters < len(core) * 0.55:
+            continue
+        # 2) ASCII-art / table drawing characters
+        if re.search(r"[|+_]{2,}|\+--|--\+|[.|]{4,}", core):
+            continue
+        # 3) deep indentation = code / diagram body (prose wraps near the left margin)
+        if len(s) - len(s.lstrip()) >= 6:
+            continue
+        # 4) column layout: two or more big internal gaps = a table row
+        if len(re.findall(r"\S {3,}\S", core)) >= 2:
+            continue
+        # 5) reference / TOC lines: "[12] Author, ..." or "... . . . 42"
+        if re.match(r"^\[?\d+[\].]", core) or re.search(r"\.\s*\.\s*\.\s*\d+\s*$", core):
+            continue
+        # 6) must contain at least a few real words and a lowercase run (prose, not a header)
+        if len(re.findall(r"[a-zA-Z]{3,}", core)) < 4 or not re.search(r"[a-z]{3,}", core):
+            continue
+        keep.append(core)
+    # rejoin wrapped lines into paragraphs (blank line separates paragraphs)
+    text = "\n".join(keep)
+    text = re.sub(r"[ \t]*\n[ \t]*(?=[a-z(])", " ", text)   # unwrap mid-sentence breaks
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def clean_folder(src, dst=None):
+    """Re-clean an existing text corpus (e.g. downloaded RFCs) into prose-only files —
+    turns noisy raw text into the clean data a small model learns best from."""
+    import glob
+    dst = dst or (src.rstrip("/\\") + "_clean")
+    os.makedirs(dst, exist_ok=True)
+    files = [p for p in glob.glob(os.path.join(src, "**", "*"), recursive=True)
+             if p.lower().endswith((".txt", ".md", ".rst"))]
+    raw_mb = clean_mb = 0
+    for p in files:
+        raw = open(p, encoding="utf-8", errors="ignore").read()
+        prose = clean_prose(raw)
+        if len(prose) > 500:
+            open(os.path.join(dst, os.path.basename(p)), "w", encoding="utf-8").write(prose)
+            raw_mb += len(raw) / 1e6
+            clean_mb += len(prose) / 1e6
+    print(f"✓ cleaned {len(files)} files: {raw_mb:.1f} MB raw -> {clean_mb:.1f} MB clean prose")
+    print(f"  in {dst}")
+    print(f"  Train on the clean version:  python train_model.py --preset small "
+          f"--extra \"{dst}\" --steps 3000 --batch 24 --patience 6")
+    return dst
 
 
 def pull_rfcs(count=200, start=1, out_dir=None, quiet=False):
@@ -229,6 +352,13 @@ def main(argv=None):
     p_rfc.add_argument("--start", type=int, default=1, help="starting RFC number")
     p_rfc.add_argument("--out", default=None)
 
+    p_cl = sub.add_parser("clean", help="strip a text corpus down to clean prose")
+    p_cl.add_argument("src", help="folder of .txt/.md files to clean (e.g. corpus/rfc)")
+    p_cl.add_argument("--out", default=None)
+
+    p_sk = sub.add_parser("skills", help="build a question->answer skills corpus for training")
+    p_sk.add_argument("--out", default=None)
+
     p_pre = sub.add_parser("preset", help="one of the curated datasets")
     p_pre.add_argument("name"); p_pre.add_argument("--n", type=int, default=1000)
     sub.add_parser("list", help="show curated datasets")
@@ -242,6 +372,12 @@ def main(argv=None):
         return
     if a.cmd == "rfc":
         pull_rfcs(a.n, a.start, a.out)
+        return
+    if a.cmd == "clean":
+        clean_folder(a.src, a.out)
+        return
+    if a.cmd == "skills":
+        build_skills(a.out)
         return
     if a.cmd == "preset":
         src, nm, cfg, fields, _ = CURATED[a.name]
