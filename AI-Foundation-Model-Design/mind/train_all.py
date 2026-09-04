@@ -24,6 +24,16 @@ import glob
 import os
 import sys
 
+# Windows consoles default to a legacy codepage (cp1252) that can't encode the
+# ✓ → • characters in our progress messages, which would crash the run with a
+# UnicodeEncodeError. Force UTF-8 output so printing can never take training
+# down, whatever the console's codepage.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("VIO_DATA_DIR", HERE)
 

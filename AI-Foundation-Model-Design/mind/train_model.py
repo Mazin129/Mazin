@@ -30,6 +30,14 @@ import glob
 import os
 import sys
 
+# Force UTF-8 output so ✓ → • in progress messages never crash on a legacy
+# Windows console (cp1252) with UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("VIO_DATA_DIR", HERE)
 MODEL_DIR = os.path.join(DATA_DIR, "own_model")
