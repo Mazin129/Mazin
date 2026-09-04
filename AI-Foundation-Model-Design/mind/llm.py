@@ -32,12 +32,14 @@ import urllib.request
 
 URL = os.environ.get("VIO_LLM_URL", "http://localhost:11434")
 MODEL = os.environ.get("VIO_LLM_MODEL", "")          # empty → auto-pick from installed
-# preference order when auto-picking an installed model. "vio-net" is your own
-# fine-tuned model (Qwen2.5 taught your networking/security data) — prefer it whenever
-# it's installed, then fall back to the best general reasoners. Set VIO_LLM_MODEL to
-# override. If vio-net isn't installed, it's simply skipped.
-_PREFER = ("vio-net", "vio", "llama3.1", "llama3.2", "qwen2.5", "qwen2", "mistral",
-           "gemma2", "phi3", "llama3", "llama2")
+# preference order when auto-picking an installed model (best general reasoners first).
+# NOTE: a narrow fine-tune on a few hundred terse pairs tends to DAMAGE a base model
+# (overfitting → degenerate, tautological answers), so we do NOT auto-prefer a local
+# fine-tune here. A capable base model + retrieval over your data is the reliable path.
+# You can still force any model explicitly with VIO_LLM_MODEL=<name> (e.g. a good
+# fine-tune you've validated).
+_PREFER = ("llama3.1", "llama3.2", "qwen2.5", "qwen2", "mistral", "gemma2", "phi3",
+           "llama3", "llama2")
 
 
 class LLM:
