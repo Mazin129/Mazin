@@ -1469,7 +1469,12 @@ class Mind:
                 "explained", "describe", "description", "example", "examples",
                 "reason", "reasons", "benefit", "benefits", "point", "idea"}
         words = [w for w in re.findall(r"\w+", low) if len(w) > 2 and w not in STOP]
-        hits = [(d, s) for d, s in self.lib.search(q, k=6) if s > 0.10]
+        # Retrieve a broad candidate set: with a reasoning LLM we prefer RECALL — give it
+        # enough passages that the right one (e.g. a specific just-taught document) is in
+        # the pile even when generic facts share the query's common words — and let the
+        # model pick. Semantic re-rank (install sentence-transformers) sharpens the order.
+        k = 12 if (self.llm is not None and self.llm.available) else 6
+        hits = [(d, s) for d, s in self.lib.search(q, k=k) if s > 0.10]
         # PRECISION GATE: don't answer from a passage that only shares a common word
         # with the question (e.g. "who won the 2050 world cup" matching "the largest
         # desert in the world" on just "world"). Trust a hit only if it is strong, or
