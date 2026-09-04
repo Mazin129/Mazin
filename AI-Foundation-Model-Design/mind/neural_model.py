@@ -331,6 +331,15 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
         val_d = train_d
     log(f"tokens: {len(data)} (train {len(train_d)}, val {len(val_d)}) · vocab {tok.size}")
 
+    # THE fix for a starved GPU: keep the whole token stream resident on the GPU as
+    # int16 (every preset's vocab < 32768), so building a batch is pure GPU indexing —
+    # no Python loop, no host→device copy per step. Previously each step waited on the
+    # CPU to slice and transfer the batch, leaving the GPU idle ~80% of the time.
+    assert cfg.vocab_size <= 32768
+    train_d = train_d.to(torch.int16).to(dev)
+    val_d = val_d.to(torch.int16).to(dev)
+    _ar = torch.arange(cfg.block_size, device=dev)
+
     model = GPT(cfg).to(dev)
     log(f"model parameters: {model.num_params()/1e6:.1f}M")
     opt = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
@@ -352,13 +361,13 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
 
     def batch(split):
         d = train_d if split == "train" else val_d
-        # every window must be exactly block_size long, so the last valid start is
-        # len(d) - block_size - 1 (leaving room for the shifted target).
-        hi = max(1, len(d) - cfg.block_size - 1)
-        ix = torch.randint(hi, (batch_size,))
-        x = torch.stack([d[i:i + cfg.block_size] for i in ix])
-        y = torch.stack([d[i + 1:i + 1 + cfg.block_size] for i in ix])
-        return x.to(dev), y.to(dev)
+        # last valid window start leaves room for the block plus its shifted target.
+        hi = max(1, d.numel() - cfg.block_size - 1)
+        ix = torch.randint(hi, (batch_size, 1), device=dev)   # (B,1) start offsets, on GPU
+        rows = ix + _ar                                        # (B, block_size) index matrix
+        x = d[rows].long()                                    # gather windows on the GPU
+        y = d[rows + 1].long()
+        return x, y
 
     # mixed precision: on a CUDA GPU, do the math in fp16 — ~1.5-2x faster and roughly
     # half the memory, so a bigger model fits. No effect (and no risk) on CPU.
