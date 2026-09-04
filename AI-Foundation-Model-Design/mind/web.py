@@ -63,6 +63,9 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  .pill{font-size:11px;color:var(--dim);border:1px solid var(--line);padding:5px 10px;border-radius:20px;
        background:var(--panel);white-space:nowrap}
  .pill b{color:var(--accent)}
+ .pill.brain{border-color:var(--line)}
+ .pill.brain.live{border-color:color-mix(in srgb,var(--ok) 55%,var(--line));color:var(--ok)}
+ .pill.brain.live b{color:var(--ok)}
  .iconbtn{border:1px solid var(--line);background:var(--panel);color:var(--txt);border-radius:10px;
           padding:8px 11px;font-size:13px;cursor:pointer;transition:.15s}
  .iconbtn:hover{border-color:var(--accent);transform:translateY(-1px)}
@@ -78,9 +81,22 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  .me .bubble{background:var(--user);color:#fff;border-bottom-right-radius:5px}
  .bot .bubble{background:var(--bot);border:1px solid var(--line);border-bottom-left-radius:5px}
  .bubble.rtl{direction:rtl;text-align:right}
+ .bot .bubble{white-space:normal}                 /* rendered markdown flows as blocks */
  .bubble code{background:rgba(130,150,190,.18);padding:1px 6px;border-radius:6px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
- .bubble pre{background:#0a0d14;border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-x:auto;margin:6px 0}
- .bubble pre code{background:none;padding:0}
+ .bubble pre{position:relative;background:#0a0d14;border:1px solid var(--line);border-radius:10px;padding:12px 12px 10px;overflow-x:auto;margin:8px 0}
+ .bubble pre code{background:none;padding:0;font-size:12.5px;line-height:1.5;color:#dbe4f3}  /* always light: pre bg is always dark */
+ .bubble pre .cp{position:absolute;top:6px;right:6px;font-size:11px;color:var(--dim);background:var(--panel2);
+      border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;opacity:.7}
+ .bubble pre .cp:hover{opacity:1;border-color:var(--accent)}
+ .bubble h4{font-size:14.5px;margin:12px 0 5px;color:var(--txt);font-weight:700}
+ .bubble h4:first-child{margin-top:2px}
+ .bubble ol,.bubble ul{margin:5px 0;padding-left:20px}
+ .bubble li{margin:3px 0;line-height:1.5}
+ .bubble .ln{margin:4px 0;line-height:1.55}
+ .bubble .ln:empty{margin:0}
+ .bubble .lbl{margin:8px 0 4px;line-height:1.55}
+ .bubble .lbl b{color:var(--accent2)}
+ .bubble .lbl:first-child{margin-top:0}
  .meta{font-size:11px;color:var(--dim);margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
  .ok{color:var(--ok)}.no{color:var(--warn)}
  .copy{cursor:pointer;opacity:.6}.copy:hover{opacity:1}
@@ -133,6 +149,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
   <div class="logo">🧠</div>
   <div class="brand"><span id="who">Vio</span><small>local · verified · yours</small></div>
   <div class="grow"></div>
+  <span class="pill brain" id="brain" title="reasoning cortex">🧠 …</span>
   <span class="pill" id="status">model: …</span>
   <button class="iconbtn" onclick="openSkills()">🧩 Skills</button>
   <button class="iconbtn" onclick="train(false)">🎓 Train</button>
@@ -193,13 +210,27 @@ const log=document.getElementById('log'), inp=document.getElementById('inp'),
 let deep=true, busy=false;
 const isAr=t=>/[؀-ۿ]/.test(t);
 const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-function fmt(t){ // minimal, safe markdown: code fences, `inline`, **bold**
- let s=esc(t);
- s=s.replace(/```([\s\S]*?)```/g,(m,c)=>'<pre><code>'+c.replace(/^\n/,'')+'</code></pre>');
- s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
- s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
- return s;
+function fmt(t){ // safe markdown: code fences, headings, lists, labels, bold, inline code
+ const blocks=[];
+ t=t.replace(/```(\w*)\r?\n?([\s\S]*?)```/g,(m,lang,code)=>{
+   blocks.push(code.replace(/\s+$/,''));return '\uE000'+(blocks.length-1)+'\uE000';});
+ const inl=s=>esc(s).replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>');
+ let html='',list=null;
+ const shut=()=>{if(list){html+='</'+list+'>';list=null;}};
+ for(const line of t.split('\n')){
+   let m=line.match(/^\uE000(\d+)\uE000\s*$/);
+   if(m){shut();html+='<pre><span class="cp" onclick="cpCode(this)">copy</span><code>'+esc(blocks[+m[1]])+'</code></pre>';continue;}
+   if(m=line.match(/^\s*#{1,6}\s+(.*)/)){shut();html+='<h4>'+inl(m[1])+'</h4>';continue;}
+   if(m=line.match(/^\s*\d+[.)]\s+(.*)/)){if(list!=='ol'){shut();html+='<ol>';list='ol';}html+='<li>'+inl(m[1])+'</li>';continue;}
+   if(m=line.match(/^\s*[-*•]\s+(.*)/)){if(list!=='ul'){shut();html+='<ul>';list='ul';}html+='<li>'+inl(m[1])+'</li>';continue;}
+   if(m=line.match(/^\s*(Understanding|Logic|Approach|Answer|Note|Root cause|Probability|Summary|Recommendation)\s*:\s*(.*)/i)){
+     shut();html+='<div class="lbl"><b>'+esc(m[1])+':</b> '+inl(m[2])+'</div>';continue;}
+   shut();html+='<div class="ln">'+inl(line)+'</div>';
+ }
+ shut();return html;
 }
+function cpCode(el){navigator.clipboard.writeText(el.parentElement.querySelector('code').textContent);
+ el.textContent='copied';setTimeout(()=>el.textContent='copy',1200);}
 const CHIPS=["solve x^2 - 5x + 6 = 0","15% of 200 and 12 factorial","5 km to miles",
  "integrate 1/x","is 97 prime","learn from github owner/repo","teach: The Nile is the longest river."];
 function renderChips(){document.getElementById('chips').innerHTML=
@@ -294,7 +325,12 @@ async function upload(){
 async function loadStatus(){
  try{const j=await(await fetch('/api/status')).json();
   if(j.name){document.getElementById('who').textContent=j.name;document.title=j.name;}
-  statusEl.innerHTML='model: <b>'+j.vocab+'</b> words · <b>'+j.library+'</b> passages · <b>'+j.skills+'</b> skills · <b>'+(j.memories||0)+'</b> memories';
+  statusEl.innerHTML='<b>'+j.library+'</b> passages · <b>'+(j.memories||0)+'</b> memories';
+  const brain=document.getElementById('brain');
+  if(j.brain){brain.classList.add('live');brain.innerHTML='🧠 <b>'+esc(j.brain)+'</b>'+
+     (j.semantic?' · '+esc(j.semantic):'');brain.title='reasoning cortex: '+j.brain+' (understands & reasons)';}
+  else{brain.classList.remove('live');brain.innerHTML='🧠 lexical only';
+     brain.title='No local LLM detected — run: ollama pull llama3.1, then restart. Currently keyword-based.';}
  }catch(e){}
 }
 async function train(withChat){
@@ -373,9 +409,12 @@ MAX_BODY = 32 * 1024 * 1024
 
 def _status():
     st = MIND.thinker.stats()
+    llm = getattr(MIND, "llm", None)
     return {"name": MIND.name(), "vocab": st["vocab"], "library": len(MIND.lib.docs),
             "contexts": st["contexts"], "skills": len(MIND.skills.skills),
-            "memories": len(MIND.episodic.episodes), "gaps": len(MIND.curiosity.gaps)}
+            "memories": len(MIND.episodic.episodes), "gaps": len(MIND.curiosity.gaps),
+            "brain": (llm.model if (llm and llm.available) else None),
+            "semantic": (MIND.lib.sem.backend if getattr(MIND.lib, "sem", None) else None)}
 
 
 def _idle_consolidator():
