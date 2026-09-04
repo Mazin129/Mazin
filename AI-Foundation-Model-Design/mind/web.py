@@ -264,6 +264,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
      <button class="navbtn" onclick="openMem()"><span>📚</span> Memory</button>
      <a class="navbtn" href="/dashboard"><span>📊</span> Brain dashboard</a>
      <button class="navbtn" onclick="document.getElementById('file').click()"><span>📄</span> Teach a file</button>
+     <button class="navbtn" onclick="teachFolder()"><span>📁</span> Teach a folder</button>
      <input type="file" id="file" accept=".txt,.md,.text,.csv,.log,.pdf" hidden onchange="upload()">
    </nav>
    <div class="side-foot">
@@ -462,6 +463,25 @@ async function upload(){
  const j=await(await fetch('/api/learn',{method:'POST',headers:{'Content-Type':'application/json'},body})).json();
  finalize(b,{answer:j.answer,how:'learned from file',verified:true});
  document.getElementById('file').value='';loadStatus();
+}
+// Bulk-ingest a whole folder of documents (PDFs, configs, cheat sheets) by path.
+async function teachFolder(){
+ const path=prompt('Full path to a folder of documents\\n(PDFs, manuals, configs, cheat sheets):');
+ if(!path)return;
+ document.getElementById('side').classList.remove('open');
+ const {b}=bubble('bot');b.innerHTML='<span class="dots"><span></span><span></span><span></span></span>';
+ let j;
+ try{j=await(await fetch('/api/learn_folder',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({path})})).json();}catch(e){finalize(b,{answer:'⚠️ Could not reach the server.',how:'error',verified:false});return;}
+ let msg;
+ if(!j.ok){msg='⚠️ '+(j.answer||('Nothing learned from '+path+'. Put PDFs/text/configs in it and retry.'));}
+ else{
+   msg='📁 Learned **'+j.passages+'** passages from **'+j.files+'** file(s).';
+   if(j.per&&j.per.length)msg+='\\n\\n'+j.per.map(p=>'- '+p[0]+' — '+p[1]).join('\\n');
+   if(j.skipped&&j.skipped.length)msg+='\\n\\n**Skipped:**\\n'+j.skipped.map(s=>'- '+s[0]+' — '+s[1]).join('\\n');
+ }
+ finalize(b,{answer:msg,how:'learned from folder',verified:!!j.ok});
+ loadStatus();
 }
 async function loadStatus(){
  try{const j=await(await fetch('/api/status')).json();
@@ -772,6 +792,13 @@ class H(BaseHTTPRequestHandler):
                     return
             msg = MIND.learn_text(text, name)
             self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
+
+        elif self.path == "/api/learn_folder":
+            path = (body.get("path") or "").strip().strip('"')
+            res = (MIND.learn_folder(path) if path else
+                   {"ok": False, "answer": "No folder path given.", "files": 0,
+                    "passages": 0, "skipped": [], "per": []})
+            self._s(200, json.dumps(res, ensure_ascii=False))
 
         elif self.path == "/api/train":
             chat = body.get("chat")

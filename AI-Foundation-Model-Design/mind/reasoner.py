@@ -843,6 +843,104 @@ class Mind:
                     chunks.extend(sents or [joined])
         return chunks or [text.strip()]
 
+    @staticmethod
+    def _looks_like_config(text):
+        """A device config/running-config, not prose: mostly config/set/edit/interface
+        lines. Such files must be chunked by stanza, never sentence-split."""
+        lines = [l for l in text.splitlines() if l.strip()]
+        if len(lines) < 5:
+            return False
+        cfg = sum(1 for l in lines if re.match(
+            r"^\s*(config|edit|set|unset|next|end|interface|ip |no |!|hostname|"
+            r"router |access-list|policy|object|rule)\b", l, re.I))
+        return cfg >= len(lines) * 0.4
+
+    def _chunk_config(self, text):
+        """Keep each config stanza WHOLE: a FortiGate `config … end` (with nested
+        `edit … next`) or a Cisco `!`-delimited / indented block becomes one passage,
+        so a policy's settings never get split across passages or sentence-mangled."""
+        chunks, cur, depth = [], [], 0
+
+        def flush():
+            blk = "\n".join(cur).strip()
+            if blk:
+                chunks.append(blk)
+            cur.clear()
+
+        for l in text.splitlines():
+            st = l.strip()
+            if not st or st == "!":                       # blank / Cisco '!' = boundary
+                if depth == 0:
+                    flush()
+                else:
+                    cur.append(l)
+                continue
+            if re.match(r"^(config|edit)\b", st, re.I):
+                if depth == 0:
+                    flush()
+                cur.append(l); depth += 1; continue
+            if re.match(r"^(end|next)\b", st, re.I):
+                cur.append(l); depth = max(0, depth - 1)
+                if depth == 0:
+                    flush()
+                continue
+            if depth == 0 and cur and not l.startswith((" ", "\t")):
+                flush()                                   # Cisco: new top-level section
+            cur.append(l)
+        flush()
+        return chunks or [text.strip()]
+
+    def learn_folder(self, path, recursive=True):
+        """Bulk-ingest every readable document in a folder — PDFs, text, markdown,
+        config/running-config and log files — into the library in ONE batch (one
+        retrain). Configs are chunked by stanza; prose is chunked normally; CSVs load
+        as tables. Reads only; never executes anything. Returns a summary dict."""
+        import glob
+        exts = (".pdf", ".txt", ".md", ".markdown", ".text", ".rst", ".cfg", ".conf",
+                ".config", ".log", ".ini", ".yaml", ".yml", ".csv", ".tsv")
+        if not os.path.isdir(path):
+            return {"ok": False, "answer": f"Not a folder: {path}", "files": 0,
+                    "passages": 0, "skipped": [], "per": []}
+        pattern = os.path.join(path, "**", "*") if recursive else os.path.join(path, "*")
+        files = sorted(p for p in glob.glob(pattern, recursive=recursive)
+                       if os.path.isfile(p) and os.path.splitext(p)[1].lower() in exts)
+        all_chunks, per, skipped, learned = [], [], [], 0
+        for fp in files:
+            name = os.path.basename(fp)
+            ext = os.path.splitext(fp)[1].lower()
+            try:
+                if ext == ".pdf":
+                    from pdftext import extract_text, looks_readable
+                    with open(fp, "rb") as fh:
+                        text = extract_text(fh.read())
+                    if not looks_readable(text):
+                        skipped.append((name, "unreadable PDF (scanned/encoded)")); continue
+                elif ext in (".csv", ".tsv"):
+                    with open(fp, encoding="utf-8", errors="ignore") as fh:
+                        self.load_csv(fh.read(), name)
+                    per.append((name, "loaded as table")); learned += 1; continue
+                else:
+                    with open(fp, encoding="utf-8", errors="ignore") as fh:
+                        text = fh.read()
+            except Exception as e:
+                skipped.append((name, str(e)[:60])); continue
+            if len((text or "").strip()) < 20:
+                skipped.append((name, "empty / too short")); continue
+            if self._looks_like_config(text):
+                chunks = self._chunk_config(text)
+            else:
+                chunks = self._chunk(self._denoise(text))
+            all_chunks.extend(chunks)
+            self.graph.learn_text(text)
+            per.append((name, f"{len(chunks)} passages")); learned += 1
+        if all_chunks:
+            self.lib.add_many(all_chunks)
+            self._retrain()
+        self.mem["last_learned"] = {"source": f"folder:{path}", "count": len(all_chunks)}
+        self._save()
+        return {"ok": learned > 0, "files": learned, "passages": len(all_chunks),
+                "skipped": skipped, "per": per, "path": path}
+
     def teach(self, text):                 # add durable knowledge to the library
         text = self._denoise(text)         # strip leaked command prefixes / skill blobs
         chunks = self._chunk(text)
