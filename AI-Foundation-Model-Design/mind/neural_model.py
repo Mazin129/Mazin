@@ -166,23 +166,46 @@ class GPTConfig:
     dropout: float = 0.1
 
 
+class CausalSelfAttention(nn.Module):
+    """Multi-head causal self-attention using PyTorch's fused scaled_dot_product_attention
+    — the flash / memory-efficient kernel. Much faster than a hand-rolled softmax-matmul
+    and far lighter on memory (no T×T score matrix materialised), which is what lets a
+    small laptop GPU take a bigger batch and stay busy."""
+    def __init__(self, cfg):
+        super().__init__()
+        assert cfg.n_embd % cfg.n_head == 0
+        self.n_head = cfg.n_head
+        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd)
+        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd)
+        self.dropout = cfg.dropout
+
+    def forward(self, x):
+        B, T, C = x.shape
+        q, k, v = self.qkv(x).split(C, dim=2)
+        h = self.n_head
+        q = q.view(B, T, h, C // h).transpose(1, 2)
+        k = k.view(B, T, h, C // h).transpose(1, 2)
+        v = v.view(B, T, h, C // h).transpose(1, 2)
+        y = F.scaled_dot_product_attention(q, k, v, is_causal=True,
+                                           dropout_p=self.dropout if self.training else 0.0)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.proj(y)
+
+
 class Block(nn.Module):
     """One transformer block: causal self-attention + MLP, both with residuals."""
     def __init__(self, cfg):
         super().__init__()
         self.ln1 = nn.LayerNorm(cfg.n_embd)
-        self.attn = nn.MultiheadAttention(cfg.n_embd, cfg.n_head, dropout=cfg.dropout,
-                                          batch_first=True)
+        self.attn = CausalSelfAttention(cfg)
         self.ln2 = nn.LayerNorm(cfg.n_embd)
         self.mlp = nn.Sequential(
             nn.Linear(cfg.n_embd, 4 * cfg.n_embd), nn.GELU(),
             nn.Linear(4 * cfg.n_embd, cfg.n_embd), nn.Dropout(cfg.dropout),
         )
 
-    def forward(self, x, mask):
-        h = self.ln1(x)
-        a, _ = self.attn(h, h, h, attn_mask=mask, need_weights=False)
-        x = x + a
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -215,9 +238,8 @@ class GPT(nn.Module):
         B, T = idx.shape
         pos = torch.arange(T, device=idx.device)
         x = self.drop(self.tok(idx) + self.pos(pos))
-        mask = torch.triu(torch.ones(T, T, device=idx.device, dtype=torch.bool), 1)
-        for blk in self.blocks:
-            x = blk(x, mask)
+        for blk in self.blocks:               # causality is handled inside attention now
+            x = blk(x)
         logits = self.head(self.lnf(x))
         loss = None
         if targets is not None:
@@ -341,7 +363,10 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     # mixed precision: on a CUDA GPU, do the math in fp16 — ~1.5-2x faster and roughly
     # half the memory, so a bigger model fits. No effect (and no risk) on CPU.
     use_amp = (dev == "cuda")
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    try:
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)      # torch >= 2.4
+    except (AttributeError, TypeError):
+        scaler = torch.cuda.amp.GradScaler(enabled=use_amp)         # older torch
     if resuming and "scaler" in ck:                    # restore fp16 loss-scale state
         scaler.load_state_dict(ck["scaler"])
 
@@ -351,6 +376,7 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     every = max(1, min(save_every, steps // 20 or 1))
     model.train()
     step = start_step - 1
+    t_mark, s_mark = time.time(), start_step - 1
     try:
         for step in range(start_step, steps + 1):
             x, y = batch("train")
@@ -383,7 +409,16 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
                         log(f"    Best weights (val {best_val:.3f}) are already saved and "
                             f"are what you keep. More data helps; more steps will not.")
                 checkpoint(step, best_val)
-                log(f"  step {step}/{steps}  train {loss.item():.3f}  val {vl:.3f}{star}")
+                # live throughput + ETA, so a long run visibly progresses instead of
+                # looking stuck — and you can decide whether to wait or stop.
+                now = time.time()
+                sps = (step - s_mark) / max(now - t_mark, 1e-9)
+                t_mark, s_mark = now, step
+                tok_s = sps * batch_size * cfg.block_size
+                eta = (steps - step) / max(sps, 1e-9)
+                eta_s = f"{eta/60:.0f}m" if eta >= 60 else f"{eta:.0f}s"
+                log(f"  step {step}/{steps}  train {loss.item():.3f}  val {vl:.3f}{star}"
+                    f"   ·  {sps:.1f} it/s · {tok_s/1000:.0f}k tok/s · ETA {eta_s}")
                 if patience and worse >= patience:
                     log(f"  ⏹ early stop: no improvement in {patience} checks.")
                     break
