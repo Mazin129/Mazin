@@ -38,50 +38,74 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Vio</title>
 <style>
  :root{
-   --bg:#0b0e14; --bg2:#0f131c; --panel:#141a26; --panel2:#1a2231; --line:#243044;
-   --txt:#e7ecf3; --dim:#93a0b4; --accent:#5b8cff; --accent2:#7c5cff;
-   --user:linear-gradient(135deg,#3b6ef5,#6b4dff); --bot:#161d2b;
-   --ok:#37d67a; --warn:#f4b740; --radius:16px; --hdr:rgba(20,26,38,.55);
+   --bg:#0a0d13; --panel:#111722; --panel2:#171f2d; --line:#232d40;
+   --txt:#e9eef6; --dim:#8b98ad; --accent:#5b8cff; --accent2:#8b6dff;
+   --user:linear-gradient(135deg,#3b6ef5,#7b53ff); --bot:#141b28;
+   --ok:#3dd882; --warn:#f4b740; --bad:#f0687f; --radius:18px;
+   --side:#0d121c; --shadow:0 8px 30px rgba(0,0,0,.35);
  }
- @media (prefers-color-scheme:light){
-   :root{--bg:#eef1f7;--bg2:#e7ecf5;--panel:#ffffff;--panel2:#f2f5fb;--line:#dde3ee;
-         --txt:#131722;--dim:#5b6675;--bot:#f1f4fa;--hdr:rgba(255,255,255,.7);}
- }
+ @media (prefers-color-scheme:light){:root:not([data-theme=dark]){
+   --bg:#f6f8fc;--panel:#ffffff;--panel2:#f1f4fa;--line:#e2e8f2;--txt:#141a24;--dim:#5c6675;
+   --bot:#ffffff;--side:#f0f3f9;--shadow:0 8px 30px rgba(20,30,60,.10);}}
+ :root[data-theme=light]{--bg:#f6f8fc;--panel:#fff;--panel2:#f1f4fa;--line:#e2e8f2;--txt:#141a24;
+   --dim:#5c6675;--bot:#fff;--side:#f0f3f9;--shadow:0 8px 30px rgba(20,30,60,.10);}
  *{box-sizing:border-box}
  html,body{height:100%;margin:0}
- body{font-family:'Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
-      background:radial-gradient(1200px 700px at 80% -10%,rgba(124,92,255,.18),transparent 60%),
-                 radial-gradient(900px 600px at -10% 110%,rgba(91,140,255,.16),transparent 55%),var(--bg);
-      color:var(--txt);display:flex;flex-direction:column}
- header{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line);
-        backdrop-filter:blur(8px);background:var(--hdr);position:sticky;top:0;z-index:5}
- .logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:20px;
-       background:var(--user);box-shadow:0 4px 18px rgba(91,140,255,.45)}
- .brand{font-weight:700;font-size:17px;letter-spacing:.2px}
- .brand small{display:block;font-weight:400;font-size:11px;color:var(--dim)}
+ body{font-family:'Inter','Segoe UI',system-ui,-apple-system,Roboto,Arial,sans-serif;
+      background:var(--bg);color:var(--txt);font-size:14.5px}
  .grow{flex:1}
- .pill{font-size:11px;color:var(--dim);border:1px solid var(--line);padding:5px 10px;border-radius:20px;
-       background:var(--panel);white-space:nowrap}
- .pill b{color:var(--accent)}
- .pill.brain{border-color:var(--line)}
- .pill.brain.live{border-color:color-mix(in srgb,var(--ok) 55%,var(--line));color:var(--ok)}
- .pill.brain.live b{color:var(--ok)}
- .iconbtn{border:1px solid var(--line);background:var(--panel);color:var(--txt);border-radius:10px;
-          padding:8px 11px;font-size:13px;cursor:pointer;transition:.15s}
- .iconbtn:hover{border-color:var(--accent);transform:translateY(-1px)}
- main{flex:1;display:flex;flex-direction:column;max-width:900px;width:100%;margin:0 auto;padding:0 14px;min-height:0}
- #log{flex:1;overflow-y:auto;padding:18px 4px;display:flex;flex-direction:column;gap:14px}
- .row{display:flex;gap:10px;align-items:flex-end;max-width:92%}
- .row.me{align-self:flex-end;flex-direction:row-reverse}
- .av{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:15px}
- .av.bot{background:var(--panel2);border:1px solid var(--line)}
+ .app{display:grid;grid-template-columns:262px 1fr;height:100vh;overflow:hidden}
+ /* ---- sidebar ---- */
+ .side{background:var(--side);border-right:1px solid var(--line);display:flex;flex-direction:column;
+       padding:14px 12px;gap:14px;z-index:30;transition:transform .22s}
+ .brandrow{display:flex;align-items:center;gap:11px}
+ .logo{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;font-size:20px;
+       background:var(--user);box-shadow:0 4px 20px rgba(91,110,245,.5)}
+ .brand{font-weight:750;font-size:17px;letter-spacing:.2px}
+ .brand small{display:block;font-weight:400;font-size:11px;color:var(--dim);letter-spacing:.3px}
+ .newchat{margin-top:2px;width:100%;border:1px solid var(--line);background:var(--panel);color:var(--txt);
+       border-radius:12px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
+ .newchat:hover{border-color:var(--accent);background:var(--panel2)}
+ .nav{display:flex;flex-direction:column;gap:3px}
+ .navbtn{display:flex;align-items:center;gap:11px;text-decoration:none;text-align:left;
+       border:0;background:transparent;color:var(--dim);border-radius:10px;padding:10px 11px;
+       font-size:14px;cursor:pointer;transition:.13s;font-family:inherit}
+ .navbtn span{font-size:16px;width:20px;text-align:center}
+ .navbtn:hover{background:var(--panel2);color:var(--txt)}
+ .side-foot{margin-top:auto;display:flex;flex-direction:column;gap:9px}
+ .brain-card{border:1px solid var(--line);border-radius:12px;padding:9px 11px;font-size:12px;color:var(--dim);
+       background:var(--panel);font-family:ui-monospace,Consolas,monospace}
+ .brain-card.live{border-color:color-mix(in srgb,var(--ok) 50%,var(--line));color:var(--ok);
+       box-shadow:0 0 0 1px color-mix(in srgb,var(--ok) 25%,transparent)}
+ .brain-card b{color:inherit}
+ .stat{font-size:11.5px;color:var(--dim);padding:0 3px}
+ .stat b{color:var(--txt)}
+ .theme{position:absolute;top:16px;right:14px;border:1px solid var(--line);background:var(--panel);
+       color:var(--txt);width:32px;height:32px;border-radius:9px;cursor:pointer;font-size:14px}
+ /* ---- chat area ---- */
+ .chatwrap{display:flex;flex-direction:column;min-width:0;height:100vh;position:relative;
+       background:radial-gradient(1100px 600px at 85% -15%,rgba(124,100,255,.10),transparent 60%),var(--bg)}
+ .topbar{display:none;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+ .ham{border:1px solid var(--line);background:var(--panel);color:var(--txt);border-radius:9px;
+       width:36px;height:36px;font-size:16px;cursor:pointer}
+ .topname{font-weight:700}
+ .brain-mini{font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+ #log{flex:1;overflow-y:auto;padding:26px 18px;display:flex;flex-direction:column;gap:20px;
+       max-width:820px;width:100%;margin:0 auto;scroll-behavior:smooth}
+ .row{display:flex;gap:12px;align-items:flex-start;animation:rise .32s ease}
+ @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+ .row.me{flex-direction:row-reverse}
+ .av{width:32px;height:32px;border-radius:10px;flex:none;display:grid;place-items:center;font-size:16px}
+ .av.bot{background:linear-gradient(135deg,#1c2536,#141b28);border:1px solid var(--line)}
  .av.me{background:var(--user)}
- .bubble{padding:11px 14px;border-radius:var(--radius);line-height:1.5;white-space:pre-wrap;
-         word-wrap:break-word;overflow-wrap:anywhere;font-size:14.5px;box-shadow:0 2px 12px rgba(0,0,0,.18)}
- .me .bubble{background:var(--user);color:#fff;border-bottom-right-radius:5px}
- .bot .bubble{background:var(--bot);border:1px solid var(--line);border-bottom-left-radius:5px}
+ .bubble{padding:13px 16px;border-radius:var(--radius);line-height:1.55;white-space:pre-wrap;
+         word-wrap:break-word;overflow-wrap:anywhere;font-size:14.5px;max-width:100%}
+ .row.me{align-self:flex-end;max-width:82%}
+ .row.bot{align-self:flex-start;max-width:100%;width:100%}
+ .row.me .bubble{background:var(--user);color:#fff;border-bottom-right-radius:6px;box-shadow:var(--shadow)}
+ .row.bot .bubble{background:var(--bot);border:1px solid var(--line);border-bottom-left-radius:6px;box-shadow:var(--shadow)}
  .bubble.rtl{direction:rtl;text-align:right}
- .bot .bubble{white-space:normal}                 /* rendered markdown flows as blocks */
+ .row.bot .bubble{white-space:normal}             /* rendered markdown flows as blocks */
  .bubble code{background:rgba(130,150,190,.18);padding:1px 6px;border-radius:6px;font-family:ui-monospace,Consolas,monospace;font-size:13px}
  .bubble pre{position:relative;background:#0a0d14;border:1px solid var(--line);border-radius:10px;padding:12px 12px 10px;overflow-x:auto;margin:8px 0}
  .bubble pre code{background:none;padding:0;font-size:12.5px;line-height:1.5;color:#dbe4f3}  /* always light: pre bg is always dark */
@@ -109,23 +133,52 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
             animation:blink 1.2s infinite both}
  .dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
  @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
- .chips{display:flex;gap:8px;flex-wrap:wrap;padding:4px 0 10px}
- .chip{font-size:12.5px;border:1px solid var(--line);background:var(--panel);color:var(--dim);
-       padding:6px 11px;border-radius:20px;cursor:pointer;transition:.15s}
- .chip:hover{border-color:var(--accent);color:var(--txt)}
- .composer{border:1px solid var(--line);background:var(--panel);border-radius:18px;padding:8px;margin:0 0 14px;
-           display:flex;flex-direction:column;gap:8px;box-shadow:0 6px 30px rgba(0,0,0,.25)}
- .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
- .toggle{display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--dim);cursor:pointer;user-select:none;
-         border:1px solid var(--line);border-radius:20px;padding:5px 10px}
- .toggle.on{color:#fff;background:var(--user);border-color:transparent}
- .inrow{display:flex;gap:8px;align-items:flex-end}
+ /* ---- empty / welcome state ---- */
+ .empty{margin:auto;text-align:center;max-width:640px;padding:20px;animation:rise .4s ease}
+ .hero-logo{width:60px;height:60px;border-radius:18px;display:grid;place-items:center;font-size:30px;
+       margin:0 auto 18px;background:var(--user);box-shadow:0 10px 40px rgba(91,110,245,.45)}
+ .empty h1{font-size:26px;margin:0 0 8px;letter-spacing:-.01em}
+ .empty p{color:var(--dim);font-size:14.5px;margin:0 auto 26px;max-width:460px;line-height:1.55}
+ .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;text-align:left}
+ .qcard{border:1px solid var(--line);background:var(--panel);border-radius:14px;padding:14px 15px;
+       cursor:pointer;transition:.15s}
+ .qcard:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow)}
+ .qcard .qi{font-size:18px;margin-bottom:7px}
+ .qcard .qt{font-size:13.5px;font-weight:600;line-height:1.4}
+ .qcard .qs{font-size:12px;color:var(--dim);margin-top:3px}
+ /* ---- composer ---- */
+ .composer-wrap{padding:6px 18px 16px;max-width:820px;width:100%;margin:0 auto}
+ .composer{border:1px solid var(--line);background:var(--panel);border-radius:22px;padding:7px 7px 7px 12px;
+           display:flex;align-items:flex-end;gap:8px;box-shadow:var(--shadow);transition:border-color .15s}
+ .composer:focus-within{border-color:var(--accent)}
+ .attach{border:0;background:transparent;color:var(--dim);font-size:18px;cursor:pointer;padding:8px 4px;flex:none;
+         align-self:flex-end;line-height:1}
+ .attach:hover{color:var(--accent)}
  textarea#inp{flex:1;resize:none;border:0;background:transparent;color:var(--txt);font-size:15px;
-              padding:8px 6px;max-height:140px;font-family:inherit;outline:none}
- .send{background:var(--user);border:0;color:#fff;width:42px;height:42px;border-radius:12px;font-size:18px;
-       cursor:pointer;flex:none;display:grid;place-items:center;transition:.15s}
- .send:hover{transform:scale(1.06)}
+              padding:9px 2px;max-height:180px;font-family:inherit;outline:none;line-height:1.5}
+ .toggle{flex:none;align-self:flex-end;display:grid;place-items:center;width:38px;height:38px;font-size:16px;
+         color:var(--dim);cursor:pointer;user-select:none;border:1px solid var(--line);border-radius:11px;transition:.15s}
+ .toggle.on{color:#fff;background:var(--user);border-color:transparent;box-shadow:0 3px 12px rgba(91,110,245,.4)}
+ .toggle:hover{border-color:var(--accent)}
+ .send{background:var(--user);border:0;color:#fff;width:38px;height:38px;border-radius:11px;font-size:17px;
+       cursor:pointer;flex:none;align-self:flex-end;display:grid;place-items:center;transition:.15s}
+ .send:hover{transform:scale(1.07)}
+ .hint{text-align:center;font-size:11.5px;color:var(--dim);margin-top:9px}
  .send:disabled{opacity:.5;cursor:default;transform:none}
+ #log::-webkit-scrollbar{width:10px}
+ #log::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px;border:3px solid transparent;background-clip:padding-box}
+ .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:25;display:none}
+ .backdrop.on{display:block}
+ /* ---- responsive: sidebar becomes an off-canvas drawer ---- */
+ @media (max-width:820px){
+   .app{grid-template-columns:1fr}
+   .side{position:fixed;left:0;top:0;bottom:0;width:262px;transform:translateX(-100%);box-shadow:var(--shadow)}
+   .side.open{transform:none}
+   .topbar{display:flex}
+   .theme{position:static}
+   #log,.composer-wrap{padding-left:14px;padding-right:14px}
+   .cards{grid-template-columns:1fr}
+ }
  /* modal */
  .modal{position:fixed;inset:0;background:rgba(4,6,12,.6);display:none;place-items:center;z-index:20;backdrop-filter:blur(3px)}
  .modal.show{display:grid}
@@ -145,34 +198,56 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  .close{float:right;cursor:pointer;color:var(--dim);font-size:20px;line-height:1}
  .memlist{font-size:13px;color:var(--dim);line-height:1.6}
 </style></head><body>
-<header>
-  <div class="logo">🧠</div>
-  <div class="brand"><span id="who">Vio</span><small>local · verified · yours</small></div>
-  <div class="grow"></div>
-  <span class="pill brain" id="brain" title="reasoning cortex">🧠 …</span>
-  <span class="pill" id="status">model: …</span>
-  <button class="iconbtn" onclick="openSkills()">🧩 Skills</button>
-  <button class="iconbtn" onclick="train(false)">🎓 Train</button>
-  <button class="iconbtn" onclick="openMem()">📚 Memory</button>
-  <a class="iconbtn" href="/dashboard" title="Cognitive dashboard" style="text-decoration:none">📊 Brain</a>
-</header>
-<main>
-  <div id="log"></div>
-  <div class="chips" id="chips"></div>
-  <div class="composer">
-    <div class="toolbar">
-      <div class="toggle on" id="deepT" onclick="toggleDeep()" title="Vio breaks hard questions apart, self-searches, and shows its thinking">
-        <span>🧠</span> Deep solve</div>
-      <button class="iconbtn" onclick="document.getElementById('file').click()" title="Teach me from a .txt/.md/.pdf">📄 Teach a file</button>
-      <input type="file" id="file" accept=".txt,.md,.text,.csv,.log,.pdf" style="display:none" onchange="upload()">
-      <span class="grow"></span>
-    </div>
-    <div class="inrow">
-      <textarea id="inp" rows="1" placeholder="Ask anything, teach a fact, or define a skill… (English / العربية)" autofocus></textarea>
-      <button class="send" id="sendBtn" onclick="send()">➤</button>
-    </div>
-  </div>
-</main>
+<div class="app">
+ <aside class="side" id="side">
+   <div class="side-top">
+     <div class="brandrow">
+       <div class="logo">🧠</div>
+       <div class="brand"><span id="who">Vio</span><small>local · verified · yours</small></div>
+     </div>
+     <button class="newchat" onclick="newChat()">＋ New chat</button>
+   </div>
+   <nav class="nav">
+     <button class="navbtn" onclick="openSkills()"><span>🧩</span> Skills</button>
+     <button class="navbtn" onclick="train(false)"><span>🎓</span> Train model</button>
+     <button class="navbtn" onclick="openMem()"><span>📚</span> Memory</button>
+     <a class="navbtn" href="/dashboard"><span>📊</span> Brain dashboard</a>
+     <button class="navbtn" onclick="document.getElementById('file').click()"><span>📄</span> Teach a file</button>
+     <input type="file" id="file" accept=".txt,.md,.text,.csv,.log,.pdf" hidden onchange="upload()">
+   </nav>
+   <div class="side-foot">
+     <div class="brain-card" id="brain" title="reasoning cortex">🧠 …</div>
+     <div class="stat" id="status">…</div>
+     <button class="theme" onclick="toggleTheme()" id="themeBtn" title="Toggle light/dark">🌙</button>
+   </div>
+ </aside>
+
+ <div class="chatwrap">
+   <div class="topbar">
+     <button class="ham" onclick="document.getElementById('side').classList.toggle('open')">☰</button>
+     <div class="topname">Vio</div>
+     <span class="grow"></span>
+     <div class="brain-mini" id="brainMini"></div>
+   </div>
+   <div id="log">
+     <div class="empty" id="empty">
+       <div class="hero-logo">🧠</div>
+       <h1>How can I help, <span id="heroName">Mazin</span>?</h1>
+       <p>Ask about your stack, reason through a problem, or teach me something. I run on your machine and tell you how sure I am.</p>
+       <div class="cards" id="cards"></div>
+     </div>
+   </div>
+   <div class="composer-wrap">
+     <div class="composer">
+       <button class="attach" onclick="document.getElementById('file').click()" title="Teach a file">📎</button>
+       <textarea id="inp" rows="1" placeholder="Message Vio…  (English / العربية)" autofocus></textarea>
+       <div class="toggle on" id="deepT" onclick="toggleDeep()" title="Deep solve: break hard questions apart and show the thinking">🧠</div>
+       <button class="send" id="sendBtn" onclick="send()">➤</button>
+     </div>
+     <div class="hint">Vio verifies math &amp; cites your data · answers show how sure it is · everything stays local</div>
+   </div>
+ </div>
+</div>
 
 <div class="modal" id="skillsM">
  <div class="card">
@@ -231,12 +306,27 @@ function fmt(t){ // safe markdown: code fences, headings, lists, labels, bold, i
 }
 function cpCode(el){navigator.clipboard.writeText(el.parentElement.querySelector('code').textContent);
  el.textContent='copied';setTimeout(()=>el.textContent='copy',1200);}
-const CHIPS=["solve x^2 - 5x + 6 = 0","15% of 200 and 12 factorial","5 km to miles",
- "integrate 1/x","is 97 prime","learn from github owner/repo","teach: The Nile is the longest river."];
-function renderChips(){document.getElementById('chips').innerHTML=
- CHIPS.map(c=>`<span class="chip" onclick="chip(this)">${esc(c)}</span>`).join('')}
+const CARDS=[
+ {i:'🛡️',t:'FortiGate',s:'What is a VDOM and when do I use one?',q:'What is a VDOM and when do I use one?'},
+ {i:'☁️',t:'AWS security',s:'Security group vs network ACL?',q:'What is the difference between an AWS security group and a network ACL?'},
+ {i:'🔒',t:'IPsec VPN',s:'IKE phase 1 vs phase 2',q:'Explain the difference between IKE phase 1 and phase 2.'},
+ {i:'🧮',t:'Exact math',s:'solve x² − 5x + 6 = 0',q:'solve x^2 - 5x + 6 = 0'},
+];
+function renderChips(){const el=document.getElementById('cards');if(!el)return;
+ el.innerHTML=CARDS.map((c,i)=>`<div class="qcard" onclick="askCard(${i})">
+   <div class="qi">${c.i}</div><div class="qt">${esc(c.t)}</div><div class="qs">${esc(c.s)}</div></div>`).join('');}
+function askCard(i){inp.value=CARDS[i].q;send();}
 function chip(e){inp.value=e.textContent;inp.focus();autosize()}
-function bubble(who){
+function hideEmpty(){const e=document.getElementById('empty');if(e)e.style.display='none';}
+function newChat(){[...log.querySelectorAll('.row')].forEach(r=>r.remove());
+ const e=document.getElementById('empty');if(e)e.style.display='';inp.focus();
+ document.getElementById('side').classList.remove('open');}
+function toggleTheme(){const r=document.documentElement;
+ const cur=r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+ const next=cur==='dark'?'light':'dark';r.setAttribute('data-theme',next);
+ try{localStorage.setItem('vio-theme',next)}catch(e){}
+ document.getElementById('themeBtn').textContent=next==='dark'?'🌙':'☀️';}
+function bubble(who){hideEmpty();
  const row=document.createElement('div');row.className='row '+(who==='me'?'me':'bot');
  const av=document.createElement('div');av.className='av '+(who==='me'?'me':'bot');
  av.textContent=who==='me'?'🧑':'🧠';
@@ -325,12 +415,15 @@ async function upload(){
 async function loadStatus(){
  try{const j=await(await fetch('/api/status')).json();
   if(j.name){document.getElementById('who').textContent=j.name;document.title=j.name;}
-  statusEl.innerHTML='<b>'+j.library+'</b> passages · <b>'+(j.memories||0)+'</b> memories';
-  const brain=document.getElementById('brain');
-  if(j.brain){brain.classList.add('live');brain.innerHTML='🧠 <b>'+esc(j.brain)+'</b>'+
-     (j.semantic?' · '+esc(j.semantic):'');brain.title='reasoning cortex: '+j.brain+' (understands & reasons)';}
-  else{brain.classList.remove('live');brain.innerHTML='🧠 lexical only';
-     brain.title='No local LLM detected — run: ollama pull llama3.1, then restart. Currently keyword-based.';}
+  const hn=document.getElementById('heroName');if(hn&&j.name)hn.textContent=j.name;
+  statusEl.innerHTML='<b>'+j.library+'</b> passages · <b>'+(j.skills||0)+'</b> skills · <b>'+(j.memories||0)+'</b> memories';
+  const brain=document.getElementById('brain'), mini=document.getElementById('brainMini');
+  if(j.brain){brain.classList.add('live');brain.innerHTML='🧠 reasoning · <b>'+esc(j.brain)+'</b>';
+     brain.title='reasoning cortex: '+j.brain+' (understands & reasons)';
+     if(mini)mini.textContent='🧠 '+j.brain;}
+  else{brain.classList.remove('live');brain.innerHTML='🧠 lexical only — install Ollama';
+     brain.title='No local LLM detected — run: ollama pull llama3.1, then restart.';
+     if(mini)mini.textContent='';}
  }catch(e){}
 }
 async function train(withChat){
@@ -397,10 +490,12 @@ function closeM(id){document.getElementById(id).classList.remove('show')}
 async function forget(){await fetch('/api/forget',{method:'POST'});closeM('memM');
  log.innerHTML='';finalize(bubble('bot').b,{answer:'Memory and library cleared.',how:'reset',verified:true});loadStatus();}
 document.querySelectorAll('.modal').forEach(m=>m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('show')}));
+// apply saved theme
+try{const th=localStorage.getItem('vio-theme');
+ if(th){document.documentElement.setAttribute('data-theme',th);
+   document.getElementById('themeBtn').textContent=th==='dark'?'🌙':'☀️';}}catch(e){}
 renderChips();loadStatus();
-finalize(bubble('bot').b,{answer:"Hi! I'm Vio — a local assistant that reasons and verifies, never guesses. "+
- "Ask me math, teach me facts, define skills, or flip on 🧠 Deep solve for harder questions. I'm yours.",
- how:'welcome',verified:true});
+// the hero empty-state is the welcome — no duplicate bubble needed
 </script></body></html>"""
 
 
