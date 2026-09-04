@@ -253,6 +253,10 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     are what get kept as the model, so a late overfitting drift can't spoil the result.
     """
     dev = _device()
+    if dev == "cuda":
+        # let Ampere/Turing GPUs use their tensor cores for matmuls — free speedup
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     ck_path = os.path.join(out_dir, "checkpoint.pt")
     resuming = resume and os.path.exists(ck_path)
 
@@ -267,6 +271,9 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
         log(f"device: {dev}")
         tok = BPETokenizer().train(text, vocab_size=cfg.vocab_size)
 
+    # encoding a large corpus is a one-time cost that can take a minute — say so, so a
+    # big run doesn't look frozen before the first step.
+    log(f"  encoding {len(text)/1e6:.0f} MB corpus (one-time) …")
     data = torch.tensor(tok.encode(text), dtype=torch.long)
     if len(data) < cfg.block_size + 2:
         raise RuntimeError("Not enough text to train — feed the model more data first.")
@@ -295,7 +302,7 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
 
     def checkpoint(step, best):
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(),
-                    "step": step, "best_val": best}, ck_path)
+                    "scaler": scaler.state_dict(), "step": step, "best_val": best}, ck_path)
 
     def batch(split):
         d = train_d if split == "train" else val_d
@@ -307,6 +314,13 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
         y = torch.stack([d[i + 1:i + 1 + cfg.block_size] for i in ix])
         return x.to(dev), y.to(dev)
 
+    # mixed precision: on a CUDA GPU, do the math in fp16 — ~1.5-2x faster and roughly
+    # half the memory, so a bigger model fits. No effect (and no risk) on CPU.
+    use_amp = (dev == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+    if resuming and "scaler" in ck:                    # restore fp16 loss-scale state
+        scaler.load_state_dict(ck["scaler"])
+
     # the model files are written up front so an interrupted run still leaves a
     # loadable model behind, then overwritten whenever validation improves.
     save(model, tok, out_dir)
@@ -316,14 +330,18 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     try:
         for step in range(start_step, steps + 1):
             x, y = batch("train")
-            _, loss = model(x, y)
             opt.zero_grad(set_to_none=True)
-            loss.backward()
+            with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=use_amp):
+                _, loss = model(x, y)
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
+            scaler.step(opt)
+            scaler.update()
             if step % every == 0 or step == start_step:
                 model.eval()
-                with torch.no_grad():
+                with torch.no_grad(), torch.autocast(device_type="cuda",
+                                                     dtype=torch.float16, enabled=use_amp):
                     vl = sum(model(*batch("val"))[1].item() for _ in range(3)) / 3
                 model.train()
                 star = ""
