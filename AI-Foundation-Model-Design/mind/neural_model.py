@@ -19,10 +19,12 @@ sampling. Save/load round-trips the whole thing (weights + tokenizer + config).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pickle
 import re
+import time
 from dataclasses import dataclass, asdict
 
 import torch
@@ -269,12 +271,34 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     else:
         cfg = cfg or GPTConfig(vocab_size=vocab_size)
         log(f"device: {dev}")
+        t0 = time.time()
+        log(f"  [1/2] learning tokenizer from {len(text)/1e6:.0f} MB (CPU, one-time) …")
         tok = BPETokenizer().train(text, vocab_size=cfg.vocab_size)
+        log(f"        tokenizer ready in {time.time()-t0:.0f}s")
 
-    # encoding a large corpus is a one-time cost that can take a minute — say so, so a
-    # big run doesn't look frozen before the first step.
-    log(f"  encoding {len(text)/1e6:.0f} MB corpus (one-time) …")
-    data = torch.tensor(tok.encode(text), dtype=torch.long)
+    os.makedirs(out_dir, exist_ok=True)
+    # Tokenising the corpus is pure-Python and single-threaded — minutes on a big
+    # corpus, with the GPU idle the whole time. Cache the token ids to disk keyed by a
+    # signature of (corpus, vocab), so this cost is paid ONCE: later runs and --resume
+    # load the cache in a second and jump straight to GPU training.
+    sig = hashlib.md5(text.encode("utf-8", "ignore")).hexdigest()[:16] + f"-v{cfg.vocab_size}"
+    tok_cache = os.path.join(out_dir, "tokens.pt")
+    data = None
+    if os.path.exists(tok_cache):
+        try:
+            blob = torch.load(tok_cache)
+            if blob.get("sig") == sig:
+                data = blob["ids"]
+                log(f"  [2/2] loaded cached tokenised corpus ({len(data)/1e6:.1f}M tokens)")
+        except Exception:
+            data = None
+    if data is None:
+        t0 = time.time()
+        log(f"  [2/2] encoding {len(text)/1e6:.0f} MB corpus (CPU, one-time) …")
+        data = torch.tensor(tok.encode(text), dtype=torch.long)
+        torch.save({"sig": sig, "ids": data}, tok_cache)
+        log(f"        encoded {len(data)/1e6:.1f}M tokens in {time.time()-t0:.0f}s "
+            f"(cached — instant next time)")
     if len(data) < cfg.block_size + 2:
         raise RuntimeError("Not enough text to train — feed the model more data first.")
     n = int(0.9 * len(data))
