@@ -1435,11 +1435,21 @@ class Mind:
                 ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM_D,
                                         max_tokens=budget)
                 if ans:
+                    # "Verified" only when retrieval genuinely backs the answer. A weak,
+                    # off-topic hit still lets the model answer from its own knowledge
+                    # (the hybrid prompt allows that) — but that answer must NOT wear a
+                    # "verified" badge, or a general-knowledge reply looks sourced.
+                    top = hits[0][1] if hits else 0.0
+                    strong = bool(facts) or len(hits) >= 2 or top >= 0.30
                     return {"answer": ans,
-                            "how": "reasoning over knowledge (LLM, grounded)",
-                            "verified": True,
-                            "trace": [f"local LLM ({self.llm.model}) grounded on "
-                                      f"{len(hits)} passage(s) + {len(facts)} fact(s)"]}
+                            "how": ("reasoning over knowledge (LLM, grounded)" if strong
+                                    else "reasoning (LLM)"),
+                            "verified": bool(strong),
+                            "trace": [f"local LLM ({self.llm.model}) "
+                                      + (f"grounded on {len(hits)} passage(s) + "
+                                         f"{len(facts)} fact(s)" if strong
+                                         else f"answered from general knowledge "
+                                         f"(weak retrieval, top {top:.2f})")]}
             # open-ended THINKING: synthesise the exact sentences that answer the
             # question, drawn from several passages at once (grounded, no guessing).
             syn = self.thinker.synthesize(q, [d for d, _ in hits], facts, focus=focus)

@@ -116,10 +116,16 @@ class LLM:
 # Prompt builders — keep Vio grounded and honest.
 # --------------------------------------------------------------------------- #
 GROUNDED_SYSTEM = (
-    "You are Vio, a careful local assistant. Answer the user's question USING ONLY the "
-    "context passages provided. Do not add facts that are not in the context. If the "
-    "context does not contain the answer, say plainly that you don't have that "
-    "information. Be concise, direct, and correct. Do not mention 'the context'."
+    "You are Vio, a knowledgeable local assistant for networking and security. You are "
+    "given FACTS retrieved from the user's own knowledge base. Treat those facts as "
+    "authoritative: build on them and prefer them over your own memory if they ever "
+    "conflict. Use your own expert knowledge to give a COMPLETE, well-structured answer — "
+    "define the term, explain the how and the why, and add a short example or the key "
+    "steps when they help. If the retrieved facts do NOT actually address the question, "
+    "answer it from your own knowledge instead of forcing those facts to fit. Never give "
+    "a single terse sentence when the question deserves a real explanation. Do not "
+    "contradict the provided facts, and do not mention 'the context' or 'the facts' — "
+    "just answer the question well."
 )
 
 REASON_SYSTEM = (
@@ -144,8 +150,13 @@ REASON_SYSTEM_D = REASON_SYSTEM + DELIBERATE
 
 
 def grounded_prompt(question, passages):
-    ctx = "\n".join(f"- {p}" for p in passages)
-    return f"Context passages:\n{ctx}\n\nQuestion: {question}\n\nAnswer:"
+    if passages:
+        ctx = "\n".join(f"- {p}" for p in passages)
+        return (f"Facts from the user's knowledge base (authoritative):\n{ctx}\n\n"
+                f"Question: {question}\n\n"
+                "Answer the question completely. Ground any specifics in the facts above; "
+                "if those facts don't cover the question, use your own expert knowledge.")
+    return f"Question: {question}\n\nAnswer completely and correctly."
 
 
 if __name__ == "__main__":
