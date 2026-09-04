@@ -896,8 +896,10 @@ class Mind:
         retrain). Configs are chunked by stanza; prose is chunked normally; CSVs load
         as tables. Reads only; never executes anything. Returns a summary dict."""
         import glob
+        from diagrams import file_to_text, DRAWIO_EXTS, VISIO_EXTS, IMAGE_EXTS
+        diagram_exts = DRAWIO_EXTS + VISIO_EXTS + IMAGE_EXTS
         exts = (".pdf", ".txt", ".md", ".markdown", ".text", ".rst", ".cfg", ".conf",
-                ".config", ".log", ".ini", ".yaml", ".yml", ".csv", ".tsv")
+                ".config", ".log", ".ini", ".yaml", ".yml", ".csv", ".tsv") + diagram_exts
         if not os.path.isdir(path):
             return {"ok": False, "answer": f"Not a folder: {path}", "files": 0,
                     "passages": 0, "skipped": [], "per": []}
@@ -919,6 +921,15 @@ class Mind:
                     with open(fp, encoding="utf-8", errors="ignore") as fh:
                         self.load_csv(fh.read(), name)
                     per.append((name, "loaded as table")); learned += 1; continue
+                elif ext in diagram_exts:
+                    with open(fp, "rb") as fh:
+                        raw = fh.read()
+                    text, kind = file_to_text(name, raw)          # diagram → sentences, image → OCR
+                    if not text:
+                        if ext == ".xml":                          # a non-drawio .xml: use as text
+                            text = raw.decode("utf-8", "ignore")
+                        else:
+                            skipped.append((name, kind)); continue
                 else:
                     with open(fp, encoding="utf-8", errors="ignore") as fh:
                         text = fh.read()

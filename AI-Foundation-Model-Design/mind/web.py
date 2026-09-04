@@ -265,7 +265,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
      <a class="navbtn" href="/dashboard"><span>📊</span> Brain dashboard</a>
      <button class="navbtn" onclick="document.getElementById('file').click()"><span>📄</span> Teach a file</button>
      <button class="navbtn" onclick="teachFolder()"><span>📁</span> Teach a folder</button>
-     <input type="file" id="file" accept=".txt,.md,.text,.csv,.log,.pdf" hidden onchange="upload()">
+     <input type="file" id="file" accept=".txt,.md,.text,.csv,.tsv,.log,.pdf,.drawio,.xml,.vsdx,.cfg,.conf,.png,.jpg,.jpeg,.gif,.bmp,.tiff,.webp" hidden onchange="upload()">
    </nav>
    <div class="side-foot">
      <div class="brain-card" id="brain" title="reasoning cortex">🧠 …</div>
@@ -456,10 +456,12 @@ async function upload(){
  addUser('📄 Teach from '+f.name);const {b}=bubble('bot');
  b.innerHTML='<span class="dots"><span></span><span></span><span></span></span>';
  let body;
- if(/\.pdf$/i.test(f.name)){const buf=new Uint8Array(await f.arrayBuffer());let bin='';
-   for(let i=0;i<buf.length;i++)bin+=String.fromCharCode(buf[i]);
-   body=JSON.stringify({name:f.name,pdf_b64:btoa(bin)});}
- else{body=JSON.stringify({name:f.name,text:await f.text()});}
+ const asB64=async()=>{const buf=new Uint8Array(await f.arrayBuffer());let bin='';
+   for(let i=0;i<buf.length;i++)bin+=String.fromCharCode(buf[i]);return btoa(bin);};
+ if(/\.pdf$/i.test(f.name)){body=JSON.stringify({name:f.name,pdf_b64:await asB64()});}
+ else if(/\.(vsdx|png|jpe?g|gif|bmp|tiff|webp)$/i.test(f.name)){         // Visio / images → binary
+   body=JSON.stringify({name:f.name,file_b64:await asB64()});}
+ else{body=JSON.stringify({name:f.name,text:await f.text()});}          // text, .drawio/.xml
  const j=await(await fetch('/api/learn',{method:'POST',headers:{'Content-Type':'application/json'},body})).json();
  finalize(b,{answer:j.answer,how:'learned from file',verified:true});
  document.getElementById('file').value='';loadStatus();
@@ -797,10 +799,30 @@ class H(BaseHTTPRequestHandler):
                     msg = MIND.learn_text(text, name)
                     self._s(200, json.dumps({"answer": msg +
                         "  ⚠️ Heads-up: this PDF gave me very little text — it looks like a "
-                        "diagram, so most of its content is in pictures I can't read. Teach me "
-                        "the written design doc, the device configs, or type the key points "
-                        "into a .txt for the real content."}, ensure_ascii=False))
+                        "diagram, so most of its content is in pictures I can't read. Export it "
+                        "from draw.io/Visio as a .drawio/.vsdx file and teach THAT — I read the "
+                        "components and connections out of those directly."}, ensure_ascii=False))
                     return
+            elif body.get("file_b64"):
+                # a binary file (Visio, image) — dispatch by type: diagram → sentences,
+                # image → OCR. draw.io .xml comes through as text and is handled below.
+                import base64
+                from diagrams import file_to_text
+                try:
+                    raw = base64.b64decode(body["file_b64"])
+                except Exception:
+                    raw = b""
+                text, kind = file_to_text(name, raw)
+                if not text:
+                    self._s(200, json.dumps({"answer": f"I couldn't read {name}: {kind}."},
+                                            ensure_ascii=False))
+                    return
+            elif name.lower().endswith((".drawio", ".xml")) and text:
+                # draw.io source sent as text — pull out components + connections
+                from diagrams import drawio_to_text
+                dt = drawio_to_text(text.encode("utf-8", "ignore"))
+                if dt:
+                    text = dt
             msg = MIND.learn_text(text, name)
             self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
 
