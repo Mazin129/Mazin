@@ -89,3 +89,77 @@ A configuration backup saves the full FortiGate configuration to a file so it ca
 A firmware upgrade replaces the FortiOS version on a FortiGate to add features or fix security issues.
 Trusted hosts restrict administrator logins to specific source IP addresses for extra security.
 The factory reset command returns a FortiGate to its default configuration and erases all settings.
+
+## Deployment modes
+
+NAT mode is the default FortiGate operating mode where the firewall routes traffic between networks and each interface has its own IP address.
+Transparent mode lets a FortiGate inspect traffic like a bridge without changing the existing IP addressing of the network.
+In transparent mode the whole FortiGate is reached through a single management IP address.
+A one-arm sniffer configuration lets a FortiGate inspect a copy of traffic from a switch mirror port without being in the traffic path.
+
+## Objects
+
+An address object on a FortiGate represents a host, a subnet, an IP range, or a fully qualified domain name so it can be reused in policies.
+An address group combines several address objects so a policy can reference them together.
+A service object defines a protocol and port, such as HTTP on TCP 80, so policies can match specific traffic.
+A schedule object defines the times when a firewall policy is active, either as a recurring window or a one-time period.
+An internet service object is a Fortinet-maintained list of IP addresses for a known cloud or web service, used to match traffic without typing addresses.
+
+## Authentication and identity
+
+Firewall authentication requires users to prove their identity before a policy allows their traffic.
+A user group on a FortiGate collects users so that policies and VPNs can grant access to the whole group at once.
+LDAP lets a FortiGate check user credentials against a directory server such as Microsoft Active Directory.
+RADIUS lets a FortiGate authenticate users against a central RADIUS server, often for VPN or administrator logins.
+Fortinet Single Sign-On, or FSSO, lets a FortiGate learn which user is logged in to which device so policies can apply by user without a second login.
+A captive portal is a web page that intercepts users and asks them to log in before granting network access.
+Two-factor authentication adds a second proof of identity, such as a one-time code, on top of a password.
+FortiToken is a hardware or mobile app token that generates one-time codes for two-factor authentication on FortiGate.
+
+## Zero Trust Network Access
+
+Zero Trust Network Access, or ZTNA, grants access to an application only after checking the user's identity and the security posture of their device, for every session.
+A ZTNA access proxy on a FortiGate brokers connections to internal applications so users never connect to the network directly.
+A ZTNA tag describes the security state of a device, such as whether antivirus is running, and is used to allow or deny access.
+The principle of least privilege gives each user only the access they need, which is the foundation of Zero Trust.
+
+## Traffic shaping
+
+Traffic shaping controls how much bandwidth different types of traffic can use on a FortiGate.
+A shared traffic shaper limits the total bandwidth for all traffic that matches a policy.
+A per-IP traffic shaper limits the bandwidth available to each individual user.
+Quality of Service, or QoS, prioritizes important traffic such as voice and video over less urgent traffic.
+DSCP marking tags packets with a priority value so other network devices can also handle them by priority.
+
+## Proxy and web security
+
+An explicit web proxy makes user browsers send their web traffic directly to the FortiGate for inspection and caching.
+A transparent proxy inspects web traffic without requiring any settings on the user's browser.
+A web application firewall, or WAF, protects web servers by blocking attacks such as SQL injection and cross-site scripting.
+FortiWeb is Fortinet's dedicated web application firewall product for protecting web applications.
+A DoS policy on a FortiGate detects and blocks denial-of-service floods before they reach firewall policies.
+FortiSandbox analyzes suspicious files by running them in an isolated environment to detect unknown malware.
+
+## Wireless and switching
+
+FortiAP is a Fortinet wireless access point that a FortiGate manages and configures centrally.
+An SSID is the name of a wireless network that a FortiAP broadcasts for clients to join.
+FortiGate can act as a wireless controller that manages many FortiAP units across a site.
+FortiSwitch is a Fortinet network switch that a FortiGate can manage directly through the Security Fabric.
+FortiLink is the protocol that lets a FortiGate manage FortiSwitch units as if they were its own ports.
+
+## Certificates and services
+
+A digital certificate on a FortiGate proves the identity of the device or a server and enables encrypted connections.
+A certificate authority, or CA, is a trusted entity that issues and signs digital certificates.
+FortiGate can act as a DHCP server that assigns IP addresses to devices on a connected network.
+FortiGate can act as a DNS server or DNS forwarder that resolves names for clients on the network.
+SNMP lets a monitoring system read status and performance information from a FortiGate.
+A local-in policy controls traffic destined for the FortiGate itself, such as management and VPN connections.
+
+## Sessions
+
+The session table on a FortiGate lists every active connection passing through the firewall.
+A session records the source, destination, protocol, and state of a connection so return traffic is allowed automatically.
+Stateful inspection means the FortiGate tracks the state of each connection and only allows packets that belong to a known session.
+The conserve mode is a protective state a FortiGate enters when memory runs low, during which it stops accepting new sessions to stay stable.
