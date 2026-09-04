@@ -113,6 +113,9 @@ def main(argv=None):
                     help="checkpoint every N steps (default 500)")
     ap.add_argument("--resume", action="store_true",
                     help="continue a previous run from its last checkpoint")
+    ap.add_argument("--patience", type=int, default=0,
+                    help="stop early after N checks with no validation improvement "
+                         "(0 = never stop early; the best weights are kept either way)")
     ap.add_argument("--scan", action="store_true", help="only report corpus size, don't train")
     ap.add_argument("--sample", default=None, help="generate from the saved model and exit")
     a = ap.parse_args(argv)
@@ -144,7 +147,7 @@ def main(argv=None):
 
     model, tok = train(text, a.out, cfg=cfg, steps=a.steps, batch_size=a.batch,
                        lr=a.lr, vocab_size=vocab, save_every=a.save_every,
-                       resume=a.resume)
+                       resume=a.resume, patience=a.patience)
 
     from neural_model import sample
     print("\n  Samples from YOUR model:\n" + "  " + "-" * 50)

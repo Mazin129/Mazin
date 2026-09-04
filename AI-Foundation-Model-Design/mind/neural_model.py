@@ -245,7 +245,7 @@ def _device():
 
 
 def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
-          vocab_size=4096, save_every=500, resume=False, log=print):
+          vocab_size=4096, save_every=500, resume=False, patience=0, log=print):
     """Train a model from zero on `text`.
 
     Checkpoints every `save_every` steps AND on Ctrl+C, so a long run is never lost and
@@ -282,7 +282,7 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     log(f"model parameters: {model.num_params()/1e6:.1f}M")
     opt = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
 
-    start_step, best_val = 1, float("inf")
+    start_step, best_val, worse = 1, float("inf"), 0
     if resuming:
         ck = torch.load(ck_path, map_location=dev)
         model.load_state_dict(ck["model"])
@@ -328,19 +328,36 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
                 model.train()
                 star = ""
                 if vl < best_val:                     # keep the BEST weights, not the last
-                    best_val = vl
+                    best_val, worse = vl, 0
                     save(model, tok, out_dir)
                     star = " ✓best"
+                else:
+                    worse += 1
+                    # val rising while train falls = memorising the corpus, not learning
+                    # the language. More steps make it worse; more DATA is the fix.
+                    if worse == 4:
+                        log(f"  ⚠ validation has risen {worse} checks running while train "
+                            f"falls — the model is starting to memorise.")
+                        log(f"    Best weights (val {best_val:.3f}) are already saved and "
+                            f"are what you keep. More data helps; more steps will not.")
                 checkpoint(step, best_val)
                 log(f"  step {step}/{steps}  train {loss.item():.3f}  val {vl:.3f}{star}")
+                if patience and worse >= patience:
+                    log(f"  ⏹ early stop: no improvement in {patience} checks.")
+                    break
     except KeyboardInterrupt:
         checkpoint(step, best_val)
         log(f"\n  ⏸ stopped at step {step}. Progress saved (best val {best_val:.3f}).")
         log(f"  Continue where you left off:  --resume --steps {steps}")
-        return model, tok
 
     checkpoint(step, best_val)
-    log(f"✓ saved model to {out_dir}  (best val {best_val:.3f})")
+    # hand back the BEST weights, not the last ones — otherwise the samples you see
+    # come from an overfit model while the good one sits on disk.
+    if os.path.exists(os.path.join(out_dir, "weights.pt")):
+        model.load_state_dict(torch.load(os.path.join(out_dir, "weights.pt"),
+                                         map_location=dev))
+        model.eval()
+    log(f"✓ model saved to {out_dir}  (best val {best_val:.3f})")
     return model, tok
 
 
