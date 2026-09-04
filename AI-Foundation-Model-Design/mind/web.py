@@ -613,13 +613,18 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    import sys
     import threading
-    import webbrowser
     url = f"http://localhost:{PORT}"
-    print(f"🧠 {MIND.name()} is starting — opening {url} in your browser...")
-    print("   Local reasoning + memory + your own trained model. No external model.")
-    print("   Keep this window open while you chat; close it to stop Vio.")
-    threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    # --service (or VIO_NO_BROWSER) runs Vio quietly in the background — no browser
+    # pop-up — for the always-on autostart. A normal run still opens the browser.
+    service = "--service" in sys.argv or os.environ.get("VIO_NO_BROWSER")
+    if not service:
+        import webbrowser
+        print(f"🧠 {MIND.name()} is starting — opening {url} in your browser...")
+        print("   Local reasoning + memory + your own trained model.")
+        print("   Keep this window open while you chat; close it to stop Vio.")
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
     try:
         ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
