@@ -21,6 +21,8 @@ mind_memory.json / knowledge.json / skills.json next to this file.
 
 import json
 import os
+import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from reasoner import Mind, KB_FILE
@@ -28,10 +30,58 @@ from talk import reply
 from agent import SolveAgent
 from dashboard_page import DASHBOARD
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("MIND_PORT", "8100"))
 MIND = Mind()
 _last_activity = time.time()          # for idle-time consolidation (§14 "sleep")
 AGENT = SolveAgent(MIND)
+
+# ── one-click "train on ALL data" ───────────────────────────────────────────
+# The GUI kicks off the full from-scratch pipeline (train_all.py) as a
+# background process so the browser never blocks: the click returns instantly
+# and the page polls /api/train_all/status to show live progress. Only one run
+# at a time; output is streamed to train_all.log which the status endpoint tails.
+TRAIN_LOG = os.path.join(HERE, "train_all.log")
+TRAINER = {"proc": None, "started": 0.0, "cmd": ""}
+
+
+def _trainer_running():
+    p = TRAINER["proc"]
+    return p is not None and p.poll() is None
+
+
+def start_train_all(preset="gpu", steps=None):
+    """Launch train_all.py in the background. Returns immediately."""
+    if _trainer_running():
+        return {"ok": False, "running": True,
+                "message": "Training is already running — watch the progress below."}
+    args = [sys.executable, os.path.join(HERE, "train_all.py"), "--preset", str(preset)]
+    if steps:
+        args += ["--steps", str(int(steps))]
+    try:
+        logf = open(TRAIN_LOG, "w", encoding="utf-8")      # fresh log each run
+        proc = subprocess.Popen(args, cwd=HERE, stdout=logf, stderr=subprocess.STDOUT,
+                                env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        logf.close()                                        # child keeps its own handle
+    except Exception as e:                                   # pragma: no cover
+        return {"ok": False, "running": False,
+                "message": f"Could not start training: {e}"}
+    TRAINER.update(proc=proc, started=time.time(), cmd=" ".join(args))
+    return {"ok": True, "running": True, "message": "Training started on all your data."}
+
+
+def train_all_status(tail_lines=60):
+    running = _trainer_running()
+    tail = ""
+    try:
+        with open(TRAIN_LOG, encoding="utf-8", errors="replace") as f:
+            tail = "".join(f.readlines()[-tail_lines:])
+    except Exception:
+        pass
+    p = TRAINER["proc"]
+    rc = None if (running or p is None) else p.returncode
+    return {"running": running, "returncode": rc, "tail": tail,
+            "elapsed": int(time.time() - TRAINER["started"]) if TRAINER["started"] else 0}
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -210,6 +260,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
    <nav class="nav">
      <button class="navbtn" onclick="openSkills()"><span>🧩</span> Skills</button>
      <button class="navbtn" onclick="train(false)"><span>🎓</span> Train model</button>
+     <button class="navbtn" onclick="trainAll()"><span>🚀</span> Train on all data</button>
      <button class="navbtn" onclick="openMem()"><span>📚</span> Memory</button>
      <a class="navbtn" href="/dashboard"><span>📊</span> Brain dashboard</a>
      <button class="navbtn" onclick="document.getElementById('file').click()"><span>📄</span> Teach a file</button>
@@ -439,6 +490,41 @@ async function train(withChat){
    how:'training',verified:true});
  loadStatus();
 }
+// One click → run the FULL from-scratch pipeline (train_all.py) on ALL data,
+// in the background, streaming live progress into a chat bubble.
+let trainingBubble=null;
+async function trainAll(){
+ document.getElementById('side').classList.remove('open');
+ if(trainingBubble){trainingBubble.scrollIntoView({behavior:'smooth'});return;}
+ const r=await(await fetch('/api/train_all',{method:'POST',
+   headers:{'Content-Type':'application/json'},body:JSON.stringify({preset:'gpu'})})).json();
+ const {b}=bubble('bot');
+ if(!r.ok && !r.running){finalize(b,{answer:'⚠️ '+(r.message||'Could not start training.'),how:'training',verified:false});return;}
+ b.innerHTML='<div class="ln"><b>🚀 Training on ALL your data…</b> This runs in the background — '
+   +'you can keep chatting. It can take a while on a real GPU; feel free to close this window, '
+   +'it keeps going.</div><pre><code class="trlog">starting…</code></pre>'
+   +'<div class="meta"><span class="fb stoptrain" title="stop training">■ stop</span></div>';
+ b.querySelector('.stoptrain').onclick=async()=>{await fetch('/api/train_all/stop',{method:'POST'});};
+ trainingBubble=b; pollTrain(b);
+}
+async function pollTrain(b){
+ let s; try{s=await(await fetch('/api/train_all/status')).json();}catch(e){setTimeout(()=>pollTrain(b),3000);return;}
+ const el=b.querySelector('.trlog'); if(el) el.textContent=(s.tail||'').trim()||'starting…';
+ log.scrollTop=log.scrollHeight;
+ if(s.running){setTimeout(()=>pollTrain(b),2500);return;}
+ trainingBubble=null;
+ const st=b.querySelector('.stoptrain'); if(st) st.remove();
+ const done=document.createElement('div');done.className='ln';
+ if(s.returncode===0){
+   done.innerHTML='<b>✅ Training finished.</b> Vio’s own model is trained on every dataset, skill and RFC.';
+ }else if(/No module named .torch.|ModuleNotFoundError/.test(s.tail||'')){
+   done.innerHTML='<b>⚠️ PyTorch isn’t installed.</b> Install it once, then click again:<br>'
+     +'<code>pip install torch --index-url https://download.pytorch.org/whl/cu121</code>';
+ }else{
+   done.innerHTML='<b>⚠️ Training stopped'+(s.returncode!=null?' (exit '+s.returncode+')':'')+'.</b> See the log above.';
+ }
+ b.appendChild(done); loadStatus(); log.scrollTop=log.scrollHeight;
+}
 // skills modal
 async function openSkills(){document.getElementById('skillsM').classList.add('show');loadSkills();}
 async function loadSkills(){
@@ -495,6 +581,14 @@ try{const th=localStorage.getItem('vio-theme');
  if(th){document.documentElement.setAttribute('data-theme',th);
    document.getElementById('themeBtn').textContent=th==='dark'?'🌙':'☀️';}}catch(e){}
 renderChips();loadStatus();
+// If a training run is already going (page was reloaded / reopened), re-attach it.
+(async()=>{try{const s=await(await fetch('/api/train_all/status')).json();
+  if(s.running){const {b}=bubble('bot');
+    b.innerHTML='<div class="ln"><b>🚀 Training on ALL your data…</b> (already in progress)</div>'
+      +'<pre><code class="trlog">…</code></pre>'
+      +'<div class="meta"><span class="fb stoptrain" title="stop training">■ stop</span></div>';
+    b.querySelector('.stoptrain').onclick=async()=>{await fetch('/api/train_all/stop',{method:'POST'});};
+    trainingBubble=b; pollTrain(b);}}catch(e){}})();
 // the hero empty-state is the welcome — no duplicate bubble needed
 </script></body></html>"""
 
@@ -566,6 +660,8 @@ class H(BaseHTTPRequestHandler):
             self._s(200, DASHBOARD, "text/html; charset=utf-8")
         elif path == "/api/telemetry":
             self._s(200, json.dumps(MIND.telemetry(), ensure_ascii=False))
+        elif path == "/api/train_all/status":
+            self._s(200, json.dumps(train_all_status(), ensure_ascii=False))
         elif path == "/api/memory":
             lib = json.load(open(KB_FILE, encoding="utf-8")) if os.path.exists(KB_FILE) else []
             self._s(200, json.dumps({"name": MIND.name(), "facts": MIND.mem["facts"],
@@ -681,6 +777,16 @@ class H(BaseHTTPRequestHandler):
             chat = body.get("chat")
             stats = MIND.train_model(extra_text=chat if isinstance(chat, str) else None)
             self._s(200, json.dumps(stats, ensure_ascii=False))
+
+        elif self.path == "/api/train_all":            # one-click full pipeline
+            res = start_train_all(body.get("preset") or "gpu", body.get("steps"))
+            self._s(200, json.dumps(res, ensure_ascii=False))
+
+        elif self.path == "/api/train_all/stop":
+            p = TRAINER["proc"]
+            if p is not None and p.poll() is None:
+                p.terminate()
+            self._s(200, json.dumps({"ok": True, "running": False}))
 
         elif self.path == "/api/skills":
             ok, msg = MIND.skills.add(body.get("name", ""), body.get("trigger", ""),
