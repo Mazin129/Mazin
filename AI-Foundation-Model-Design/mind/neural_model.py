@@ -269,7 +269,7 @@ def _device():
 
 
 def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
-          vocab_size=4096, save_every=500, resume=False, patience=0, log=print):
+          vocab_size=4096, save_every=500, resume=False, patience=0, compile_model=False, log=print):
     """Train a model from zero on `text`.
 
     Checkpoints every `save_every` steps AND on Ctrl+C, so a long run is never lost and
@@ -343,6 +343,16 @@ def train(text, out_dir, cfg=None, steps=2000, batch_size=32, lr=3e-4,
     model = GPT(cfg).to(dev)
     log(f"model parameters: {model.num_params()/1e6:.1f}M")
     opt = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
+
+    if compile_model:
+        # torch.compile fuses the many small kernels into fewer, cutting launch overhead
+        # — the one remaining code-side speedup once the GPU is already saturated. It
+        # needs a C++/CUDA compiler; if that isn't set up, fall back rather than fail.
+        try:
+            model = torch.compile(model)
+            log("  torch.compile enabled (first step is slow while it compiles)")
+        except Exception as e:
+            log(f"  torch.compile unavailable ({type(e).__name__}); continuing uncompiled")
 
     start_step, best_val, worse = 1, float("inf"), 0
     if resuming:
