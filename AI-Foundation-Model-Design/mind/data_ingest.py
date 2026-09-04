@@ -99,13 +99,11 @@ def fact_to_question(s):
     """Turn a clean statement into the question it answers, so it can be trained as a
     skill (respond to a prompt), not just as text to continue."""
     s = s.strip()
-    m = re.match(r"^(A|An|The)?\s*([A-Za-z][\w /-]{1,40}?)\s+(is|are)\s+", s)
+    # "An" must be tried before "A", and \s+ keeps "A" from eating the "n" of "An".
+    m = re.match(r"^(?:(An|A|The)\s+)?([A-Za-z][\w /-]{1,40}?)\s+(is|are)\s+", s)
     if m:
         art = (m.group(1).lower() + " ") if m.group(1) else ""   # reuse the real article
-        subj = m.group(2).strip()
-        # lowercase an ordinary word, but keep acronyms (OSPF, VLAN, RAM) as-is
-        if not subj.isupper():
-            subj = subj[0].lower() + subj[1:]
+        subj = m.group(2).strip()                                # keep casing: FortiGate, OSPF
         return f"What {m.group(3)} {art}{subj}?"
     m = re.match(r"^([A-Za-z][\w /-]{1,40}?)\s+causes\s+(.+?)\.?$", s)
     if m:
