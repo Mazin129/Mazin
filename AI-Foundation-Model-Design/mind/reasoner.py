@@ -856,10 +856,19 @@ class Mind:
         return cfg >= len(lines) * 0.4
 
     def _chunk_config(self, text):
-        """Keep each config stanza WHOLE: a FortiGate `config … end` (with nested
-        `edit … next`) or a Cisco `!`-delimited / indented block becomes one passage,
-        so a policy's settings never get split across passages or sentence-mangled."""
-        chunks, cur, depth = [], [], 0
+        """Split a device config into per-OBJECT passages, each kept whole. A FortiGate
+        config yields one passage per top-level `edit … next` (prefixed with its
+        `config …` header for context), so asking about one policy retrieves exactly that
+        policy — not all of them, and not a stray `set` line. A Cisco config splits on
+        `!` / new top-level sections. The opposite of the prose chunker, which shatters
+        every `set …` line into its own fragment (what gave wrong answers)."""
+        lines = text.splitlines()
+        is_forti = (any(re.match(r"^\s*config\b", l, re.I) for l in lines)
+                    and any(re.match(r"^\s*edit\b", l, re.I) for l in lines))
+        if is_forti:
+            return self._chunk_forti(lines)
+        # Cisco / generic: '!', a blank line, or a new non-indented section = boundary.
+        chunks, cur = [], []
 
         def flush():
             blk = "\n".join(cur).strip()
@@ -867,28 +876,57 @@ class Mind:
                 chunks.append(blk)
             cur.clear()
 
-        for l in text.splitlines():
+        for l in lines:
             st = l.strip()
-            if not st or st == "!":                       # blank / Cisco '!' = boundary
-                if depth == 0:
-                    flush()
-                else:
-                    cur.append(l)
-                continue
-            if re.match(r"^(config|edit)\b", st, re.I):
-                if depth == 0:
-                    flush()
-                cur.append(l); depth += 1; continue
-            if re.match(r"^(end|next)\b", st, re.I):
-                cur.append(l); depth = max(0, depth - 1)
-                if depth == 0:
-                    flush()
-                continue
-            if depth == 0 and cur and not l.startswith((" ", "\t")):
-                flush()                                   # Cisco: new top-level section
+            if not st or st == "!":
+                flush(); continue
+            if cur and not l.startswith((" ", "\t")):
+                flush()                                   # new top-level section
             cur.append(l)
         flush()
         return chunks or [text.strip()]
+
+    @staticmethod
+    def _chunk_forti(lines):
+        """One passage per top-level `edit … next` block (with its `config` header),
+        keeping nested config/edit inside that object together."""
+        chunks, headers, plain, k = [], [], [], 0
+
+        def flush_plain():
+            if plain:
+                blk = "\n".join(headers + plain).strip()
+                if blk:
+                    chunks.append(blk)
+                plain.clear()
+
+        while k < len(lines):
+            st = lines[k].strip()
+            if re.match(r"^edit\b", st, re.I):            # capture a whole balanced object
+                flush_plain()
+                block, bal, k = [lines[k]], 1, k + 1
+                while k < len(lines) and bal > 0:
+                    s2 = lines[k].strip()
+                    if re.match(r"^(config|edit)\b", s2, re.I):
+                        bal += 1
+                    elif re.match(r"^(end|next)\b", s2, re.I):
+                        bal -= 1
+                    block.append(lines[k]); k += 1
+                pre = [headers[-1]] if headers else []    # nearest config header = context
+                blk = "\n".join(pre + block).strip()
+                if blk:
+                    chunks.append(blk)
+                continue
+            if re.match(r"^config\b", st, re.I):
+                flush_plain(); headers.append(lines[k])
+            elif re.match(r"^end\b", st, re.I):
+                flush_plain()
+                if headers:
+                    headers.pop()
+            elif st:
+                plain.append(lines[k])
+            k += 1
+        flush_plain()
+        return chunks or ["\n".join(lines).strip()]
 
     def learn_folder(self, path, recursive=True):
         """Bulk-ingest every readable document in a folder — PDFs, text, markdown,
@@ -937,11 +975,7 @@ class Mind:
                 skipped.append((name, str(e)[:60])); continue
             if len((text or "").strip()) < 20:
                 skipped.append((name, "empty / too short")); continue
-            if self._looks_like_config(text):
-                chunks = self._chunk_config(text)
-            else:
-                chunks = self._chunk(self._denoise(text))
-            all_chunks.extend(chunks)
+            all_chunks.extend(self._smart_chunks(text))
             self.graph.learn_text(text)
             per.append((name, f"{len(chunks)} passages")); learned += 1
         if all_chunks:
@@ -952,9 +986,17 @@ class Mind:
         return {"ok": learned > 0, "files": learned, "passages": len(all_chunks),
                 "skipped": skipped, "per": per, "path": path}
 
+    def _smart_chunks(self, text):
+        """Pick the right chunker. A device config must be kept WHOLE per stanza; prose
+        gets denoised and sentence-chunked. Decide BEFORE denoising — denoise mangles a
+        config. This is what keeps a firewall policy's settings in one passage instead of
+        scattering each `set …` line into its own fragment."""
+        if self._looks_like_config(text):
+            return self._chunk_config(text)
+        return self._chunk(self._denoise(text))
+
     def teach(self, text):                 # add durable knowledge to the library
-        text = self._denoise(text)         # strip leaked command prefixes / skill blobs
-        chunks = self._chunk(text)
+        chunks = self._smart_chunks(text)
         self.lib.add_many(chunks)
         self.graph.learn_text(text)        # extract relational edges (cheap, teach-time)
         self._retrain()                    # keep the thinker current with new knowledge
@@ -973,8 +1015,7 @@ class Mind:
         return t.describe()
 
     def learn_text(self, text, source=""):
-        text = self._denoise(text)                  # strip manual boilerplate first
-        chunks = self._chunk(text)
+        chunks = self._smart_chunks(text)           # config-aware: keeps stanzas whole
         self.lib.add_many(chunks)
         self.graph.learn_text(text)                 # relational edges (cheap, teach-time)
         self._retrain()
@@ -996,7 +1037,7 @@ class Mind:
                               f"({skipped} file(s) skipped.)"}
         all_chunks = []
         for source, text in docs:
-            all_chunks.extend(self._chunk(self._denoise(text)))
+            all_chunks.extend(self._smart_chunks(text))
         self.lib.add_many(all_chunks)                  # one add + one retrain (efficient)
         self._retrain()
         self.mem["last_learned"] = {"source": f"github:{owner}/{repo}",
