@@ -145,10 +145,25 @@ class ReasoningAgent(Agent):
 
 
 class ConfigAgent(Agent):
+    """Config / firewall object analysis — only claims aggregate list/filter queries
+    when the library actually holds config-shaped passages. Never constant-scores."""
     name, domains = "config", ("networking", "security", "config")
+    _CFG = re.compile(
+        r"\b(polic(?:y|ies)|firewall|rule(?:s)?|interface(?:s)?|vlan(?:s)?|"
+        r"address(?:es)?|object(?:s)?|route(?:s)?|vpn|tunnel|fortigate|forti|"
+        r"running[- ]?config|dstintf|srcintf|nat)\b", re.I)
+    _AGG = re.compile(
+        r"\b(all|every|each|list|which|how many|count|show|any|pointing|matching)\b", re.I)
 
     def score(self, q, ctx):
-        return 0.5
+        if not (self._CFG.search(q) and self._AGG.search(q)):
+            return 0.0
+        docs = getattr(getattr(self.mind, "lib", None), "docs", None) or []
+        # cheap probe — only claim when config stanzas exist
+        for d in docs[:300]:
+            if re.search(r"^\s*(config|edit|set)\b", d, re.M | re.I):
+                return 0.72
+        return 0.0
 
     def run(self, q, ctx):
         return Result.from_dict(self.mind._aggregate_answer(q))

@@ -9,27 +9,75 @@ The prefrontal cortex of the system: the two-clock router.
       This is where MOST messages end, which is the energy story: the expensive
       deliberation machinery simply never wakes.
 
-  System-2 (slow clock)  — knowledge answers (retrieval/synthesis) and unknowns.
-      These get the full Phase-2 deliberation tail: Confidence Engine scoring, then
-      the Self-Critic checklist (conflict check → re-search → honest downgrade).
+  System-2 (slow clock)  — knowledge answers (retrieval/synthesis), LLM-composed
+      answers, unverified results, and empty-evidence cases. These get the full
+      deliberation tail: Confidence Engine scoring, then the Self-Critic checklist
+      (conflict check → re-search → honest downgrade).
 
 Every interaction is traced through the Cognitive Workspace as cognits
 (percept → answer, with provenance), so the whole decision is replayable.
 
 Phase-2 honesty note: routing is decided from which path the reasoner actually took
-(its `how`), not by predicting difficulty up front — prediction-based dispatch to
-specialist modules arrives with the specialist cortex (Phase 5). What IS real now:
-the critic and confidence machinery only ever runs for System-2 answers.
+(its `how`), not by predicting difficulty up front. LLM paths and empty evidence
+ALWAYS take the slow clock — fluent text is not intrinsic correctness.
 """
 
 from __future__ import annotations
 
-from kernel.workspace import Workspace, PERCEPT, ANSWER
+from kernel.workspace import PERCEPT, ANSWER
 from cognition.confidence import score as confidence_score, VERIFIED_EXACT, DETERMINISTIC
 from cognition.critic import review as critic_review
 
 # paths whose correctness is intrinsic — the fast clock, no critique needed
 _SYSTEM1 = VERIFIED_EXACT | DETERMINISTIC | {"generation", "github"}
+
+
+def _is_llm_how(how: str) -> bool:
+    return "llm" in (how or "").lower()
+
+
+def _empty_evidence(evidence: dict) -> bool:
+    """True when retrieval ran and found nothing. None hits = evidence not stashed."""
+    if not evidence:
+        return False
+    hits = evidence.get("hits")
+    if hits is None:
+        return False
+    facts = int(evidence.get("facts") or 0)
+    return int(hits) == 0 and facts == 0
+
+
+def choose_system(how: str, result: dict, evidence: dict) -> int:
+    """Decide System-1 vs System-2.
+
+    Fast clock only for intrinsically correct / intentional-unverified paths.
+    Any LLM composition, unverified knowledge answer, or empty retrieval evidence
+    takes the slow clock so the critic can escalate or rewrite.
+    """
+    how = how or ""
+    verified = bool(result.get("verified"))
+
+    # Force System-2: LLM, empty library support, or unverified non-intrinsic answers
+    if _is_llm_how(how) or _empty_evidence(evidence):
+        return 2
+    if not verified and how not in _SYSTEM1 and not how.startswith("skill:"):
+        # generation/github are in _SYSTEM1 (intentional creative / external)
+        if not (how.startswith("generation") or how.startswith("github")):
+            return 2
+
+    # Intrinsic System-1
+    if how in _SYSTEM1 or how.startswith("skill:") or how.startswith("generation"):
+        return 1
+    # Structured graph/rule inference — NOT LLM — only when verified
+    if how.startswith("reasoning (") and not _is_llm_how(how) and verified:
+        return 1
+    if how.startswith("planning (") and verified:
+        return 1
+    if how.startswith("world model (") and verified:
+        return 1
+    if how.startswith("data analysis (") and verified:
+        return 1
+    return 2
 
 
 class Executive:
@@ -46,13 +94,7 @@ class Executive:
         conf = confidence_score(result, evidence)
 
         how = result.get("how", "")
-        system = 1 if (how in _SYSTEM1 or how.startswith("skill:")
-                       or how.startswith("generation")
-                       or how.startswith("reasoning (")    # structured graph/rule inference
-                       or how.startswith("reasoning over knowledge (LLM")  # grounded LLM
-                       or how.startswith("planning (")
-                       or how.startswith("world model (")
-                       or how.startswith("data analysis (")) else 2
+        system = choose_system(how, result, evidence)
 
         if system == 2:
             result, conf = critic_review(q, result, conf, self.mind)

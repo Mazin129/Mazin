@@ -50,15 +50,30 @@ def score(result, evidence=None):
     verified = bool(result.get("verified"))
     ev = evidence or {}
 
+    hits = int(ev.get("hits") or 0)
+    facts = int(ev.get("facts") or 0)
+    empty_lib = hits == 0 and facts == 0 and ev.get("hits") is not None
+
     if how.startswith("reasoning over knowledge (LLM"):
-        return 0.80                                     # local LLM grounded on retrieved facts
-    if how == "reasoning (LLM)":
-        return 0.55                                     # open LLM reasoning — plausible, unverified
+        # Strong grounding only when the reasoner marked verified; weak hits stay modest
+        # so the critic can escalate instead of sounding certain.
+        if verified:
+            return 0.80
+        return 0.42
+    if how == "reasoning (LLM)" or (how.startswith("reasoning (") and "llm" in how.lower()):
+        # Open LLM: still modest when the library was empty (System-2 + research),
+        # but above the honesty cliff so useful general reasoning is not rewritten.
+        if empty_lib:
+            return 0.40
+        return 0.55 if verified else 0.48
+    if how.startswith("analysis over your"):
+        # Config aggregate: only high confidence when a real match was verified
+        return 0.78 if verified else 0.25
     if how.startswith("skill:"):
         return 0.90                                     # user-defined reflex, exact match
     if how.startswith("data analysis ("):
         return 0.96                                     # exact computation over the table
-    if how.startswith("reasoning ("):
+    if how.startswith("reasoning (") and "llm" not in how.lower():
         return 0.82                                     # structured inference over the graph/rules
     if how.startswith("planning ("):
         return 0.72 if verified else 0.20               # grounded plan vs "no knowledge"
@@ -70,8 +85,7 @@ def score(result, evidence=None):
         return 0.90
     if how in RETRIEVAL:
         top = float(ev.get("top", 0.0))                 # best retrieval similarity
-        hits = int(ev.get("hits", 0))                   # passages backing the answer
-        facts = int(ev.get("facts", 0))                 # personal memory facts used
+        # hits/facts already computed above
         c = 0.35
         c += 0.45 * min(top / 0.45, 1.0)                # knowledge quality
         c += 0.10 * min(hits / 3.0, 1.0)                # corroboration breadth

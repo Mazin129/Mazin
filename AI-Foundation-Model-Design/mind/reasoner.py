@@ -840,13 +840,16 @@ class Mind:
                   "route": "route", "routes": "route", "vpn": "vpn", "tunnel": "phase"}
 
     def _aggregate_answer(self, q):
-        """Answer 'show/list ALL <objects> that <condition>' by scanning EVERY matching
-        config object and letting the LLM filter — instead of returning the top few by
-        keyword match. Returns None when it isn't an aggregate query (or no LLM)."""
+        """Answer 'show/list ALL <objects> that <condition>' by scanning matching
+        config objects and letting the LLM filter — instead of returning the top few by
+        keyword match. Returns None when it isn't an aggregate query (or no LLM).
+
+        FortiGate-aware: prefers policies with internet/WAN signals when the query
+        mentions internet; never marks verified on empty/no-match answers."""
         if not (self.llm is not None and self.llm.available):
             return None
         low = q.lower()
-        if not re.search(r"\b(all|every|each|list|which|how many|count|any)\b", low):
+        if not re.search(r"\b(all|every|each|list|which|how many|count|any|show|pointing)\b", low):
             return None
         item = next((base for w, base in self._AGG_ITEMS.items()
                      if re.search(rf"\b{w}\b", low)), None)
@@ -857,22 +860,87 @@ class Mind:
                 if item in d.lower() and re.search(r"^\s*(config|edit|set)\b", d, re.M | re.I)]
         if not cand:                                   # nothing config-shaped — let retrieval try
             return None
-        capped = cand[:40]                             # keep the prompt within the model's window
-        ctx = "\n\n".join(f"[{i + 1}]\n{d}" for i, d in enumerate(capped))
-        system = ("You analyze device configuration objects. Examine EVERY object listed and "
-                  "select those that satisfy the request. For each match give its id/name and a "
-                  "one-line reason grounded in that object's own settings. If none match, say so. "
-                  "Use ONLY the objects shown — never invent objects, names, or settings.")
+
+        internet_q = bool(re.search(
+            r"\b(internet|wan|outside|external|0\.0\.0\.0|any)\b", low))
+
+        def _inet_score(doc):
+            dlow = doc.lower()
+            s = 0
+            if re.search(r"dstintf\s+[\"']?(wan|internet|port\d+|outside|external)", dlow):
+                s += 4
+            if re.search(r"\bnat\s+enable\b", dlow):
+                s += 2
+            if re.search(r"dstaddr\s+[\"']?(all|any|internet)", dlow):
+                s += 2
+            if "wan" in dlow or "internet" in dlow:
+                s += 1
+            if re.search(r"\baction\s+accept\b", dlow):
+                s += 1
+            if re.search(r"\bstatus\s+enable\b", dlow) or "status" not in dlow:
+                s += 1
+            return s
+
+        if internet_q and item == "policy":
+            ranked = sorted(cand, key=_inet_score, reverse=True)
+            preferred = [d for d in ranked if _inet_score(d) > 0]
+            ordered = preferred + [d for d in ranked if _inet_score(d) == 0]
+        else:
+            ordered = cand
+
+        cap = 60
+        capped = ordered[:cap]
+
+        def _summarize(doc):
+            """Pull FortiGate-ish fields so the LLM sees structure, not a wall of text."""
+            bits = []
+            m = re.search(r'^\s*edit\s+("?[^\n"]+"?|\S+)', doc, re.M | re.I)
+            if m:
+                bits.append(f"edit {m.group(1).strip()}")
+            for field in ("name", "srcintf", "dstintf", "srcaddr", "dstaddr", "service",
+                          "action", "status", "nat", "schedule", "comments"):
+                for mm in re.finditer(rf"^\s*set\s+{field}\s+(.+)$", doc, re.M | re.I):
+                    bits.append(f"set {field} {mm.group(1).strip()}")
+            if bits:
+                return "\n".join(bits)
+            return doc[:900]
+
+        ctx = "\n\n".join(f"[{i + 1}]\n{_summarize(d)}" for i, d in enumerate(capped))
+        system = (
+            "You analyze Fortinet/FortiGate (and similar) firewall configuration objects. "
+            "Examine EVERY object listed. For firewall policies, use fields such as "
+            "srcintf, dstintf, srcaddr, dstaddr, service, action, nat, status. "
+            "A policy 'points to the internet' typically has dstintf on a WAN/internet/"
+            "outside interface, and/or dstaddr all/any with nat enable — decide from the "
+            "object's own fields only. For each match give: id/name, key fields, and a "
+            "one-line reason. If none match, reply with exactly NO_MATCH on the first line "
+            "and a one-line explanation. Never invent objects, names, or settings."
+        )
         prompt = f"Configuration objects:\n{ctx}\n\nRequest: {q}\n\nList every matching object."
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
         ans = self.llm.generate(prompt, system=system, max_tokens=budget)
         if not ans:
             return None
-        note = f"\n\n(Scanned the first 40 of {len(cand)} objects.)" if len(cand) > 40 else ""
+
+        no_match = bool(re.search(
+            r"\b(no_match|none match|no objects? that|there are no|no matching|"
+            r"nothing matches|do not match|doesn't match|does not match)\b", ans, re.I))
+        note = ""
+        if len(cand) > cap:
+            note = f"\n\n(Scanned {cap} of {len(cand)} '{item}' objects" \
+                   + (", internet/WAN-ranked first." if internet_q else ".") + ")"
+        verified = bool(capped) and not no_match
+        # stash evidence so the executive/critic see empty vs supported
+        self._last_evidence = {
+            "top": 0.55 if verified else 0.0,
+            "hits": len(capped) if not no_match else 0,
+            "facts": 0,
+        }
         return {"answer": ans + note,
                 "how": f"analysis over your {item} config (LLM, {self.llm.model})",
-                "verified": True,
-                "trace": [f"scanned {len(capped)} '{item}' config object(s)"]}
+                "verified": verified,
+                "trace": [f"scanned {len(capped)} '{item}' config object(s)"
+                          + ("; no verified match" if no_match else "")]}
 
     def _chunk(self, text, size=320):
         """Split into passages, keeping each reference ENTRY together: a new entry
