@@ -15,6 +15,10 @@ clean training examples, the kind a good fine-tune actually needs.
 Needs Ollama running with a capable model (llama3.1 / qwen2.5). It writes:
   • vio_sft.jsonl   — {"question","answer"} per line, ready for the fine-tune notebook
 It saves as it goes and is resumable — rerun to continue where it stopped.
+
+For a LARGE Colab-ready set (RFCs + Hugging Face + public GitHub docs), prefer:
+
+    python build_large_sft.py --target 40000
 """
 import sys
 import os
