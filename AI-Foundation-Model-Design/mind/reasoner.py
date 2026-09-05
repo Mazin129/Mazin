@@ -627,6 +627,14 @@ class Mind:
             self.master, self.agent_registry = build_master(self)
         except Exception:
             self.master, self.agent_registry = None, None
+        # Stage 4: governed self-improvement — behaviour-trace capture, Data Curator,
+        # Evaluation gate, Model Manager. Capture is passive (append-only logging); nothing
+        # here changes an answer or promotes a model. Optional/never fatal.
+        try:
+            from selfimprove import SelfImprovement
+            self.si = SelfImprovement(DATA_DIR)
+        except Exception:
+            self.si = None
         self._retrain()
 
     def _own_model_info(self):
@@ -678,6 +686,8 @@ class Mind:
         Vio's confidence (§10)."""
         ep = self.episodic.grade_last(correct)
         self.calibration.refresh()
+        if getattr(self, "si", None) is not None:       # Stage 4: feed the improvement loop
+            self.si.traces.add_feedback(bool(correct))
         if ep is None:
             return "Nothing to grade yet — ask me something first."
         return ("Thanks — glad that helped. I'll trust that kind of answer a bit more."
@@ -1268,6 +1278,8 @@ class Mind:
             "q": (q[:80] + "…") if len(q) > 80 else q,
         }
         self._remember_episode(q, r)
+        if getattr(self, "si", None) is not None:       # Stage 4: capture the behaviour trace
+            self.si.traces.record(q, r, getattr(self, "_last_evidence", {}))
         return r
 
     def _route(self, q):

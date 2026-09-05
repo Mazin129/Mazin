@@ -11,3 +11,8 @@ train_all.log
 own_model/
 corpus/rfc_clean/
 *.pt
+# Stage 4 self-improvement runtime state (per-machine, regenerated)
+traces.jsonl
+curated_sft.jsonl
+model_state.json
+vio_sft.jsonl
