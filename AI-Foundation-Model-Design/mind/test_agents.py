@@ -39,8 +39,9 @@ def main():
     # Stage 3b: retrieval is a first-class KnowledgeAgent; exact-tool queries with
     # retrieval-tempting words (factorial, roman) must still go to the front, not Knowledge.
     check("retrieval -> knowledge agent", m.ask_agentic("what is OSPF").get("agent") == "knowledge")
-    check("exact tool not hijacked by knowledge",
-          m.ask_agentic("roman numeral for 42").get("agent") == "core")
+    # exact tools get their own provenance now, and are NOT hijacked by knowledge
+    check("exact tool -> tools agent", m.ask_agentic("roman numeral for 42").get("agent") == "tools")
+    check("factorial -> tools agent", m.ask_agentic("what is 5 factorial").get("agent") == "tools")
 
     # Stage 2: EVERY answer carries provenance (the core catch-all tags itself from `how`)
     for q in ("what is 20% of 50", "what is OSPF", "hi", "integrate x^2"):

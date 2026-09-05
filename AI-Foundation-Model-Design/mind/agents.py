@@ -176,15 +176,18 @@ def agent_from_how(how):
     """Map a result's `how` string to a canonical agent name, for provenance on
     answers produced by the catch-all core router (until every branch is its own agent)."""
     h = (how or "").lower()
-    table = [("symbolic", "math"), ("exact tool", "math"), ("quadratic", "math"),
-             ("function plot", "math"), ("skill:", "skill"), ("generation", "generation"),
+    table = [("symbolic", "math"), ("quadratic", "math"), ("function plot", "math"),
+             ("exact tool", "tools"), ("clock", "tools"),
+             ("skill:", "skill"), ("generation", "generation"),
              ("world model", "world_model"), ("planning", "planner"),
              ("reasoning over knowledge", "knowledge"), ("retrieval", "knowledge"),
-             ("data analysis", "data"), ("reasoning (", "reasoning"),
-             ("analysis over your", "config"), ("library", "memory"),
-             ("memory", "memory"), ("episodic", "memory"), ("github", "research"),
-             ("consolidation", "self_improvement"), ("feedback", "feedback"),
-             ("reasoning (llm", "reasoning"), ("no-source", "core")]
+             ("data analysis", "data"), ("analysis over your", "config"),
+             ("reasoning (llm", "reasoning"), ("reasoning (", "reasoning"),
+             ("library", "memory"), ("episodic", "memory"), ("memory", "memory"),
+             ("github", "research"), ("learned from github", "research"),
+             ("consolidation", "self_improvement"), ("calibration", "self_improvement"),
+             ("feedback", "feedback"), ("greeting", "core"), ("no-source", "core"),
+             ("llm-timeout", "knowledge")]
     for key, name in table:
         if key in h:
             return name
@@ -292,7 +295,8 @@ class Master:
             except Exception:
                 res = None
             if res and agent.validate(res, ctx):
-                res.agent = agent.name
+                if not res.agent:               # keep a finer name the agent already set
+                    res.agent = agent.name
                 return self.guardrail.check(q, agent, res, ctx)
         return None
 
