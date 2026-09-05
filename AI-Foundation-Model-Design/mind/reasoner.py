@@ -632,7 +632,23 @@ class Mind:
         # here changes an answer or promotes a model. Optional/never fatal.
         try:
             from selfimprove import SelfImprovement
-            self.si = SelfImprovement(DATA_DIR)
+
+            def _apply_model(name):
+                # make an approved model the LIVE reasoning brain; re-detect so an
+                # uninstalled name honestly falls back instead of silently breaking.
+                if self.llm is not None and name and name != "(auto)":
+                    self.llm.model = name
+                    try:
+                        self.llm._detect()
+                    except Exception:
+                        pass
+
+            self.si = SelfImprovement(DATA_DIR, apply_model=_apply_model)
+            # sync the Model Manager's "current" with the ACTUAL live model (auto-picked),
+            # so a later rollback restores the real model, not an empty env default.
+            live = getattr(self.llm, "model", "") if self.llm else ""
+            if live and not self.si.models.state.get("current"):
+                self.si.models.state["current"] = live
         except Exception:
             self.si = None
         self._retrain()

@@ -24,6 +24,12 @@ def main():
     names = [a.name for a in m.agent_registry.agents]
     check("registry populated", set(("skill", "math", "world_model", "reasoning",
           "config", "memory", "planner")) <= set(names), str(names))
+    # Stage 6: domain agents plug in (registered); inert without an LLM so they never
+    # regress the base path — a troubleshoot query still answers via the fallback here.
+    check("domain agents registered",
+          {"troubleshooting", "security_review"} <= set(names), str(names))
+    check("domain agent inert without LLM (falls through)",
+          bool(m.ask_agentic("troubleshoot why OSPF is failing").get("answer")))
 
     # seed a little knowledge
     m.skills.add("greet", "hi", "Hey there!")

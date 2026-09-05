@@ -235,12 +235,32 @@ class ModelManager:
 # 5) Orchestrator  — runs the loop UP TO the approval gate, never through it
 # --------------------------------------------------------------------------- #
 class SelfImprovement:
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, apply_model=None):
         self.traces = TraceLog(os.path.join(data_dir, "traces.jsonl"))
         self.curator = Curator(self.traces)
         self.evaluator = Evaluator()
         self.models = ModelManager(os.path.join(data_dir, "model_state.json"))
         self.data_dir = data_dir
+        self._apply = apply_model            # callback that makes a model the LIVE one
+
+    def status(self):
+        """Cheap snapshot for the UI — no evaluation (that's slow)."""
+        return {"traces": self.traces.stats(),
+                "curated_available": len(self.curator.curate()),
+                "current_model": self.models.current(),
+                "history": self.models.state.get("history", [])[-5:]}
+
+    def promote(self, model, approved=False, note=""):
+        r = self.models.promote(model, approved=approved, note=note)
+        if r.get("ok") and self._apply:      # actually switch Vio's live brain
+            self._apply(model)
+        return r
+
+    def rollback(self):
+        r = self.models.rollback()
+        if r.get("ok") and self._apply:
+            self._apply(r.get("current"))
+        return r
 
     def propose(self):
         """Do everything a candidate needs EXCEPT train and promote: curate the data,
@@ -257,6 +277,26 @@ class SelfImprovement:
             "status": ("ready to train a candidate" if ready
                        else f"not enough curated data yet ({curated['written']}/200)"),
             "next": ("1) train on curated_sft.jsonl  2) evaluate the candidate  "
-                     "3) approve  4) models.promote(model, approved=True)"),
+                     "3) approve  4) promote(model, approved=True)"),
             "gate": "Nothing was trained or promoted — approval required.",
         }
+
+
+if __name__ == "__main__":                     # CLI: run the loop up to the gate
+    import sys
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    si = SelfImprovement(os.environ.get("VIO_DATA_DIR", os.path.dirname(os.path.abspath(__file__))))
+    st = si.traces.stats()
+    print("Behaviour traces captured:", st["interactions"],
+          f"(👍{st['thumbs_up']} 👎{st['thumbs_down']}, verified {st['verified']})")
+    print("Running the governed loop up to the approval gate …\n")
+    rep = si.propose()
+    print(f"  curated training examples : {rep['curated']['written']}  -> curated_sft.jsonl")
+    print(f"  evaluation gate           : {rep['evaluation'].get('passed')}/{rep['evaluation'].get('total')}")
+    print(f"  current live model        : {rep['current_model']}")
+    print(f"  status                    : {rep['status']}")
+    print(f"\n{rep['gate']}\n  next: {rep['next']}")

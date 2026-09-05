@@ -262,6 +262,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
      <button class="navbtn" onclick="openSkills()"><span>🧩</span> Skills</button>
      <button class="navbtn" onclick="train(false)"><span>🎓</span> Train model</button>
      <button class="navbtn" onclick="trainAll()"><span>🚀</span> Train on all data</button>
+     <button class="navbtn" onclick="selfImprove()"><span>🔁</span> Self-improve</button>
      <button class="navbtn" onclick="openMem()"><span>📚</span> Memory</button>
      <a class="navbtn" href="/dashboard"><span>📊</span> Brain dashboard</a>
      <button class="navbtn" onclick="document.getElementById('file').click()"><span>📄</span> Teach a file</button>
@@ -514,6 +515,28 @@ async function train(withChat){
    how:'training',verified:true});
  loadStatus();
 }
+// Governed self-improvement: run the loop up to the approval gate (curate + evaluate),
+// then STOP. Vio never trains or promotes itself — promotion is a deliberate step.
+async function selfImprove(){
+ document.getElementById('side').classList.remove('open');
+ const {b}=bubble('bot');
+ b.innerHTML='<div class="ln"><b>🔁 Reviewing myself…</b> curating from your feedback and running the '
+   +'evaluation gate. I won’t change or promote anything on my own.</div>'
+   +'<span class="dots"><span></span><span></span><span></span></span>';
+ let j;
+ try{j=await(await fetch('/api/improve/propose',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();}
+ catch(e){finalize(b,{answer:'⚠️ Could not reach the server.',how:'error',verified:false});return;}
+ if(j.available===false){finalize(b,{answer:'Self-improvement isn’t available in this build.',how:'error',verified:false});return;}
+ const ev=j.evaluation||{}, cu=j.curated||{};
+ const msg='### 🔁 Self-improvement report\n'
+   +`- **Behaviour traces curated:** ${cu.written||0} clean training examples → \`curated_sft.jsonl\`\n`
+   +`- **Evaluation gate:** ${ev.passed||0}/${ev.total||0} capabilities passing\n`
+   +`- **Live model:** ${j.current_model||'(auto)'}\n`
+   +`- **Status:** ${j.status||''}\n\n`
+   +`**${j.gate||'Approval required.'}**\n\n`
+   +`_Next:_ ${j.next||''}`;
+ finalize(b,{answer:msg,how:'self-improvement (gated)',verified:true});
+}
 // One click → run the FULL from-scratch pipeline (train_all.py) on ALL data,
 // in the background, streaming live progress into a chat bubble.
 let trainingBubble=null;
@@ -686,6 +709,10 @@ class H(BaseHTTPRequestHandler):
             self._s(200, json.dumps(MIND.telemetry(), ensure_ascii=False))
         elif path == "/api/train_all/status":
             self._s(200, json.dumps(train_all_status(), ensure_ascii=False))
+        elif path == "/api/improve":
+            si = getattr(MIND, "si", None)
+            self._s(200, json.dumps(si.status() if si else {"available": False},
+                                    ensure_ascii=False))
         elif path == "/api/memory":
             lib = json.load(open(KB_FILE, encoding="utf-8")) if os.path.exists(KB_FILE) else []
             self._s(200, json.dumps({"name": MIND.name(), "facts": MIND.mem["facts"],
@@ -849,6 +876,19 @@ class H(BaseHTTPRequestHandler):
             if p is not None and p.poll() is None:
                 p.terminate()
             self._s(200, json.dumps({"ok": True, "running": False}))
+
+        elif self.path == "/api/improve/propose":       # governed loop, up to the gate
+            si = getattr(MIND, "si", None)
+            self._s(200, json.dumps(si.propose() if si else {"available": False},
+                                    ensure_ascii=False))
+        elif self.path == "/api/improve/promote":        # requires explicit approval
+            si = getattr(MIND, "si", None)
+            res = (si.promote(body.get("model", ""), approved=bool(body.get("approved")),
+                              note=body.get("note", "")) if si else {"ok": False})
+            self._s(200, json.dumps(res, ensure_ascii=False))
+        elif self.path == "/api/improve/rollback":
+            si = getattr(MIND, "si", None)
+            self._s(200, json.dumps(si.rollback() if si else {"ok": False}, ensure_ascii=False))
 
         elif self.path == "/api/skills":
             ok, msg = MIND.skills.add(body.get("name", ""), body.get("trigger", ""),

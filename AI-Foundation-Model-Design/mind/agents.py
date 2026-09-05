@@ -18,6 +18,7 @@ The contract every agent implements:
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -236,10 +237,79 @@ class KnowledgeAgent(Agent):
         return result is not None                    # includes the honest no-source reply
 
 
-# order is only a tie-breaker; scores drive dispatch. CoreRouter (front) then Knowledge
-# (tail) sit at the bottom as the catch-alls.
-DEFAULT_AGENTS = (SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
-                  ReasoningAgent, ConfigAgent, MemoryAgent, CoreRouterAgent, KnowledgeAgent)
+# --------------------------------------------------------------------------- #
+# Stage 6 — DOMAIN agents. New expertise plugs in by subclassing DomainAgent and
+# adding it to DEFAULT_AGENTS below. The master, executive, router and everything
+# else are UNCHANGED — that is the whole point of the architecture. Each fires only
+# on its own intent and answers with a domain-specialised prompt grounded on
+# retrieved facts; without a local LLM it self-skips (falls back to the base path),
+# so it can never regress existing behaviour.
+# --------------------------------------------------------------------------- #
+class DomainAgent(Agent):
+    intent = None            # compiled regex — the query shape this expert owns
+    system = ""              # domain system prompt
+    base_score = 0.65        # above the catch-alls, below the exact/verified specialists
+
+    def _fires(self, q):
+        return bool(self.intent and self.intent.search(q))
+
+    def score(self, q, ctx):
+        return self.base_score if self._fires(q) else 0.0
+
+    def run(self, q, ctx):
+        if not self._fires(q):
+            return None
+        llm = getattr(self.mind, "llm", None)
+        if not (llm and llm.available):
+            return None                          # no LLM → let the base path handle it
+        hits = self.mind.lib.search(q, k=8)
+        passages = [d for d, _ in hits]
+        try:
+            from llm import grounded_prompt
+            prompt = grounded_prompt(q, passages)
+        except Exception:
+            prompt = q
+        budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+        ans = llm.generate(prompt, system=self.system, max_tokens=budget)
+        if not ans:
+            return None
+        return Result(ans, how=f"{self.name} (LLM)", verified=bool(passages),
+                      confidence=0.72 if passages else 0.55,
+                      trace=[f"{self.name} agent grounded on {len(passages)} passage(s)"])
+
+
+class TroubleshootingAgent(DomainAgent):
+    name, domains = "troubleshooting", ("networking", "support")
+    intent = re.compile(
+        r"\b(troubleshoot|diagnos\w*|root ?cause|debug|not working|isn'?t working|"
+        r"won'?t \w+|failing|keeps? (dropping|failing)|no connectivity|"
+        r"can'?t (ping|connect|reach|browse)|why is .*\b(down|failing|slow|dropping))\b", re.I)
+    system = ("You are a senior network & security TROUBLESHOOTING agent. Respond as a "
+              "structured diagnosis: (1) the most likely causes, ranked; (2) the exact check "
+              "or command to confirm each; (3) the fix. Ground device/vendor specifics in the "
+              "provided facts; use expert knowledge for the method. Be concrete and ordered.")
+
+
+class SecurityReviewAgent(DomainAgent):
+    name, domains = "security_review", ("security",)
+    intent = re.compile(
+        r"is (this|it|my|the)\b[\w\s'-]{0,50}\b(secure|safe|hardened)|"
+        r"\b(security (review|risk|posture|concern|audit)|harden\w*|best practice|"
+        r"misconfigur\w*|vulnerab\w*|attack surface|least privilege|any (security )?risk|"
+        r"review (this|my|the) (policy|config|firewall|rule)|"
+        r"what.?s wrong with (this|the|my) (policy|config|rule))\b", re.I)
+    system = ("You are a SECURITY REVIEW agent. Assess the described config/design for risk: "
+              "call out misconfigurations, over-permissive rules, and exposure, each with why it "
+              "matters and the recommended hardening. Ground specifics in the provided facts; do "
+              "not invent rules that aren't there. Prioritise the highest-risk findings first.")
+
+
+# order is only a tie-breaker; scores drive dispatch. Domain experts sit above the
+# catch-alls but fire only on their intent; CoreRouter (front) then Knowledge (tail)
+# remain the bottom fallbacks.
+DEFAULT_AGENTS = (SkillAgent, MathAgent, PlannerAgent, WorldModelAgent, ReasoningAgent,
+                  TroubleshootingAgent, SecurityReviewAgent, ConfigAgent, MemoryAgent,
+                  CoreRouterAgent, KnowledgeAgent)
 
 
 class Registry:
