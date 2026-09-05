@@ -158,20 +158,24 @@ class Evaluator:
     the human ever sees it."""
 
     def run(self):
+        # Run the benchmark in ISOLATION — a throwaway data dir subprocess — so it never
+        # reads the live library (whose taught facts would break the honesty tests) and
+        # gives a true, reproducible score for the gate.
+        import subprocess
+        import sys
+        import tempfile
+        import os
+        import re
         try:
-            import capability_test
-            # capability_test.main() prints; we re-run its suite and capture the ratio.
-            import io
-            import contextlib
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                rc = capability_test.main() if hasattr(capability_test, "main") else 0
-            text = buf.getvalue()
-            import re
+            here = os.path.dirname(os.path.abspath(__file__))
+            env = {**os.environ, "VIO_DATA_DIR": tempfile.mkdtemp()}
+            out = subprocess.run([sys.executable, os.path.join(here, "capability_test.py")],
+                                 cwd=here, env=env, capture_output=True, text=True, timeout=600)
+            text = (out.stdout or "") + (out.stderr or "")
             m = re.search(r"(\d+)\s*/\s*(\d+)\s+passed", text)
             passed, total = (int(m.group(1)), int(m.group(2))) if m else (0, 0)
             return {"passed": passed, "total": total,
-                    "ratio": (passed / total) if total else 0.0, "rc": rc}
+                    "ratio": (passed / total) if total else 0.0}
         except Exception as e:
             return {"passed": 0, "total": 0, "ratio": 0.0, "error": str(e)[:120]}
 
