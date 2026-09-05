@@ -1270,17 +1270,24 @@ class Mind:
         self._remember_episode(q, r)
         return r
 
-    def ask_agentic(self, q):
-        """Stage 1 agentic entry — parallel to _ask_core, behaviour-preserving.
-        The master routes to the best registered agent; anything not yet migrated to
-        an agent falls back to the proven core router. ask()/_ask_core stay the default
-        until later stages move more capability behind the master."""
+    def _route(self, q):
+        """Stage 2 live router: the agent master IS the entry point. Specialized agents
+        handle what they've claimed; the CoreRouterAgent catch-all preserves every
+        not-yet-migrated branch of _ask_core, so making the master live cannot change
+        behaviour. Resets the retrieval-evidence slot first (as _ask_core does) so the
+        Confidence Engine scores correctly whichever agent wins. Falls back to _ask_core
+        only if the master failed to build (never in normal operation)."""
         q = (q or "").strip()
+        self._last_evidence = {}
         if getattr(self, "master", None) is not None:
             res = self.master.handle(q)
             if res is not None:
                 return res.as_dict()
         return self._ask_core(q)
+
+    def ask_agentic(self, q):
+        """Alias kept for callers/tests — routing now goes through the live master."""
+        return self._route(q)
 
     def _episodic_recall(self, q):
         eps = self.episodic.recall(q, k=3)

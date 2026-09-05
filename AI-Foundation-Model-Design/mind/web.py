@@ -172,6 +172,7 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  .bubble .lbl b{color:var(--accent2)}
  .bubble .lbl:first-child{margin-top:0}
  .meta{font-size:11px;color:var(--dim);margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+ .prov{color:var(--accent2);font-weight:600}
  .ok{color:var(--ok)}.no{color:var(--warn)}
  .copy{cursor:pointer;opacity:.6}.copy:hover{opacity:1}
  .fb{cursor:pointer;opacity:.55;font-size:12px}.fb:hover{opacity:1}
@@ -388,7 +389,8 @@ function bubble(who){hideEmpty();
 }
 function addUser(t){const {b}=bubble('me');b.classList.toggle('rtl',isAr(t));b.textContent=t;}
 function badge(j){const c=(j.confidence!=null)?' · '+Math.round(j.confidence*100)+'% sure':'';
- return (j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c;}
+ const ag=(j.agent&&j.agent!=='core')?' · <span class="prov">🧩 '+esc(j.agent)+' agent</span>':'';
+ return (j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c+ag;}
 function finalize(b,j){
  b.classList.toggle('rtl',isAr(j.answer));
  b.innerHTML=fmt(j.answer);

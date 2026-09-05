@@ -41,7 +41,7 @@ class Executive:
         ws = self.mind.ws
         percept = ws.post(PERCEPT, q, source="user", salience=0.9)
 
-        result = self.mind._ask_core(q)
+        result = self.mind._route(q)          # Stage 2: master is the live router
         evidence = getattr(self.mind, "_last_evidence", {}) or {}
         conf = confidence_score(result, evidence)
 

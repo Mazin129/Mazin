@@ -36,13 +36,20 @@ def main():
     check("what-if -> world_model agent",
           m.ask_agentic("what happens if congestion occurs").get("agent") == "world_model")
 
-    # not-yet-migrated capabilities fall back to the core router (no agent tag) and MATCH it
-    for q in ("what is 20% of 50", "what is OSPF"):
-        a, c = m.ask_agentic(q), m._ask_core(q)
-        check(f"fallback matches core: {q!r}", a.get("agent") is None and a["answer"] == c["answer"],
-              f"agent={a.get('agent')} eq={a['answer'] == c['answer']}")
+    # Stage 2: EVERY answer carries provenance (the core catch-all tags itself from `how`)
+    for q in ("what is 20% of 50", "what is OSPF", "hi", "integrate x^2"):
+        check(f"provenance present: {q!r}", bool(m.ask_agentic(q).get("agent")))
 
-    # the live default path is untouched — a math answer still comes straight from ask()
+    # PARITY: routing through the master must equal the proven core router, everywhere
+    battery = ["what is 20% of 50", "what is OSPF", "integrate x^2",
+               "what happens if congestion occurs", "solve x^2-5x+6=0",
+               "what is a VLAN", "hello", "roman numeral for 42"]
+    for q in battery:
+        a, c = m.ask_agentic(q), m._ask_core(q)
+        check(f"parity with core: {q!r}", a["answer"] == c["answer"],
+              f"\n     agentic: {a['answer'][:60]}\n     core:    {c['answer'][:60]}")
+
+    # the live default path (ask -> executive -> _route -> master) works end to end
     check("legacy ask() intact", "10" in m.ask("what is 20% of 50")["answer"])
 
     print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))

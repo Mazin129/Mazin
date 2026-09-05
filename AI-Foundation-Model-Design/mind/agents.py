@@ -71,10 +71,16 @@ class Agent:
 # --------------------------------------------------------------------------- #
 # Concrete agents — thin wrappers over Vio's existing, proven engines.
 # --------------------------------------------------------------------------- #
+_CMD = re.compile(r"^\s*(teach|remember|skill)\s*:", re.I)
+
+
 class SkillAgent(Agent):
     name, domains = "skill", ("memory", "reflex")
 
     def score(self, q, ctx):
+        # never shadow a teach:/remember:/skill: command with a user reflex
+        if _CMD.match(q):
+            return 0.0
         return 0.97 if self.mind.skills.match(q) else 0.0
 
     def run(self, q, ctx):
@@ -161,9 +167,50 @@ class MemoryAgent(Agent):
         return Result.from_dict(self.mind._episodic_recall(q))
 
 
+def agent_from_how(how):
+    """Map a result's `how` string to a canonical agent name, for provenance on
+    answers produced by the catch-all core router (until every branch is its own agent)."""
+    h = (how or "").lower()
+    table = [("symbolic", "math"), ("exact tool", "math"), ("quadratic", "math"),
+             ("function plot", "math"), ("skill:", "skill"), ("generation", "generation"),
+             ("world model", "world_model"), ("planning", "planner"),
+             ("reasoning over knowledge", "knowledge"), ("retrieval", "knowledge"),
+             ("data analysis", "data"), ("reasoning (", "reasoning"),
+             ("analysis over your", "config"), ("library", "memory"),
+             ("memory", "memory"), ("episodic", "memory"), ("github", "research"),
+             ("consolidation", "self_improvement"), ("feedback", "feedback"),
+             ("reasoning (llm", "reasoning"), ("no-source", "core")]
+    for key, name in table:
+        if key in h:
+            return name
+    return "core"
+
+
+class CoreRouterAgent(Agent):
+    """The catch-all: the entire proven _ask_core if-chain, wrapped as one lowest-priority
+    agent. Everything not yet promoted to its own agent still routes here, so making the
+    master the live entry point cannot change behaviour. Its provenance is derived from
+    the `how` the core produced. Migration = pull branches ABOVE this, one at a time."""
+    name, domains = "core", ("*",)
+
+    def score(self, q, ctx):
+        return 0.05
+
+    def run(self, q, ctx):
+        d = self.mind._ask_core(q)
+        res = Result.from_dict(d)
+        if res:
+            res.agent = agent_from_how(res.how)     # nicer provenance than "core"
+        return res
+
+    def validate(self, result, ctx):
+        return result is not None                    # the authority — always accepted
+
+
 # order is only a tie-breaker; each agent self-skips (returns None) when N/A.
+# CoreRouterAgent stays LAST (lowest score) as the catch-all.
 DEFAULT_AGENTS = (SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
-                  ReasoningAgent, ConfigAgent, MemoryAgent)
+                  ReasoningAgent, ConfigAgent, MemoryAgent, CoreRouterAgent)
 
 
 class Registry:
