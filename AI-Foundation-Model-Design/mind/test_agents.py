@@ -36,6 +36,12 @@ def main():
     check("what-if -> world_model agent",
           m.ask_agentic("what happens if congestion occurs").get("agent") == "world_model")
 
+    # Stage 3b: retrieval is a first-class KnowledgeAgent; exact-tool queries with
+    # retrieval-tempting words (factorial, roman) must still go to the front, not Knowledge.
+    check("retrieval -> knowledge agent", m.ask_agentic("what is OSPF").get("agent") == "knowledge")
+    check("exact tool not hijacked by knowledge",
+          m.ask_agentic("roman numeral for 42").get("agent") == "core")
+
     # Stage 2: EVERY answer carries provenance (the core catch-all tags itself from `how`)
     for q in ("what is 20% of 50", "what is OSPF", "hi", "integrate x^2"):
         check(f"provenance present: {q!r}", bool(m.ask_agentic(q).get("agent")))

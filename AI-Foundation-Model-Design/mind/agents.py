@@ -192,30 +192,51 @@ def agent_from_how(how):
 
 
 class CoreRouterAgent(Agent):
-    """The catch-all: the entire proven _ask_core if-chain, wrapped as one lowest-priority
-    agent. Everything not yet promoted to its own agent still routes here, so making the
-    master the live entry point cannot change behaviour. Its provenance is derived from
-    the `how` the core produced. Migration = pull branches ABOVE this, one at a time."""
+    """The FRONT of the proven router (commands, tools, generation, math, world,
+    reasoning, planning, aggregate) as one agent. It runs _core_front, which returns
+    None for a pure knowledge question — so the KnowledgeAgent below handles those, while
+    the order-sensitive front branches always get first crack here. Provenance is derived
+    from the `how` the core produced."""
     name, domains = "core", ("*",)
 
     def score(self, q, ctx):
-        return 0.05
+        return 0.05                                  # below the specialized agents, above Knowledge
 
     def run(self, q, ctx):
-        d = self.mind._ask_core(q)
-        res = Result.from_dict(d)
+        res = Result.from_dict(self.mind._core_front(q))
         if res:
-            res.agent = agent_from_how(res.how)     # nicer provenance than "core"
+            res.agent = agent_from_how(res.how)
         return res
 
     def validate(self, result, ctx):
-        return result is not None                    # the authority — always accepted
+        return result is not None
 
 
-# order is only a tie-breaker; each agent self-skips (returns None) when N/A.
-# CoreRouterAgent stays LAST (lowest score) as the catch-all.
+class KnowledgeAgent(Agent):
+    """First-class retrieval agent: grounded answers from the library + memory, the
+    grounded/open LLM, and the honest no-source fallback. Sits just BELOW CoreRouter so
+    the front branches (exact tools, generation, math) are never intercepted by a weak
+    retrieval hit — it only runs when the front handled nothing."""
+    name, domains = "knowledge", ("knowledge", "retrieval")
+
+    def score(self, q, ctx):
+        return 0.03                                  # just below CoreRouter's front
+
+    def run(self, q, ctx):
+        d = self.mind._knowledge_answer(q)
+        res = Result.from_dict(d)
+        if res and res.agent == "":
+            res.agent = agent_from_how(res.how) if res.how else "knowledge"
+        return res
+
+    def validate(self, result, ctx):
+        return result is not None                    # includes the honest no-source reply
+
+
+# order is only a tie-breaker; scores drive dispatch. CoreRouter (front) then Knowledge
+# (tail) sit at the bottom as the catch-alls.
 DEFAULT_AGENTS = (SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
-                  ReasoningAgent, ConfigAgent, MemoryAgent, CoreRouterAgent)
+                  ReasoningAgent, ConfigAgent, MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
 
 class Registry:

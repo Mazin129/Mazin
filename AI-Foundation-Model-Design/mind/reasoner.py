@@ -1390,7 +1390,11 @@ class Mind:
             "quality": dict(quality),
         }
 
-    def _ask_core(self, q):
+    def _core_front(self, q):
+        # The order-sensitive FRONT of the router: commands, tools, generation, math,
+        # world, reasoning, planning, aggregate. Returns a result, or None if none fired
+        # (then the knowledge tail runs). Split from the knowledge tail so KnowledgeAgent
+        # is first-class without reordering these branches.
         q = q.strip()
         low = q.lower()
         self._last_evidence = {}          # retrieval metadata for the Confidence Engine
@@ -1580,7 +1584,15 @@ class Mind:
         agg = self._aggregate_answer(q)
         if agg:
             return agg
+        return None                       # front handled nothing → knowledge tail runs next
 
+    def _knowledge_answer(self, q):
+        """Retrieval + grounded-LLM + open-reasoning tail — the KnowledgeAgent owns this.
+        Always returns a result: grounded, synthesised, a retrieval dump, an LLM answer,
+        or an honest no-source. Split out of _ask_core so Knowledge is a first-class agent
+        while the order-sensitive front branches keep first crack above it."""
+        q = q.strip()
+        low = q.lower()
         # 2) retrieval from the growing library + personal memory
         STOP = {"the", "a", "an", "is", "are", "was", "of", "to", "in", "on", "for",
                 "what", "who", "where", "when", "why", "how", "my", "me", "and", "i",
@@ -1726,6 +1738,12 @@ class Mind:
         return {"answer": "I don't know that yet. Teach me with:  teach: <fact>   "
                           "(then ask again). I only claim what I can verify or retrieve.",
                 "how": "no-source", "verified": False, "trace": []}
+
+    def _ask_core(self, q):
+        """Backward-compatible core router: the front branches, else the knowledge tail.
+        The live path routes through the master (_route); this stays for the CoreRouter
+        agent's fallback and for the parity tests that pin behaviour."""
+        return self._core_front(q) or self._knowledge_answer(q)
 
 
 def _print(r):
