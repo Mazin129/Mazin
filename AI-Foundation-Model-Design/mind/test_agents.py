@@ -52,6 +52,32 @@ def main():
     # the live default path (ask -> executive -> _route -> master) works end to end
     check("legacy ask() intact", "10" in m.ask("what is 20% of 50")["answer"])
 
+    # R1/R2 guardrail: an ACTING (write) agent is gated behind confirmation; a read-only
+    # agent passes straight through. (No live agent has write perms yet, so this is the
+    # safety foundation for future Automation/Code/Web agents.)
+    from agents import Agent, Result, Registry, Master, WRITE
+
+    class _Write(Agent):
+        name = "mock_write"
+        permissions = frozenset(("read", WRITE))
+        def score(self, q, ctx): return 0.99
+        def run(self, q, ctx): return Result("Applied the change.", how="automation", verified=True)
+
+    class _Read(Agent):
+        name = "mock_read"
+        def score(self, q, ctx): return 0.99
+        def run(self, q, ctx): return Result("Here is the info.", how="advice", verified=True)
+
+    gm = Master(Registry()); gm.registry.register(_Write(None))
+    gated = gm.handle("apply the config")
+    check("acting agent gated", "confirm" in (gated.answer or "").lower() and not gated.verified)
+    okr = gm.handle("apply the config", {"confirmed": True})
+    check("confirmed action passes ungated", okr.answer.strip() == "Applied the change." and okr.verified)
+
+    rm = Master(Registry()); rm.registry.register(_Read(None))
+    ra = rm.handle("tell me something")
+    check("advisory passes ungated", ra.answer == "Here is the info." and ra.verified)
+
     print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
     return 1 if fails else 0
 

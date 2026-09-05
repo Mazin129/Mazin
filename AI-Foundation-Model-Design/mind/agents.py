@@ -50,10 +50,15 @@ class Result:
                    trace=list(d.get("trace") or []))
 
 
+# permission tokens — an agent declares what it may do. Advisory agents are read-only
+# and always safe; write/network make an agent an ACTING agent, gated by the guardrail.
+READ, WRITE, NETWORK = "read", "write", "network"
+
+
 class Agent:
     name = "agent"
     domains: tuple = ()
-    permissions = frozenset({"read"})
+    permissions = frozenset({READ})
 
     def __init__(self, mind):
         self.mind = mind
@@ -228,13 +233,35 @@ class Registry:
         return scored
 
 
+class Guardrail:
+    """R1/R2 — consulted by the master before any result is returned. Advisory
+    (read-only) answers pass straight through. A result from an ACTING agent
+    (write/network permission) is GATED behind explicit confirmation, so Vio never
+    changes anything or reaches outside itself without a yes. This is the safety
+    foundation that must exist before Automation/Code/Web agents are ever added."""
+
+    def check(self, q, agent, result, ctx):
+        acts = bool(set(getattr(agent, "permissions", ())) & {WRITE, NETWORK})
+        if not acts or ctx.get("confirmed"):
+            return result                       # advisory, or already approved
+        scope = "reach outside Vio" if NETWORK in agent.permissions else "change something"
+        result.answer = (result.answer or "").rstrip() + (
+            f"\n\n⚠️ This would {scope}. I won't run it without your OK — reply "
+            "'confirm' to proceed.")
+        result.how = (result.how or agent.name) + " · needs confirmation"
+        result.verified = False
+        result.trace = list(result.trace) + ["guardrail: acting result gated pending confirmation"]
+        return result
+
+
 class Master:
-    """The control plane: score → dispatch → validate, highest-fit first, first
-    validated result wins. Returns None if no agent handled the query (the caller
+    """The control plane: score → dispatch → validate → guardrail, highest-fit first,
+    first validated result wins. Returns None if no agent handled the query (the caller
     then falls back to the legacy router)."""
 
-    def __init__(self, registry):
+    def __init__(self, registry, guardrail=None):
         self.registry = registry
+        self.guardrail = guardrail or Guardrail()
 
     def handle(self, q, ctx=None):
         ctx = ctx or {}
@@ -245,7 +272,7 @@ class Master:
                 res = None
             if res and agent.validate(res, ctx):
                 res.agent = agent.name
-                return res
+                return self.guardrail.check(q, agent, res, ctx)
         return None
 
 
