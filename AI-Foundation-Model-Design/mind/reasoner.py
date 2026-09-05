@@ -619,6 +619,14 @@ class Mind:
             self.llm = LLM()
         except Exception:
             self.llm = None
+        # Stage 1 agentic layer: a master + registry wrapping the engines above. This does
+        # NOT change ask()/_ask_core — it powers the parallel ask_agentic() path, which
+        # falls back to _ask_core for anything not yet migrated. Optional/never fatal.
+        try:
+            from agents import build_master
+            self.master, self.agent_registry = build_master(self)
+        except Exception:
+            self.master, self.agent_registry = None, None
         self._retrain()
 
     def _own_model_info(self):
@@ -1261,6 +1269,18 @@ class Mind:
         }
         self._remember_episode(q, r)
         return r
+
+    def ask_agentic(self, q):
+        """Stage 1 agentic entry — parallel to _ask_core, behaviour-preserving.
+        The master routes to the best registered agent; anything not yet migrated to
+        an agent falls back to the proven core router. ask()/_ask_core stay the default
+        until later stages move more capability behind the master."""
+        q = (q or "").strip()
+        if getattr(self, "master", None) is not None:
+            res = self.master.handle(q)
+            if res is not None:
+                return res.as_dict()
+        return self._ask_core(q)
 
     def _episodic_recall(self, q):
         eps = self.episodic.recall(q, k=3)
