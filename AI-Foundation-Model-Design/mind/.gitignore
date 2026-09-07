@@ -16,3 +16,5 @@ traces.jsonl
 curated_sft.jsonl
 model_state.json
 vio_sft.jsonl
+# remote-access login token (secret, per-machine — never commit)
+vio_token.txt
