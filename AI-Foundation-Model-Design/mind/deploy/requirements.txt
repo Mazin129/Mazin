@@ -1,0 +1,8 @@
+# Vio runtime (SERVING only — not training). torch is NOT needed to serve.
+sympy>=1.12
+numpy>=1.24
+scikit-learn>=1.3
+# recommended: clean PDF text extraction
+pymupdf>=1.24
+# optional: real semantic search (large download ~300MB incl. torch) — uncomment to enable
+# sentence-transformers>=2.6

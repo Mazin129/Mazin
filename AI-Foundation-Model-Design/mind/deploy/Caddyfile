@@ -1,0 +1,18 @@
+# Automatic HTTPS (Let's Encrypt) + reverse proxy to Vio. Caddy is the only public door.
+{$DOMAIN} {
+	encode gzip zstd
+	# generous timeouts: local LLM answers can take a while
+	reverse_proxy vio:8100 {
+		flush_interval -1
+		transport http {
+			read_timeout 600s
+			write_timeout 600s
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		-Server
+	}
+}
