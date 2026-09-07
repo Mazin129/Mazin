@@ -1,35 +1,83 @@
-# Security audit — Vio (the local reasoning assistant)
+# Reaching Vio securely from anywhere
 
-Threat model: Vio is a **personal, local** app. It binds only to `127.0.0.1`
-(never the network), stores data as local JSON, and makes **no outbound network
-calls**. The realistic risks are (a) a crafted input abusing the maths parser, and
-(b) a malicious website in your browser reaching the local server. Both are fixed.
+Vio's web API can teach, forget, train, and swap its model — so it must **never** sit
+unauthenticated on the open internet. This guide gives the secure way.
 
-## Findings and fixes
+## TL;DR
+1. **Set an access token** so Vio requires a login.
+2. **Expose it with Tailscale** (private mesh VPN) — not a port-forward.
+3. Never open port 8100 to the internet directly.
 
-| # | Severity | Finding | Fix | Verified |
-|---|---|---|---|---|
-| 1 | **Critical (RCE)** | `sympy.parse_expr` uses `eval()` internally, so a mathy-looking payload like `1+eval("__import__('os').system(...)")` executed arbitrary code. | Strict **input whitelist** before parsing (`reasoner.py _parse`): reject quotes/underscores/brackets/backslash and any multi-letter name that isn't a known maths function. | Exploits now return "no-source" (never executed); legit maths unaffected. |
-| 2 | High | A malicious web page could POST to `http://localhost:8100` (CSRF / DNS-rebinding) and trigger server-side actions. | **Host-header check** (`web.py _host_ok`): accept only `localhost` / `127.0.0.1`. Blocks DNS-rebinding (attacker's domain would appear in `Host`). | Spoofed `Host: evil.com` → **403**. |
-| 3 | Medium | No request-size limit → a huge upload could exhaust memory (DoS). | **32 MB body cap** (`MAX_BODY`) → 413 on oversize. | — |
-| 4 | Low | Missing hardening headers. | `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`; JSON parse wrapped in try/except. | — |
+---
 
-## What was checked and is clean
+## 1. Turn on the access token (do this first)
 
-- **No `eval`/`exec`/`os.system`/`subprocess`/`pickle`/`__import__`** anywhere in the
-  app code (only the interactive `input()` CLI prompt, which is safe).
-- **No outbound network** from Vio (`mind/`) — fully offline. (The ML *training*
-  scripts in `prototype/` download tiny-shakespeare from one hardcoded GitHub URL;
-  that is separate from Vio and not run by it.)
-- **File I/O uses fixed paths** in the script directory — no path traversal. Personal
-  memory/library (`mind_memory.json`, `knowledge.json`) are git-ignored (private).
-- Server bound to `127.0.0.1` only — not reachable from other machines.
+Pick a long random code and set it before starting Vio:
 
-## Notes / residual
+**Windows (cmd):**
+```
+set VIO_TOKEN=paste-a-long-random-code-here
+python web.py
+```
+**Windows (permanent, all terminals):**
+```
+setx VIO_TOKEN "paste-a-long-random-code-here"
+```
+(open a new terminal after `setx`)
 
-- No authentication is used — acceptable for a single-user localhost app, and the
-  Host check prevents cross-site abuse. If you ever expose it beyond localhost
-  (don't, without more work), add auth + HTTPS + CORS controls first.
-- Everything Vio tells you is either verified (maths) or retrieved from what you
-  taught it — it does not execute anything from documents you upload; they are
-  stored as text and only searched.
+Now every visitor gets a **login page** and needs the code. The code is checked in
+constant time, brute-force attempts are throttled, and a successful login gets a
+`HttpOnly`, `SameSite=Strict` session cookie. Losing the code locks everyone out — keep it safe.
+
+> Generate a strong code:  `python -c "import secrets;print(secrets.token_urlsafe(24))"`
+
+---
+
+## 2. Expose it with Tailscale (recommended — most secure)
+
+Tailscale is a private WireGuard mesh. Vio stays on your machine; only **your own devices**
+can reach it, end-to-end encrypted. Nothing is ever on the public internet.
+
+1. Install Tailscale on the **Vio machine** and on your **phone/laptop**: https://tailscale.com/download
+   Sign in with the same account on both.
+2. On the Vio machine, publish Vio over your tailnet **with automatic HTTPS**:
+   ```
+   tailscale serve --bg 8100
+   ```
+   Tailscale prints an address like `https://your-pc.tailXXXX.ts.net`.
+3. Tell Vio that hostname is allowed (DNS-rebinding protection), then start it:
+   ```
+   set VIO_TOKEN=your-code
+   set VIO_ALLOWED_HOSTS=your-pc.tailXXXX.ts.net
+   set VIO_HTTPS=1
+   python web.py
+   ```
+4. On your phone (Tailscale on), open `https://your-pc.tailXXXX.ts.net`, log in with the code.
+
+That's it: TLS from Tailscale, access limited to your devices, plus Vio's own login. Two locks.
+
+---
+
+## 3. Alternative — Cloudflare Tunnel + Access
+
+Use only if you need access from devices you can't put on Tailscale, or to share.
+`cloudflared tunnel` exposes Vio through Cloudflare (no open ports), and **Cloudflare Access**
+adds an identity login in front. Still set `VIO_TOKEN` and `VIO_ALLOWED_HOSTS=<your.tunnel.host>`
+underneath. Tradeoff: traffic transits Cloudflare.
+
+---
+
+## Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `VIO_TOKEN` | Access code. Set = login required. Unset = localhost-only, no login. |
+| `MIND_HOST` | Bind address. Default `127.0.0.1` (local only). Vio **refuses** to bind elsewhere without `VIO_TOKEN`. |
+| `VIO_ALLOWED_HOSTS` | Comma-separated hostnames allowed in the `Host` header (your tailnet/tunnel name). |
+| `VIO_HTTPS` | Set when TLS terminates in front (Tailscale/Cloudflare/proxy) so the cookie is marked `Secure`. |
+| `MIND_PORT` | Port (default 8100). |
+
+## Don'ts
+- ❌ Don't port-forward 8100 on your router.
+- ❌ Don't run bound to `0.0.0.0` without `VIO_TOKEN` (Vio refuses this by design).
+- ❌ Don't put the token in a shared repo or a screenshot.

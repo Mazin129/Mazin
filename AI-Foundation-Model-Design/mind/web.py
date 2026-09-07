@@ -24,6 +24,8 @@ import os
 import subprocess
 import sys
 import time
+import hmac
+import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from reasoner import Mind, KB_FILE
 from talk import reply
@@ -32,6 +34,20 @@ from dashboard_page import DASHBOARD
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = int(os.environ.get("MIND_PORT", "8100"))
+HOST = os.environ.get("MIND_HOST", "127.0.0.1")     # 127.0.0.1 = local only (default)
+
+# ── access control ──────────────────────────────────────────────────────────
+# VIO_TOKEN turns on authentication: reaching Vio then requires logging in with the
+# token, which mints a per-session cookie. Leave it unset ONLY for pure-localhost use.
+# When Vio is bound to anything but localhost it MUST have a token (enforced at startup),
+# because the API can teach, forget, train and swap the model.
+TOKEN = os.environ.get("VIO_TOKEN", "").strip()
+# Host headers accepted besides localhost (DNS-rebinding protection). Add your tailnet
+# name here, e.g. VIO_ALLOWED_HOSTS="vio.tailXXXX.ts.net".
+ALLOWED_HOSTS = {h.strip().lower() for h in os.environ.get("VIO_ALLOWED_HOSTS", "").split(",") if h.strip()}
+_SESSIONS = set()                                   # valid session ids (memory; cleared on restart)
+_LOGIN_FAILS = {"n": 0, "until": 0.0}               # simple brute-force throttle
+
 MIND = Mind()
 _last_activity = time.time()          # for idle-time consolidation (§14 "sleep")
 AGENT = SolveAgent(MIND)
@@ -642,6 +658,42 @@ renderChips();loadStatus();
 
 MAX_BODY = 32 * 1024 * 1024
 
+LOGIN_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Vio · sign in</title>
+<style>
+ :root{color-scheme:light dark}
+ *{box-sizing:border-box}
+ body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;
+   background:#0b0f17;color:#e9eef6}
+ form{width:min(340px,90vw);text-align:center;background:#131b28;border:1px solid #223;
+   border-radius:16px;padding:34px 28px;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+ .b{width:56px;height:56px;border-radius:16px;display:grid;place-items:center;font-size:28px;
+   margin:0 auto 14px;background:linear-gradient(135deg,#3b6ef5,#7b53ff)}
+ h1{margin:0 0 4px;font-size:22px} p{margin:0 0 18px;color:#8b98ad;font-size:14px}
+ input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid #2a3550;background:#0d1420;
+   color:#e9eef6;font-size:15px;margin-bottom:12px}
+ button{width:100%;padding:12px;border:0;border-radius:10px;background:linear-gradient(135deg,#3b6ef5,#7b53ff);
+   color:#fff;font-size:15px;font-weight:600;cursor:pointer}
+ #err{color:#ff8a8a;font-size:13px;margin-top:12px;min-height:16px}
+ .lock{color:#8b98ad;font-size:12px;margin-top:16px}
+</style></head><body>
+<form onsubmit="return login(event)">
+ <div class="b">🧠</div><h1>Vio</h1>
+ <p>Private assistant · enter your access code</p>
+ <input id="t" type="password" placeholder="Access code" autocomplete="current-password" autofocus>
+ <button>Unlock</button>
+ <div id="err"></div>
+ <div class="lock">🔒 End-to-end over your private network</div>
+</form>
+<script>
+async function login(e){e.preventDefault();
+ const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({token:document.getElementById('t').value})});
+ if(r.ok){location.reload();return false;}
+ const j=await r.json().catch(()=>({}));
+ document.getElementById('err').textContent=j.error||'Login failed';return false;}
+</script></body></html>"""
+
 
 def _status():
     st = MIND.thinker.stats()
@@ -680,8 +732,50 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
     def _host_ok(self):
-        host = (self.headers.get("Host") or "").split(":")[0]
-        return host in ("localhost", "127.0.0.1", "")
+        host = (self.headers.get("Host") or "").split(":")[0].lower()
+        return host in ("localhost", "127.0.0.1", "") or host in ALLOWED_HOSTS
+
+    # ── auth ──────────────────────────────────────────────────────────────
+    def _session(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            if part.strip().startswith("vio_session="):
+                return part.strip()[len("vio_session="):]
+        return ""
+
+    def _authed(self):
+        """True when access is allowed: no token configured (localhost dev), or a valid
+        session cookie is present."""
+        if not TOKEN:
+            return True
+        return self._session() in _SESSIONS
+
+    def _do_login(self, body):
+        """Exchange the shared token for a session cookie. Constant-time compare + a
+        coarse throttle so the token can't be brute-forced."""
+        now = time.time()
+        if _LOGIN_FAILS["until"] > now:
+            self._s(429, json.dumps({"ok": False, "error": "Too many attempts. Wait a minute."}))
+            return
+        given = (body or {}).get("token", "")
+        if TOKEN and hmac.compare_digest(str(given), TOKEN):
+            _LOGIN_FAILS["n"] = 0
+            sid = secrets.token_urlsafe(32)
+            _SESSIONS.add(sid)
+            b = b'{"ok":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            # HttpOnly (no JS access) + SameSite=Strict (CSRF-resistant); add Secure behind TLS.
+            cookie = f"vio_session={sid}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
+            if os.environ.get("VIO_HTTPS"):
+                cookie += "; Secure"
+            self.send_header("Set-Cookie", cookie)
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers(); self.wfile.write(b)
+            return
+        _LOGIN_FAILS["n"] += 1
+        if _LOGIN_FAILS["n"] >= 8:
+            _LOGIN_FAILS["until"] = now + 60        # lock out a minute after 8 misses
+        self._s(401, json.dumps({"ok": False, "error": "Wrong access code."}))
 
     def _body(self):
         n = int(self.headers.get("Content-Length", 0))
@@ -699,6 +793,12 @@ class H(BaseHTTPRequestHandler):
             self._s(403, "{}"); return
         from urllib.parse import urlparse, parse_qs
         path = urlparse(self.path).path
+        if not self._authed():                          # gate: show login, refuse the rest
+            if path == "/":
+                self._s(200, LOGIN_PAGE, "text/html; charset=utf-8")
+            else:
+                self._s(401, "{}")
+            return
         if path == "/":
             self._s(200, PAGE, "text/html; charset=utf-8")
         elif path == "/api/status":
@@ -762,6 +862,8 @@ class H(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._host_ok():
             self._s(403, "{}"); return
+        if not self._authed():
+            self._s(401, "{}"); return
         body = self._body()
         if body is None:
             self._s(413, "{}"); return
@@ -776,6 +878,10 @@ class H(BaseHTTPRequestHandler):
         _last_activity = time.time()
         if not self._host_ok():
             self._s(403, "{}"); return
+        if self.path == "/api/login":                   # the one route open before auth
+            self._do_login(self._body()); return
+        if not self._authed():
+            self._s(401, json.dumps({"answer": "Please sign in first."})); return
         body = self._body()
         if body is None:
             self._s(413, '{"answer":"That is too large."}'); return
@@ -928,8 +1034,19 @@ if __name__ == "__main__":
         print("   Local reasoning + memory + your own trained model.")
         print("   Keep this window open while you chat; close it to stop Vio.")
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+    # SAFETY GATE: never expose Vio beyond localhost without an access token — the API can
+    # teach, forget, train and swap the model. Override only for a trusted private setup.
+    if HOST not in ("127.0.0.1", "localhost") and not TOKEN and not os.environ.get("VIO_ALLOW_INSECURE"):
+        print("✋ Refusing to bind to", HOST, "without VIO_TOKEN set — that would put an\n"
+              "   unauthenticated admin API on the network. Set a token first:\n"
+              "     set VIO_TOKEN=<a long random code>\n"
+              "   (and add your hostname to VIO_ALLOWED_HOSTS). Prefer Tailscale so Vio\n"
+              "   is only reachable by your own devices. See SECURITY.md.")
+        sys.exit(1)
+    if TOKEN:
+        print(f"🔒 Access token required. Vio is protected. Bound to {HOST}:{PORT}")
     threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
     try:
-        ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
+        ThreadingHTTPServer((HOST, PORT), H).serve_forever()
     except KeyboardInterrupt:
         pass
