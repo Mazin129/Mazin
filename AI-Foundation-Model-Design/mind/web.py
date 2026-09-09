@@ -1045,8 +1045,30 @@ if __name__ == "__main__":
         sys.exit(1)
     if TOKEN:
         print(f"🔒 Access token required. Vio is protected. Bound to {HOST}:{PORT}")
+    # capability banner — so you can SEE which process this is (model + web research),
+    # and never have to guess whether a stale old process is the one answering.
+    try:
+        import websearch
+        _net = websearch.net_enabled()
+    except Exception:
+        _net = False
+    _llm = getattr(MIND, "llm", None)
+    _model = (getattr(_llm, "model", None) if _llm and getattr(_llm, "available", False)
+              else None)
+    print(f"   🧠 model: {_model or '(none — install/start Ollama)'}")
+    print(f"   🌐 web research: {'ON' if _net else 'OFF (set VIO_ALLOW_NET=1)'}")
     threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
     try:
         ThreadingHTTPServer((HOST, PORT), H).serve_forever()
     except KeyboardInterrupt:
         pass
+    except OSError as e:
+        # port already in use = a previous (likely stale, old-code) Vio is still running
+        # and is the one answering. Say so loudly instead of dying quietly.
+        print(f"\n✋ Could not start: port {PORT} is already in use ({e}).")
+        print("   Another Vio is still running and IS the one answering your questions")
+        print("   (probably old code). Stop it first, then start this one:")
+        print("     taskkill /F /IM python3.13.exe   (Windows Store Python)")
+        print("     taskkill /F /IM python.exe")
+        print(f"   Confirm it's gone:  netstat -ano | findstr :{PORT}")
+        sys.exit(1)
