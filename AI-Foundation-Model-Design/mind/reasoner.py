@@ -1243,9 +1243,11 @@ class Mind:
                 sources = [{"url": query, "title": query}]     # a bare URL → read it
             else:
                 sources = websearch.search(query, k=k)
-        except websearch.NetError as e:
-            return {"ok": False, "how": "web research", "verified": False,
-                    "answer": f"Web search failed: {e}", "trace": []}
+        except Exception as e:                                 # never crash the agent
+            return {"ok": False, "how": "web research (failed)", "verified": False,
+                    "answer": f"Web search failed: {e}\n\nIf this keeps happening, your "
+                    "network may block these engines — set VIO_NET_ALLOW to sites you can "
+                    "reach, or paste a URL directly:  research: https://…", "trace": []}
         if not sources:
             return {"ok": False, "how": "web research", "verified": False,
                     "answer": "I couldn't find any results to read for that.", "trace": []}

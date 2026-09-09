@@ -25,6 +25,7 @@ import ipaddress
 import os
 import re
 import socket
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -112,12 +113,18 @@ def _open(url, data=None, engine=False):
     req = urllib.request.Request(
         url, data=data,
         headers={"User-Agent": UA, "Accept": "text/html,*/*", "Accept-Language": "en"})
-    with urllib.request.urlopen(req, timeout=_timeout()) as r:
-        final = r.geturl()
-        if final != url:                       # a 30x may have moved us somewhere unsafe
-            check_url(final, engine=engine)
-        cap = _max_bytes()
-        raw = r.read(cap + 1)
+    try:
+        with urllib.request.urlopen(req, timeout=_timeout()) as r:
+            final = r.geturl()
+            if final != url:                   # a 30x may have moved us somewhere unsafe
+                check_url(final, engine=engine)
+            cap = _max_bytes()
+            raw = r.read(cap + 1)
+    except NetError:
+        raise
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # surface every network failure as a NetError so callers never crash on it
+        raise NetError(f"request to {url} failed: {e}")
     return raw[:cap]
 
 
@@ -181,9 +188,85 @@ def parse_ddg(markup: str, k: int) -> list:
     return out
 
 
-def search(query: str, k: int = 5) -> list:
-    """Keyless web search → [{url, title}]. Raises NetError if disabled/blocked."""
+def parse_bing(markup: str, k: int) -> list:
+    """Extract result links from a Bing SERP. Pure — unit-testable."""
+    out, seen = [], set()
+    for m in re.finditer(r'(?is)<li[^>]*class="[^"]*\bb_algo\b[^"]*"[^>]*>.*?'
+                         r'<h2[^>]*>\s*<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>', markup):
+        url, title = html.unescape(m.group(1)), html_to_text(m.group(2))
+        if not url.lower().startswith(("http://", "https://")) or url in seen:
+            continue
+        try:
+            check_url(url)
+        except NetError:
+            continue
+        seen.add(url)
+        out.append({"url": url, "title": title or url})
+        if len(out) >= k:
+            break
+    return out
+
+
+def _generic_links(markup: str, k: int, skip_hosts=()) -> list:
+    """Last-resort: pull external result links out of any SERP HTML."""
+    out, seen = [], set()
+    junk = ("duckduckgo.com", "bing.com", "microsoft.com", "msn.com", "go.microsoft",
+            "google.com", "javascript:", "mailto:") + tuple(skip_hosts)
+    for m in re.finditer(r'(?is)<a\b[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', markup):
+        url = html.unescape(m.group(1))
+        low = url.lower()
+        if url in seen or any(j in low for j in junk):
+            continue
+        title = html_to_text(m.group(2))
+        if len(title) < 3:
+            continue
+        try:
+            check_url(url)
+        except NetError:
+            continue
+        seen.add(url)
+        out.append({"url": url, "title": title or url})
+        if len(out) >= k:
+            break
+    return out
+
+
+# search backends, tried in order until one returns results. Each is (name, fn).
+def _src_ddg(query, k):
     data = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode()
-    markup = _open("https://html.duckduckgo.com/html/", data=data, engine=True) \
-        .decode("utf-8", "replace")
-    return parse_ddg(markup, k)
+    m = _open("https://html.duckduckgo.com/html/", data=data, engine=True).decode("utf-8", "replace")
+    return parse_ddg(m, k)
+
+
+def _src_bing(query, k):
+    u = "https://www.bing.com/search?" + urllib.parse.urlencode({"q": query, "setlang": "en"})
+    m = _open(u, engine=True).decode("utf-8", "replace")
+    return parse_bing(m, k) or _generic_links(m, k)
+
+
+def _src_ddg_lite(query, k):
+    data = urllib.parse.urlencode({"q": query}).encode()
+    m = _open("https://lite.duckduckgo.com/lite/", data=data, engine=True).decode("utf-8", "replace")
+    return _generic_links(m, k)
+
+
+_SOURCES = (("duckduckgo", _src_ddg), ("bing", _src_bing), ("duckduckgo-lite", _src_ddg_lite))
+
+
+def search(query: str, k: int = 5) -> list:
+    """Keyless web search → [{url, title}]. Tries several engines so a single blocked
+    source doesn't break research. Raises NetError only if ALL sources fail."""
+    if not net_enabled():
+        raise NetError("internet access is off (set VIO_ALLOW_NET=1 to enable)")
+    errors = []
+    for name, fn in _SOURCES:
+        try:
+            res = fn(query, k)
+        except Exception as e:                 # any source may fail; try the next one
+            errors.append(f"{name}: {e}")
+            continue
+        if res:
+            return res
+    if errors:
+        raise NetError("all search sources failed — " + " | ".join(errors))
+    return []

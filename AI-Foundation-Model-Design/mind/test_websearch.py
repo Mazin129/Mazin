@@ -92,6 +92,35 @@ def test_ddg_parse(monkeypatch):
     _ok("direct link kept", res[1]["url"] == "https://direct.example/post")
 
 
+def test_bing_and_fallback(monkeypatch):
+    print("\n  Bing parse + multi-source fallback")
+    monkeypatch.setenv("VIO_ALLOW_NET", "1")
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_resolve({}))
+    monkeypatch.delenv("VIO_NET_ALLOW", raising=False)
+    monkeypatch.delenv("VIO_NET_BLOCK", raising=False)
+    bing = ('<li class="b_algo"><h2><a href="https://learn.example/mtls">mTLS Guide</a></h2></li>'
+            '<li class="b_algo"><h2><a href="https://rfc.example/bgp">BGP RFC</a></h2></li>')
+    res = websearch.parse_bing(bing, k=5)
+    _ok("bing parses results", len(res) == 2 and res[0]["url"] == "https://learn.example/mtls")
+
+    # first source raises, second returns results → search returns them (no crash)
+    def boom(q, k):
+        raise websearch.NetError("blocked")
+
+    def good(q, k):
+        return [{"url": "https://ok.example/x", "title": "ok"}]
+
+    monkeypatch.setattr(websearch, "_SOURCES", (("s1", boom), ("s2", good)))
+    _ok("falls through to next source", websearch.search("q", 3)[0]["url"] == "https://ok.example/x")
+
+    # all sources fail → NetError (never a silent crash)
+    monkeypatch.setattr(websearch, "_SOURCES", (("s1", boom), ("s2", boom)))
+    try:
+        websearch.search("q", 3); _ok("all-fail raises NetError", False)
+    except websearch.NetError:
+        _ok("all-fail raises NetError", True)
+
+
 def test_disabled_by_default(monkeypatch):
     print("\n  off by default")
     monkeypatch.delenv("VIO_ALLOW_NET", raising=False)
@@ -178,7 +207,8 @@ if __name__ == "__main__":
             self._env, self._attr = [], []
 
     tests = [test_url_safety, test_allow_block, test_html_to_text, test_ddg_parse,
-             test_disabled_by_default, test_guardrail_optin, test_agent_scoring]
+             test_bing_and_fallback, test_disabled_by_default, test_guardrail_optin,
+             test_agent_scoring]
     print("=" * 60 + "\n  WEB RESEARCH TESTS")
     for t in tests:
         mp = _MP()
