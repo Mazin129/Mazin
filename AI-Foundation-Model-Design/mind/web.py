@@ -510,12 +510,13 @@ async function loadStatus(){
   const hn=document.getElementById('heroName');if(hn&&j.name)hn.textContent=j.name;
   statusEl.innerHTML='<b>'+j.library+'</b> passages · <b>'+(j.skills||0)+'</b> skills · <b>'+(j.memories||0)+'</b> memories';
   const brain=document.getElementById('brain'), mini=document.getElementById('brainMini');
-  if(j.brain){brain.classList.add('live');brain.innerHTML='🧠 reasoning · <b>'+esc(j.brain)+'</b>';
-     brain.title='reasoning cortex: '+j.brain+' (understands & reasons)';
-     if(mini)mini.textContent='🧠 '+j.brain;}
-  else{brain.classList.remove('live');brain.innerHTML='🧠 lexical only — install Ollama';
+  const webTag=j.web?' · 🌐 web':'';
+  if(j.brain){brain.classList.add('live');brain.innerHTML='🧠 reasoning · <b>'+esc(j.brain)+'</b>'+(j.web?' · <b>🌐 web research on</b>':'');
+     brain.title='reasoning cortex: '+j.brain+(j.web?' · web research ON (research: <topic>)':' · web research OFF');
+     if(mini)mini.textContent='🧠 '+j.brain+webTag;}
+  else{brain.classList.remove('live');brain.innerHTML='🧠 lexical only — install Ollama'+(j.web?' · <b>🌐 web research on</b>':'');
      brain.title='No local LLM detected — run: ollama pull llama3.1, then restart.';
-     if(mini)mini.textContent='';}
+     if(mini)mini.textContent=(j.web?'🌐 web':'');}
  }catch(e){}
 }
 async function train(withChat){
@@ -702,7 +703,16 @@ def _status():
             "contexts": st["contexts"], "skills": len(MIND.skills.skills),
             "memories": len(MIND.episodic.episodes), "gaps": len(MIND.curiosity.gaps),
             "brain": (llm.model if (llm and llm.available) else None),
+            "web": _web_research_on(),
             "semantic": (MIND.lib.sem.backend if getattr(MIND.lib, "sem", None) else None)}
+
+
+def _web_research_on():
+    try:
+        import websearch
+        return bool(websearch.net_enabled())
+    except Exception:
+        return False
 
 
 def _idle_consolidator():
