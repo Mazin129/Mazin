@@ -39,6 +39,12 @@ rem  to raw matches). A 3B model fits and is fast. First run:  ollama pull llama
 rem  Leave blank to let Vio auto-pick the best installed model.
 set "VIO_LLM_MODEL=llama3.2:3b"
 
+rem ── internet research: let Vio search the web, read pages, and learn from them.
+rem  Read-only over the public web, with SSRF protection. To restrict which sites it
+rem  may read, set VIO_NET_ALLOW=example.com,docs.site (blank = any public site).
+rem  Set VIO_ALLOW_NET=0 to turn web research off entirely.
+set "VIO_ALLOW_NET=1"
+
 echo.
 echo Starting Vio for remote access.
 echo   Local test : http://localhost:8100

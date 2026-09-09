@@ -1212,6 +1212,85 @@ class Mind:
                           f"in {owner}/{repo}. You can now ask me about it. "
                           f"(Skipped {skipped} non-text file(s) like images/code.)"}
 
+    # research-request intent: "research: X", "search the web for X", "look up X",
+    # "google X", "find online X". The payload may be a bare URL (read that page).
+    _RESEARCH_RE = re.compile(
+        r"^\s*(?:research|web\s*search|search\s+the\s+web(?:\s+for)?|search\s+online"
+        r"(?:\s+for)?|look\s+up(?:\s+online)?|google|bing|find\s+online)\s*[:\-]?\s*(.+)$",
+        re.I)
+
+    def _research_request(self, q):
+        """Return the topic/URL to research, or None if this isn't a research request.
+        Cheap + side-effect-free so agents can score on it."""
+        m = self._RESEARCH_RE.match(q or "")
+        payload = (m.group(1).strip() if m else "")
+        return payload or None
+
+    def research(self, query, k=4):
+        """WEB RESEARCH: search the public web, read the top pages, LEARN them into the
+        library, then answer grounded on those fresh sources with citations. Read-only;
+        requires the user to opt in with VIO_ALLOW_NET=1. Returns a result dict."""
+        import websearch
+        if not websearch.net_enabled():
+            return {"ok": False, "how": "web research (disabled)", "verified": False,
+                    "answer": "Internet research is currently OFF. To let me research the "
+                    "web, start Vio with  VIO_ALLOW_NET=1  (optionally VIO_NET_ALLOW="
+                    "example.com,docs.site to restrict to trusted domains). Then ask again.",
+                    "trace": []}
+        query = (query or "").strip()
+        try:
+            if re.match(r"^https?://\S+$", query, re.I):
+                sources = [{"url": query, "title": query}]     # a bare URL → read it
+            else:
+                sources = websearch.search(query, k=k)
+        except websearch.NetError as e:
+            return {"ok": False, "how": "web research", "verified": False,
+                    "answer": f"Web search failed: {e}", "trace": []}
+        if not sources:
+            return {"ok": False, "how": "web research", "verified": False,
+                    "answer": "I couldn't find any results to read for that.", "trace": []}
+        fetched, all_chunks = [], []
+        for s in sources[:k]:
+            try:
+                doc = websearch.fetch(s["url"])
+            except Exception:                                  # skip a page we can't read
+                continue
+            body = (doc.get("text") or "")[:20000]
+            if len(body) < 200:                                # too thin to be useful
+                continue
+            all_chunks.extend(self._smart_chunks(body))
+            try:
+                self.graph.learn_text(body)
+            except Exception:
+                pass
+            fetched.append({"url": doc["url"], "title": doc.get("title") or doc["url"],
+                            "text": body})
+        if not fetched:
+            return {"ok": False, "how": "web research", "verified": False,
+                    "answer": "I found results but couldn't read usable text from them "
+                    "(they may be blocked, image-only, or require a login).", "trace": []}
+        self.lib.add_many(all_chunks)                          # one add + one retrain
+        self._retrain()
+        self.mem["last_learned"] = {"source": "web", "count": len(all_chunks)}
+        self._save()
+        cites = "\n".join(f"  • {d['title']} — {d['url']}" for d in fetched)
+        ctx = [f"[{d['title']}] {d['text'][:4000]}" for d in fetched]
+        note = (f"\n\nSources I read just now (and learned):\n{cites}")
+        trace = [f"fetched {len(fetched)} page(s); learned {len(all_chunks)} passages"]
+        if self.llm is not None and self.llm.available:
+            from llm import grounded_prompt, GROUNDED_SYSTEM_D
+            budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+            ans = self.llm.generate(grounded_prompt(query, ctx), system=GROUNDED_SYSTEM_D,
+                                    max_tokens=budget)
+            if ans:
+                return {"ok": True, "how": "web research (LLM, grounded)", "verified": True,
+                        "answer": ans + note, "trace": trace}
+        # no LLM (or it didn't answer) — extract the most relevant lines from what we read
+        excerpt = self.thinker.synthesize(query, [d["text"] for d in fetched], [])
+        body = excerpt or (fetched[0]["text"][:1200].rstrip() + " …")
+        return {"ok": True, "how": "web research (excerpt)", "verified": True,
+                "answer": body + note, "trace": trace}
+
     def _plot(self, q):
         """ASCII plot of y = f(x) over x∈[-10,10]. Expression is safely parsed."""
         m = re.search(r"(?:plot|graph|draw)\s+(?:of\s+|the\s+)?(?:y\s*=\s*)?(.+)", q, re.I)
@@ -1545,6 +1624,16 @@ class Mind:
                             "verified": r.get("ok", False), "trace": []}
                 except (ValueError, RuntimeError) as e:
                     return {"answer": str(e), "how": "github", "verified": False, "trace": []}
+
+        # research the web: "research: X", "search the web for X", "look up X",
+        # "google X", or a bare URL. Networked + gated by VIO_ALLOW_NET. (Also a
+        # first-class WebResearchAgent in the agentic path; this keeps it working on
+        # the legacy path and returns the friendly "enable net" hint when it's off.)
+        rq = self._research_request(q)
+        if rq is not None:
+            r = self.research(rq)
+            return {"answer": r["answer"], "how": r.get("how", "web research"),
+                    "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
         # 0) "what have I taught you / what did you learn / what's in your library"
         #    (NOT "what do you know about X" — that is a topic query -> retrieval below)

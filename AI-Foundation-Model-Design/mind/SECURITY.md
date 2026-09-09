@@ -76,8 +76,25 @@ underneath. Tradeoff: traffic transits Cloudflare.
 | `VIO_ALLOWED_HOSTS` | Comma-separated hostnames allowed in the `Host` header (your tailnet/tunnel name). |
 | `VIO_HTTPS` | Set when TLS terminates in front (Tailscale/Cloudflare/proxy) so the cookie is marked `Secure`. |
 | `MIND_PORT` | Port (default 8100). |
+| `VIO_ALLOW_NET` | `1` lets the Web Research agent search the web, read pages, and learn from them. Unset/`0` = no outbound web access (default). |
+| `VIO_NET_ALLOW` | Comma-separated domains the research agent may fetch (e.g. `docs.microsoft.com,rfc-editor.org`). Blank = any **public** site. |
+| `VIO_NET_BLOCK` | Comma-separated domains the research agent must never fetch (block wins over allow). |
+
+## Web research (outbound access)
+`VIO_ALLOW_NET=1` turns on Vio's Web Research agent: ask `research: <topic>` (or
+"look up …", "search the web for …") and it searches, reads the top pages, learns them
+into the library, and answers with citations. Safeguards, always on when enabled:
+- **Read-only** over the public web — it fetches pages, never posts or logs in.
+- **SSRF-guarded** — a host resolving to a private/loopback/link-local/reserved address
+  is refused, so it can't be steered into your LAN or a cloud metadata endpoint.
+- **http/https only**, per-page size cap, request timeout, redirects re-validated.
+- Fetched text is treated as **data, not instructions** (prompt-injection safety).
+- Anything promoted into the fine-tuned *model* still passes the human approval gate.
+
+To keep it tightly scoped, set `VIO_NET_ALLOW` to just the domains you trust.
 
 ## Don'ts
 - ❌ Don't port-forward 8100 on your router.
 - ❌ Don't run bound to `0.0.0.0` without `VIO_TOKEN` (Vio refuses this by design).
 - ❌ Don't put the token in a shared repo or a screenshot.
+- ❌ Don't enable `VIO_ALLOW_NET` on an untrusted/shared machine without a `VIO_NET_ALLOW` list.

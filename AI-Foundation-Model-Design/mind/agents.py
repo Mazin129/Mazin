@@ -188,6 +188,31 @@ class MemoryAgent(Agent):
         return Result.from_dict(self.mind._episodic_recall(q))
 
 
+class WebResearchAgent(Agent):
+    """Networked research expert: searches the public web, reads the top pages, LEARNS
+    them into the library, and answers grounded on those fresh sources with citations.
+    Read-only over the web. Holds NETWORK permission, so it is subject to the guardrail;
+    it only fires once the user has opted in with VIO_ALLOW_NET=1 (otherwise it abstains
+    and the core router returns a friendly 'enable internet' hint)."""
+    name, domains = "research", ("research", "web")
+    permissions = frozenset({READ, NETWORK})
+
+    def score(self, q, ctx):
+        if not self.mind._research_request(q):
+            return 0.0
+        try:
+            from websearch import net_enabled
+        except Exception:
+            return 0.0
+        return 0.9 if net_enabled() else 0.0        # high: an explicit research request
+
+    def run(self, q, ctx):
+        payload = self.mind._research_request(q)
+        if payload is None:
+            return None
+        return Result.from_dict(self.mind.research(payload))
+
+
 def agent_from_how(how):
     """Map a result's `how` string to a canonical agent name, for provenance on
     answers produced by the catch-all core router (until every branch is its own agent)."""
@@ -200,6 +225,7 @@ def agent_from_how(how):
              ("data analysis", "data"), ("analysis over your", "config"),
              ("reasoning (llm", "reasoning"), ("reasoning (", "reasoning"),
              ("library", "memory"), ("episodic", "memory"), ("memory", "memory"),
+             ("web research", "research"), ("research", "research"),
              ("github", "research"), ("learned from github", "research"),
              ("consolidation", "self_improvement"), ("calibration", "self_improvement"),
              ("feedback", "feedback"), ("greeting", "core"), ("no-source", "core"),
@@ -322,9 +348,9 @@ class SecurityReviewAgent(DomainAgent):
 # order is only a tie-breaker; scores drive dispatch. Domain experts sit above the
 # catch-alls but fire only on their intent; CoreRouter (front) then Knowledge (tail)
 # remain the bottom fallbacks.
-DEFAULT_AGENTS = (SkillAgent, MathAgent, PlannerAgent, WorldModelAgent, ReasoningAgent,
-                  TroubleshootingAgent, SecurityReviewAgent, ConfigAgent, MemoryAgent,
-                  CoreRouterAgent, KnowledgeAgent)
+DEFAULT_AGENTS = (WebResearchAgent, SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
+                  ReasoningAgent, TroubleshootingAgent, SecurityReviewAgent, ConfigAgent,
+                  MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
 
 class Registry:
@@ -350,9 +376,15 @@ class Guardrail:
     foundation that must exist before Automation/Code/Web agents are ever added."""
 
     def check(self, q, agent, result, ctx):
-        acts = bool(set(getattr(agent, "permissions", ())) & {WRITE, NETWORK})
+        perms = set(getattr(agent, "permissions", ()))
+        acts = bool(perms & {WRITE, NETWORK})
         if not acts or ctx.get("confirmed"):
             return result                       # advisory, or already approved
+        # A purely-network action the user has explicitly opted into (VIO_ALLOW_NET) is
+        # standing consent — don't nag on every web lookup. WRITE always still gates.
+        if (perms & {WRITE, NETWORK}) == {NETWORK} and \
+                os.environ.get("VIO_ALLOW_NET", "").strip():
+            return result
         scope = "reach outside Vio" if NETWORK in agent.permissions else "change something"
         result.answer = (result.answer or "").rstrip() + (
             f"\n\n⚠️ This would {scope}. I won't run it without your OK — reply "
