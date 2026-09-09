@@ -1000,6 +1000,24 @@ class Mind:
             r"router |access-list|policy|object|rule)\b", l, re.I))
         return cfg >= len(lines) * 0.4
 
+    @staticmethod
+    def _is_configish_snippet(text):
+        """True for short CLI/config fragments AND full stanzas.
+
+        `_looks_like_config` needs ≥5 lines (for file chunking). Retrieval often
+        returns a one-liner like `config router bgp.` — that must still count as
+        config so analytic questions never dump it as a verified answer."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        if re.match(r"^(config|edit|set|unset|next|end)\b", t, re.I):
+            return True
+        if re.search(r"(?m)^\s*(config|edit|set)\s+\S+", t):
+            return True
+        if re.search(r"\bset uuid\b|\bnext\b.*\bend\b", t, re.I | re.S):
+            return True
+        return Mind._looks_like_config(t)
+
     def _chunk_config(self, text):
         """Split a device config into per-OBJECT passages, each kept whole. A FortiGate
         config yields one passage per top-level `edit … next` (prefixed with its
@@ -1751,12 +1769,51 @@ class Mind:
             blob = " ".join(d.lower() for d, _ in hits)
             if key[:5] not in blob:              # prefix match tolerates morphology
                 hits = []
+
+        # DOMAIN GATE: FortiGate one-liners (`config router bgp.`) share keywords
+        # with analytic questions (BGP flaps, firewall state) and used to be dumped
+        # as ✓ verified answers. For multi-hop / attack-path questions: IGNORE the
+        # library and reason with the LLM. For other questions: strip config snippets
+        # unless the user is clearly asking about device config.
+        analytic = bool(re.search(
+            r"\b(how could|how would|correlate|correlation|without triggering|"
+            r"given that|exfiltrat|bypass|compromis|lateral|mtls|service mesh|"
+            r"kubernetes|\bk8s\b|route flaps?|state exhaustion|attack path|"
+            r"and how does|successfully .{0,40} without|pod\b|sidecar|istio|"
+            r"linkerd|envoy)\b", q, re.I))
+        config_q = bool(re.search(
+            r"\b(show|list|which|how many|pointing).{0,60}\b"
+            r"(polic|firewall|interface|vlan|vip|\bnat\b|address object|bgp|ospf)|"
+            r"\b(fortigate|forti\b|config firewall|config router|dstintf|srcintf|"
+            r"edit\s+\d+)\b",
+            q, re.I))
+        if analytic:
+            # Nuclear for this class: retrieval from a config-heavy library is poison.
+            hits = []
+        elif hits and not config_q:
+            hits = [(d, s) for d, s in hits if not self._is_configish_snippet(d)]
+
         if re.search(r"about (me|myself)|(who|what) am i|know about me", low):
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
         else:
             facts = [f for f in self.mem["facts"] if self._match_fact(f, words)]
         self._last_evidence = {"top": (hits[0][1] if hits else 0.0),
                                "hits": len(hits), "facts": len(facts)}
+
+        # Analytic / multi-hop: always open LLM when available (hits already cleared).
+        if analytic and self.llm is not None and self.llm.available and not facts:
+            from llm import REASON_SYSTEM_D
+            budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+            ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
+                                    max_tokens=budget)
+            if ans:
+                return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
+                        "trace": [f"local LLM ({self.llm.model}) analytic reasoning — "
+                                  "library retrieval disabled for multi-hop question"]}
+            return {"answer": f"My local reasoning model ({self.llm.model}) didn't finish "
+                    "in time on this analytic question. Retry, or use a faster model.",
+                    "how": "llm-timeout", "verified": False, "confidence": 0.2, "trace": []}
+
         if hits or facts:
             # FOCUS WORD: the query's most distinctive (highest-idf) in-vocabulary word
             # — "ram" over "computer", "encryption" over "matter". The synthesiser uses
@@ -1781,7 +1838,9 @@ class Mind:
                     # (the hybrid prompt allows that) — but that answer must NOT wear a
                     # "verified" badge, or a general-knowledge reply looks sourced.
                     top = hits[0][1] if hits else 0.0
-                    strong = bool(facts) or len(hits) >= 2 or top >= 0.30
+                    # Stricter than before: one mediocre hit must not get a ✓ badge
+                    # (that is how a VoIP service object looked "verified" for mTLS).
+                    strong = bool(facts) or (len(hits) >= 2 and top >= 0.32) or top >= 0.45
                     return {"answer": ans,
                             "how": ("reasoning over knowledge (LLM, grounded)" if strong
                                     else "reasoning (LLM)"),
@@ -1795,17 +1854,32 @@ class Mind:
             # question, drawn from several passages at once (grounded, no guessing).
             syn = self.thinker.synthesize(q, [d for d, _ in hits], facts, focus=focus)
             if syn:
+                # Synthesis is grounded in passages, but only "verified" when the hit
+                # is strong — weak lexical matches were the FortiGate-VoIP-for-mTLS bug.
+                top = hits[0][1] if hits else 0.0
+                strong = bool(facts) or (len(hits) >= 2 and top >= 0.28) or top >= 0.40
                 return {"answer": syn, "how": "reasoning over knowledge (synthesis)",
-                        "verified": True,
+                        "verified": bool(strong),
                         "trace": [f"synthesised from {len(hits)} passage(s) + "
                                   f"{len(facts)} memory fact(s)"]}
-            # fallback: show the passages/facts directly
+            # fallback: show the passages/facts directly — NEVER mark verified.
+            # A raw config dump is a lead, not an answer (see mTLS→VoIP service bug).
+            if analytic and self.llm is not None and self.llm.available:
+                from llm import REASON_SYSTEM_D
+                budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+                ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
+                                        max_tokens=budget)
+                if ans:
+                    return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
+                            "trace": [f"local LLM ({self.llm.model}) — refused raw "
+                                      "retrieval dump for analytic question"]}
             parts = []
             if facts:
                 parts.append("From what I know about you:\n  " + "\n  ".join(facts))
             if hits:
-                parts.append("From the library:\n" + "\n".join(f"  • {d}  (match {s:.2f})" for d, s in hits))
-            return {"answer": "\n".join(parts), "how": "retrieval", "verified": bool(hits or facts),
+                parts.append("From the library (unverified leads — may be off-topic):\n"
+                             + "\n".join(f"  • {d}  (match {s:.2f})" for d, s in hits))
+            return {"answer": "\n".join(parts), "how": "retrieval", "verified": False,
                     "trace": [f"searched {len(self.lib.docs)} docs + {len(self.mem['facts'])} memories"]}
 
         # 3) REASONING CORTEX (open): no stored knowledge matched — but this may be a

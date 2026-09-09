@@ -47,10 +47,25 @@ def _needs_deliberation(how):
             or h.endswith(" · low confidence"))
 
 
+_ANALYTIC_Q = re.compile(
+    r"\b(how could|correlate|exfiltrat|mtls|service mesh|kubernetes|\bk8s\b|"
+    r"bypass|compromis|route flaps?|state exhaustion)\b", re.I)
+_CONFIG_ANS = re.compile(
+    r"^\s*(config|edit|set)\b|set uuid |config firewall", re.I | re.M)
+
+
 def review(q, result, conf, mind):
     """Run the checklist. Returns (possibly revised result, final confidence)."""
     trace = list(result.get("trace", []))
     how = result.get("how", "")
+
+    # -- 0. off-topic config dump for an analytic question? --------------------
+    ans0 = result.get("answer") or ""
+    if (how in RETRIEVAL or how == "retrieval") and _ANALYTIC_Q.search(q or "") and _CONFIG_ANS.search(ans0):
+        conf = min(conf, 0.20)
+        trace.append("self-critic: retrieval returned device-config text for an "
+                     "analytic question — treating as untrusted")
+        result = dict(result, verified=False)
 
     # -- 1. conflicting memory? ------------------------------------------------
     conflict = _conflicting_memory(q, result, mind)

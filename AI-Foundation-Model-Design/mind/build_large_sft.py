@@ -43,12 +43,44 @@ _REFUSAL = re.compile(r"\b(i (?:can(?:not|'t)|don'?t|do not))\b|as an ai|i'm sor
 _CFG = re.compile(r"^\s*(config|edit|set|unset|next|end|interface|!|hostname)\b", re.I)
 _SENT = re.compile(r"(?<=[.!?])\s+")
 
-# Public GitHub repos that are mostly documentation (read-only clone; never executed).
+# Public GitHub doc repos (read-only shallow clone; never executed).
+# Curated for one-shot Colab SFT: cloud, NGFW, SSE, SSL/TLS. Dead/huge repos omitted.
 GITHUB_DOCS = (
+    # Security / SSL / general
     "OWASP/CheatSheetSeries",
     "trimstray/the-book-of-secret-knowledge",
-    "swisskyrepo/PayloadsAllTheThings",          # security reference (md)
-    "Fortinet/fortigate-ansible-collection",    # Forti docs/examples (filtered to md)
+    "swisskyrepo/PayloadsAllTheThings",
+    "cloudflare/cloudflare-docs",
+    "cloudflare/sslconfig",
+    "mozilla/ssl-config-generator",
+    "certbot/certbot",
+    "openssl/openssl",
+    # Azure (full azure-docs is too large to clone; use learning + samples)
+    "MicrosoftLearning/AZ-700-Designing-and-Implementing-Microsoft-Azure-Networking-Solutions",
+    "MicrosoftLearning/AZ-104-MicrosoftAzureAdministrator",
+    "Azure/azure-quickstart-templates",
+    "Azure/AppService",
+    # AWS
+    "awsdocs/amazon-vpc-user-guide",
+    "awsdocs/amazon-cloudfront-developer-guide",
+    "awsdocs/aws-waf-and-shield-advanced-developer-guide",
+    "aws-samples/aws-secure-environment-accelerator",
+    "aws-samples/aws-deployment-pipeline-reference-architecture",
+    # Cisco
+    "CiscoDevNet/secure-firewall",
+    "CiscoDevNet/CiscoDevNet.github.io",
+    # Fortinet / FortiGate
+    "hegdepavankumar/Fortigate-Firewall-Complete-Guide",
+    "fortinet/fortigate-terraform-deploy",
+    "fortinet-solutions/fortigate",
+    # F5
+    "F5Networks/f5-ansible-bigip",
+    "f5devcentral/f5-telemetry-streaming",
+    "f5devcentral/f5-demo-httpd",
+    # Netskope
+    "netskopeoss/ta_cloud_exchange",
+    # VPN / edge
+    "hwdsl2/setup-ipsec-vpn",
 )
 
 
@@ -288,7 +320,7 @@ def from_huggingface(n_squad=8000, n_sciq=4000, n_wiki=6000):
     return pairs
 
 
-def from_github(repos=GITHUB_DOCS, max_pairs=8000):
+def from_github(repos=GITHUB_DOCS, max_pairs=50000, per_repo=4000):
     try:
         from gitlearn import fetch_repo_docs, parse_spec
     except Exception as e:
@@ -299,18 +331,20 @@ def from_github(repos=GITHUB_DOCS, max_pairs=8000):
     for spec in repos:
         if n >= max_pairs:
             break
-        print(f"  → GitHub {spec} …")
+        print(f"  → GitHub {spec} …", flush=True)
         try:
-            if not parse_spec(spec) and not parse_spec(f"https://github.com/{spec}"):
+            if not parse_spec(spec):
                 print("    ! bad spec")
                 continue
             _owner, _repo, docs, _skipped = fetch_repo_docs(spec)
             got = 0
             for _src, text in docs:
-                if n >= max_pairs:
+                if n >= max_pairs or got >= per_repo:
                     break
                 blob = re.sub(r"\s+", " ", text or "")
                 for s in _SENT.split(blob):
+                    if n >= max_pairs or got >= per_repo:
+                        break
                     s = s.strip()
                     if not _is_prose(s):
                         continue
@@ -320,11 +354,9 @@ def from_github(repos=GITHUB_DOCS, max_pairs=8000):
                     pairs.append((q, s, f"github:{spec}"))
                     got += 1
                     n += 1
-                    if n >= max_pairs:
-                        break
-            print(f"    +{got} pairs from {len(docs)} doc file(s)")
+            print(f"    +{got} pairs from {len(docs)} doc file(s)", flush=True)
         except Exception as e:
-            print(f"    ! skipped: {e}")
+            print(f"    ! skipped: {e}", flush=True)
     return pairs
 
 
@@ -384,16 +416,18 @@ def dedupe_write(pairs, out_path, target=0):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Build a large clean SFT jsonl for Colab.")
     ap.add_argument("--out", default=os.path.join(DATA_DIR, "vio_sft_large.jsonl"))
-    ap.add_argument("--target", type=int, default=40000,
+    ap.add_argument("--target", type=int, default=80000,
                     help="approx max clean pairs to keep (0 = all)")
     ap.add_argument("--sources", default="local,rfc,hf,github",
                     help="comma list: local,rfc,hf,github")
     ap.add_argument("--llm-expand", action="store_true",
                     help="also expand datasets/*.md with local Ollama (slow)")
-    ap.add_argument("--hf-squad", type=int, default=8000)
-    ap.add_argument("--hf-sciq", type=int, default=4000)
-    ap.add_argument("--hf-wiki", type=int, default=6000)
-    ap.add_argument("--rfc-limit", type=int, default=25000)
+    ap.add_argument("--hf-squad", type=int, default=10000)
+    ap.add_argument("--hf-sciq", type=int, default=5000)
+    ap.add_argument("--hf-wiki", type=int, default=8000)
+    ap.add_argument("--rfc-limit", type=int, default=35000)
+    ap.add_argument("--github-limit", type=int, default=50000,
+                    help="max pairs from all GitHub repos combined")
     a = ap.parse_args(argv)
 
     wanted = {s.strip().lower() for s in a.sources.split(",") if s.strip()}
@@ -427,7 +461,7 @@ def main(argv=None):
     if "github" in wanted:
         print("[4] Public GitHub documentation repos …")
         before = len(all_pairs)
-        all_pairs += from_github()
+        all_pairs += from_github(max_pairs=a.github_limit, per_repo=4000)
         print(f"    +{len(all_pairs) - before} → {len(all_pairs)} so far")
 
     if a.llm_expand:
