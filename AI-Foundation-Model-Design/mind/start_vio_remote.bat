@@ -29,6 +29,12 @@ rem ── security flags so Vio accepts the tailnet hostname over HTTPS ──�
 set "VIO_ALLOWED_HOSTS=%TAILNET%"
 set "VIO_HTTPS=1"
 
+rem ── reasoning model: pick one that FITS this PC's GPU so it actually finishes.
+rem  An 8B model on a 2 GB card runs on the CPU and times out (Vio then falls back
+rem  to raw matches). A 3B model fits and is fast. First run:  ollama pull llama3.2:3b
+rem  Leave blank to let Vio auto-pick the best installed model.
+set "VIO_LLM_MODEL=llama3.2:3b"
+
 echo.
 echo Starting Vio for remote access.
 echo   Local test : http://localhost:8100

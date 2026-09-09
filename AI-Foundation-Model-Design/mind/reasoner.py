@@ -1810,8 +1810,11 @@ class Mind:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) analytic reasoning — "
                                   "library retrieval disabled for multi-hop question"]}
-            return {"answer": f"My local reasoning model ({self.llm.model}) didn't finish "
-                    "in time on this analytic question. Retry, or use a faster model.",
+            return {"answer": f"My local model ({self.llm.model}) didn't finish reasoning on "
+                    "this in time — it's likely too large for this PC's GPU, so it ran on the "
+                    "CPU and timed out. Switch to a model that fits:\n"
+                    "  ollama pull llama3.2:3b\n"
+                    "then set  VIO_LLM_MODEL=llama3.2:3b  and restart Vio.",
                     "how": "llm-timeout", "verified": False, "confidence": 0.2, "trace": []}
 
         if hits or facts:
