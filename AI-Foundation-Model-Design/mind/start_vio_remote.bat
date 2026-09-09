@@ -11,19 +11,23 @@ rem       vio_token.txt (git-ignored, never committed) and reused after that.
 rem    3. In a SEPARATE window run:  tailscale serve --bg 8100
 rem       (only needed once per PC boot — it keeps running in the background).
 
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem ── your tailnet hostname (no https://, no slash, no port) ──────────────────
 set "TAILNET=mazin.tailf89bb1.ts.net"
 
 rem ── login token: read from vio_token.txt, or create it on first run ─────────
+rem  delayed expansion (!NEWTOK!) is required so the value is read AFTER you type
+rem  it; %NEWTOK% inside this block would expand too early and save a blank token.
+rem  <nul set /p writes the token with NO trailing newline so it matches exactly.
 if not exist "vio_token.txt" (
-  echo No login token yet. Type a long random code to protect Vio, then press Enter.
-  set /p NEWTOK=Token:
-  > "vio_token.txt" echo %NEWTOK%
+  echo No login token yet. Type a long code to protect Vio, then press Enter.
+  set /p "NEWTOK=Token: "
+  <nul set /p "=!NEWTOK!" > "vio_token.txt"
   echo Saved to vio_token.txt  ^(keep it secret; it is not committed to git^).
 )
-set /p VIO_TOKEN=<vio_token.txt
+set /p "VIO_TOKEN=" < "vio_token.txt"
 
 rem ── security flags so Vio accepts the tailnet hostname over HTTPS ───────────
 set "VIO_ALLOWED_HOSTS=%TAILNET%"
