@@ -269,17 +269,33 @@ class SelfImprovement:
         human-gated steps that live outside this call."""
         curated = self.curator.write(os.path.join(self.data_dir, "curated_sft.jsonl"))
         gate = self.evaluator.run()
+        golden = self._golden()
         ready = curated["written"] >= 200
+        promotable = bool(golden.get("promotable")) if golden else None
         return {
             "curated": curated,
             "evaluation": gate,
+            "golden": golden,                    # correctness/safety/latency gate
+            "promotable": promotable,
             "current_model": self.models.current(),
             "status": ("ready to train a candidate" if ready
                        else f"not enough curated data yet ({curated['written']}/200)"),
             "next": ("1) train on curated_sft.jsonl  2) evaluate the candidate  "
-                     "3) approve  4) promote(model, approved=True)"),
-            "gate": "Nothing was trained or promoted — approval required.",
+                     "3) golden suite must pass (correctness+safety+latency)  "
+                     "4) approve  5) promote(model, approved=True)"),
+            "gate": ("Nothing was trained or promoted — approval required. Promote only "
+                     "when the golden suite is green."),
         }
+
+    def _golden(self):
+        """Run the golden evaluation suite (quality invariants) as the promotion gate."""
+        try:
+            import golden_eval
+            rep = golden_eval.run()
+            return {"correctness": rep["correctness"], "safety": rep["safety"],
+                    "latency_ms_max": rep["latency_ms_max"], "promotable": rep["promotable"]}
+        except Exception as e:
+            return {"error": str(e)[:120], "promotable": None}
 
 
 if __name__ == "__main__":                     # CLI: run the loop up to the gate

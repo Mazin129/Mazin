@@ -363,9 +363,27 @@ class SecurityReviewAgent(DomainAgent):
 class ExpertAgent(DomainAgent):
     """A conceptual domain expert: answers about mechanisms/attacks/design, grounded on
     prose docs (raw device config is stripped so it never pollutes the answer). Fires a
-    touch higher than the generic catch-alls."""
+    touch higher than the generic catch-alls.
+
+    READ-ONLY by contract (explicit permissions), and it VALIDATES its own output: a
+    stub/empty/degenerate answer is rejected so the master falls through to another agent
+    instead of surfacing junk as an expert opinion. 'Verified' and evidence are then
+    enforced centrally by the quality gate."""
     base_score = 0.7
     strip_config = True
+    permissions = frozenset({READ})            # explicit: these experts never act/write
+
+    def validate(self, result, ctx):
+        if not (result and (result.answer or "").strip()):
+            return False
+        ans = result.answer.strip()
+        if len(ans) < 20:                      # too thin to be a real expert answer
+            return False
+        # reject degenerate repetition (a broken small model can loop a token)
+        words = ans.lower().split()
+        if len(words) >= 12 and len(set(words)) <= max(3, len(words) // 8):
+            return False
+        return True
 
 
 class KubernetesSecurityAgent(ExpertAgent):
