@@ -1339,25 +1339,34 @@ class Mind:
         return payload or None
 
     def draw(self, request):
-        """Generate a diagram via the vendored diagram-design skill + the local LLM."""
+        """Generate a diagram. DEFAULT engine is DETERMINISTIC: the model (if any) only
+        emits a compact node/edge spec and Python renders clean SVG — so a diagram is never
+        blank, regardless of the model's SVG ability. Set VIO_DIAGRAM_ENGINE=skill to use
+        the full diagram-design skill (needs a strong model); it falls back to deterministic
+        if the model returns weak SVG."""
         import diagramgen
-        if not diagramgen.available():
-            return {"answer": "The diagram-design skill isn't installed.",
-                    "how": "diagram", "verified": False, "trace": []}
-        if not (self.llm is not None and self.llm.available):
-            return {"answer": "Drawing a diagram needs a local LLM (Ollama). Start Ollama "
-                    "and try again.", "how": "diagram", "verified": False, "trace": []}
-        r = diagramgen.generate(request, self.llm)
-        if not r.get("ok"):
-            return {"answer": f"I couldn't render that diagram ({r.get('error')}). Try a "
-                    "shorter, clearer description — or point Vio at a bigger model for "
-                    "editorial-quality output.", "how": "diagram", "verified": False,
-                    "trace": []}
+        import diagramdet
+        engine = os.environ.get("VIO_DIAGRAM_ENGINE", "deterministic").strip().lower()
+
+        if engine == "skill" and diagramgen.available() and self.llm and self.llm.available:
+            r = diagramgen.generate(request, self.llm)
+            html = r.get("html", "")
+            shapes = len(re.findall(r"<(?:rect|circle|polygon|ellipse|path)\b", html))
+            if r.get("ok") and shapes >= 3:              # real diagram, not a blank/label dump
+                did, _ = diagramgen.save(html, DATA_DIR)
+                return {"answer": f"✓ Drew a {r['type']} diagram (skill engine).\n"
+                        f"Open it here: /diagram/{did}",
+                        "how": f"diagram ({r['type']}, skill)", "verified": True,
+                        "trace": [f"diagram-design skill · {r['type']}"], "diagram_id": did}
+            # weak SVG → fall through to the deterministic renderer
+
+        r = diagramdet.from_description(request, self.llm)
         did, _ = diagramgen.save(r["html"], DATA_DIR)
-        return {"answer": f"✓ Drew a {r['type']} diagram from your description.\n"
-                f"Open it here: /diagram/{did}",
-                "how": f"diagram ({r['type']})", "verified": True,
-                "trace": [f"diagram-design skill · {r['type']}"], "diagram_id": did}
+        note = "" if r.get("used_llm") else " (parsed from your text)"
+        return {"answer": f"✓ Drew a {r['kind']} diagram{note}.\nOpen it here: /diagram/{did}",
+                "how": f"diagram ({r['kind']}, deterministic)", "verified": True,
+                "trace": [f"deterministic renderer · {r.get('nodes', 0)} node(s)"],
+                "diagram_id": did}
 
     def list_gaps(self):
         """Every open knowledge gap (topic Vio couldn't answer), most-asked first."""

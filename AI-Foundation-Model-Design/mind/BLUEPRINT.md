@@ -97,7 +97,7 @@ Acting = holds network/write permission and is guardrail-gated.
 | Agent | Kind | Fires on |
 |---|---|---|
 | `research` (WebResearchAgent) | ⚙️ acting (network) | `research:` / `look up` / `search the web` — searches, reads, learns, cites |
-| `diagram` (DiagramAgent) | 💬 read-only | `draw:` / `diagram:` / `sketch a …` — LLM follows the vendored diagram-design skill → self-contained HTML/SVG at `/diagram/<id>` |
+| `diagram` (DiagramAgent) | 💬 read-only | `draw:` / `diagram:` / `sketch a …` — LLM follows the vendored diagram-design skill → deterministic self-contained SVG at `/diagram/<id>` (model only emits a node/edge spec; `VIO_DIAGRAM_ENGINE=skill` for full editorial SVG on a strong model) |
 | `network_engineering` | 💬 expert (unified) | ALL network & security: routing/switching, firewalls, k8s/mesh (mTLS), cloud/IAM, incident response, threat modeling, troubleshooting, security review, and config analysis (exact structural counts). Merged from the former per-domain experts. |
 | `skill` | 💬 reflex | user-taught `skill:` reflexes |
 | `math` | 💬 | symbolic math (sympy) |
@@ -342,7 +342,7 @@ brain — back them up.** All git-ignored (per-machine).
   `diagrams.py`, `datatable.py`, `gitlearn.py`, `packs.py`, `seed_knowledge.py`,
   `teach_datasets.py`.
 - **Web research:** `websearch.py`, `sources.py`.
-- **Diagrams:** `diagramgen.py` + `vendor/diagram-design/` (vendored skill, Cathryn Lavery, MIT).
+- **Diagrams:** `diagramdet.py` (deterministic SVG — default, never blank), `diagramgen.py` + `vendor/diagram-design/` (skill engine, Cathryn Lavery MIT — `VIO_DIAGRAM_ENGINE=skill`).
 - **Answer quality:** `quality.py` (verification gate + citations), `configparse.py`
   (structured config), `golden_eval.py` (correctness/safety/latency gate).
 - **Self-improvement:** `selfimprove.py`.
