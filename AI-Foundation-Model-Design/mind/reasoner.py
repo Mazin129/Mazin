@@ -1916,6 +1916,19 @@ class Mind:
             return {"answer": r["answer"], "how": r.get("how", "learn sources"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
+        # honest abstention on LIVE / real-time data Vio has no feed for — never guess a
+        # price, rate, weather, or score. (Config questions with 'current' don't match:
+        # this needs an explicit live-data noun.)
+        if re.search(r"\b(stock|share)\s+price|exchange rate|\bweather\b|"
+                     r"(latest|current|today'?s|breaking)\s+news|"
+                     r"(current|latest|real-?time|live)\s+(price|value|rate|score|"
+                     r"temperature|quote)\b", low):
+            return {"answer": "I can't look up live or real-time data — I have no market, "
+                    "weather, or news feed, and I won't guess a number that changes by the "
+                    "minute. For live values, check a source that updates in real time.",
+                    "how": "no-source (live data)", "verified": False, "confidence": 0.08,
+                    "trace": []}
+
         # 0) "what have I taught you / what did you learn / what's in your library"
         #    (NOT "what do you know about X" — that is a topic query -> retrieval below)
         if re.search(r"what (have i|did i) (taught|told)|what do you know$|"

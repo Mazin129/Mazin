@@ -263,8 +263,26 @@ class KnowledgeAgent(Agent):
     the front branches (exact tools, generation, math) are never intercepted by a weak
     retrieval hit — it only runs when the front handled nothing."""
     name, domains = "knowledge", ("knowledge", "retrieval")
+    # a DEFINITIONAL / lookup question ("what is X", "who is X", "define X") — the kind
+    # that should be answered from the library, not simulated or reasoned from scratch.
+    _DEFN = re.compile(
+        r"^\s*(what|which|who)\s+(is|are|was|were|does|do)\b|^\s*(what'?s|whats)\b|"
+        r"^\s*define\b|^\s*tell me about\b|^\s*meaning of\b|^\s*what does\b", re.I)
 
     def score(self, q, ctx):
+        # GROUNDED RETRIEVAL AS DEFAULT: for a definitional lookup with a STRONG library
+        # hit, prefer the grounded answer over the generic reasoning/world-model catch-alls
+        # (0.55/0.6) so a taught fact wins over an ungrounded paraphrase. NOT for what-if /
+        # analytical questions (those belong to world_model / the experts). Below the
+        # experts (0.7). No definitional shape or no hit → stay at the low tail score.
+        q = q or ""
+        if self._DEFN.search(q) and not re.search(r"\b(if|happens?|what if|would happen)\b", q, re.I):
+            try:
+                hits = self.mind.lib.search(q, k=3)
+                if hits and hits[0][1] >= 0.30:
+                    return 0.68
+            except Exception:
+                pass
         return 0.03                                  # just below CoreRouter's front
 
     def run(self, q, ctx):
@@ -372,6 +390,25 @@ class ExpertAgent(DomainAgent):
     base_score = 0.7
     strip_config = True
     permissions = frozenset({READ})            # explicit: these experts never act/write
+
+    # An expert answers ANALYTICAL questions in its domain (how/why/attack/secure/design…).
+    # A bare definition or lookup ("what is a VLAN") must fall to GROUNDED RETRIEVAL so the
+    # taught/library answer wins over an ungrounded LLM paraphrase — grounded-by-default.
+    _ANALYTIC = re.compile(
+        r"\b(how|why|could|would|should|explain|walk me|diagnos\w*|troubleshoot|debug|"
+        r"relate\w*|correlat\w*|between|versus|\bvs\b|compare|differ\w*|trade-?off|"
+        r"attack|exploit|bypass|compromis\w*|breach|exfiltrat\w*|incident|lateral|"
+        r"harden\w*|secur\w*|mitigat\w*|prevent|detect|protect|remediat\w*|"
+        r"risk|vulnerab\w*|threat|expos\w*|misconfig\w*|audit|review|assess\w*|posture|"
+        r"design|architect|build|model|configure|implement|deploy|set ?up|"
+        r"impact|cause|affect|happens?|what if|what'?s wrong|best practice)\b", re.I)
+
+    def score(self, q, ctx):
+        if not self._fires(q):
+            return 0.0
+        if not self._ANALYTIC.search(q or ""):
+            return 0.0                         # definition/lookup → grounded retrieval
+        return self.base_score
 
     def validate(self, result, ctx):
         if not (result and (result.answer or "").strip()):
