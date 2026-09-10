@@ -321,6 +321,14 @@ class DomainAgent(Agent):
         ans = llm.generate(prompt, system=self.system, max_tokens=budget)
         if not ans:
             return None
+        # publish the evidence this expert used, so the quality gate can cite it and
+        # decide 'verified' correctly (a security answer with no passages is NOT verified).
+        try:
+            self.mind._last_evidence = {"hits": len(passages), "facts": 0,
+                                        "top": (hits[0][1] if hits else 0.0),
+                                        "excerpts": passages[:3]}
+        except Exception:
+            pass
         return Result(ans, how=f"{self.name} (LLM)", verified=bool(passages),
                       confidence=0.72 if passages else 0.55,
                       trace=[f"{self.name} agent grounded on {len(passages)} passage(s)"])

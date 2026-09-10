@@ -1275,6 +1275,8 @@ class Mind:
         self._retrain()
         self.mem["last_learned"] = {"source": "web", "count": len(all_chunks)}
         self._save()
+        self._last_evidence = {"sources": [f"{d['title']} — {d['url']}" for d in fetched],
+                               "hits": len(fetched)}
         cites = "\n".join(f"  • {d['title']} — {d['url']}" for d in fetched)
         ctx = [f"[{d['title']}] {d['text'][:4000]}" for d in fetched]
         note = (f"\n\nSources I read just now (and learned):\n{cites}")
@@ -2142,7 +2144,8 @@ class Mind:
         else:
             facts = [f for f in self.mem["facts"] if self._match_fact(f, words)]
         self._last_evidence = {"top": (hits[0][1] if hits else 0.0),
-                               "hits": len(hits), "facts": len(facts)}
+                               "hits": len(hits), "facts": len(facts),
+                               "excerpts": [d for d, _ in hits[:3]]}
 
         # Analytic / multi-hop: always open LLM when available (hits already cleared).
         if analytic and self.llm is not None and self.llm.available and not facts:

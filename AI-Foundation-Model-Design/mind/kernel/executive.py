@@ -99,6 +99,17 @@ class Executive:
         if system == 2:
             result, conf = critic_review(q, result, conf, self.mind)
 
+        # Answer-quality gate (applies to EVERY path): never verify an empty/weak answer,
+        # never verify a factual/security claim with no evidence, and cite the grounding.
+        try:
+            import quality
+            result = quality.finalize(result, evidence, q)
+            if not result.get("verified") and conf > 0.6 \
+                    and (result.get("how") or "").endswith("unverified (no local evidence)"):
+                conf = 0.5                    # keep confidence honest when we drop 'verified'
+        except Exception:
+            pass
+
         # Phase-6: apply the calibration correction learned from feedback (§10), so the
         # stated confidence self-tunes toward how often Vio is actually right.
         scalar = getattr(self.mind, "calibration", None)
