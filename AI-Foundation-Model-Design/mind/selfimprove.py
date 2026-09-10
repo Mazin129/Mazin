@@ -48,6 +48,11 @@ class TraceLog:
             "system": result.get("system"),
             "domain": result.get("domain"),
             "evidence": {k: ev.get(k) for k in ("top", "hits", "facts")},
+            # FULL reasoning trace (not shallow Q→A): the grounding the answer used and
+            # the reasoning/critic steps it took — this is what a judgement-learning
+            # fine-tune trains on, so it learns to reason with evidence, not to mimic.
+            "citations": [str(x) for x in (ev.get("sources") or ev.get("excerpts") or [])][:5],
+            "reasoning": [str(s) for s in (result.get("trace") or [])][:12],
             "answer": (result.get("answer") or "")[:4000],
         }
         try:
@@ -140,9 +145,13 @@ class Curator:
                 rec = {
                     "question": r["question"],
                     "answer": r["answer"],
-                    # the behaviour trace — what a judgement-learning fine-tune trains on
+                    # full reasoning trace: the evidence the answer stood on + the steps it
+                    # took — a judgement-learning fine-tune trains on THIS, not shallow pairs.
+                    "evidence": r.get("citations") or [],
+                    "reasoning": r.get("reasoning") or [],
                     "trace": {"agent": r.get("agent"), "how": r.get("how"),
-                              "verified": r.get("verified"), "domain": r.get("domain")},
+                              "verified": r.get("verified"), "domain": r.get("domain"),
+                              "confidence": r.get("confidence"), "system": r.get("system")},
                 }
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 n += 1
