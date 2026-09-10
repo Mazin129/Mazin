@@ -459,6 +459,16 @@ class Registry:
         scored.sort(key=lambda sa: sa[0], reverse=True)
         return scored
 
+    def roster(self):
+        """A description of every registered agent — for inspection / 'list agents'."""
+        out = []
+        for a in self.agents:
+            perms = sorted(getattr(a, "permissions", ()))
+            out.append({"name": a.name, "domains": list(getattr(a, "domains", ())),
+                        "permissions": perms,
+                        "acts": bool(set(perms) & {WRITE, NETWORK})})
+        return out
+
 
 class Guardrail:
     """R1/R2 — consulted by the master before any result is returned. Advisory
@@ -508,6 +518,35 @@ class Master:
                     res.agent = agent.name
                 return self.guardrail.check(q, agent, res, ctx)
         return None
+
+    def council(self, q, ctx=None, k=3):
+        """COLLABORATION: gather contributions from the top-k advisory agents instead of
+        letting one winner take all. Acting agents (network/write) are skipped unless
+        confirmed, so a council never triggers a side effect. Returns [(name, Result)] —
+        the caller (Mind.council) synthesises them into one answer. The agents already
+        share knowledge through the common Mind; this lets them share an ANSWER too."""
+        ctx = ctx or {}
+        contribs, seen = [], set()
+        for _score, agent in self.registry.ranked(q, ctx):
+            if len(contribs) >= k:
+                break
+            if set(getattr(agent, "permissions", ())) & {WRITE, NETWORK} \
+                    and not ctx.get("confirmed"):
+                continue                        # advisory council: no side-effecting agents
+            try:
+                res = agent.run(q, ctx)
+            except Exception:
+                res = None
+            if not (res and agent.validate(res, ctx) and (res.answer or "").strip()):
+                continue
+            key = (res.answer or "").strip()[:200]
+            if key in seen:                     # don't double-count identical answers
+                continue
+            seen.add(key)
+            if not res.agent:
+                res.agent = agent.name
+            contribs.append((agent.name, res))
+        return contribs
 
 
 def build_master(mind):

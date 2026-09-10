@@ -53,6 +53,23 @@ def main():
     check("'learn essentials' gated without net",
           (m._core_front("learn essentials") or {}).get("how") == "learn sources (disabled)")
 
+    # inspection & collaboration
+    rep = m.agents_report()
+    check("agents_report lists roster + shared brain",
+          len(rep.get("agents", [])) >= 12 and "library_passages" in rep.get("shared_brain", {}))
+    check("'agents' command routes",
+          (m._core_front("agents") or {}).get("how") == "agents")
+    wa = m._core_front("who answers: why do BGP routes flap")
+    check("'who answers' shows ranking + names top",
+          (wa or {}).get("how") == "who-answers" and "network_engineering" in (wa or {}).get("answer", ""))
+    cm = m._core_front("council: what is OSPF")
+    check("'council' command routes", (cm or {}).get("how", "").startswith("council")
+          or "council" in (cm or {}).get("how", ""))
+    # council never runs a side-effecting (network/write) agent unless confirmed
+    contribs = m.master.council("research: anything", {})
+    check("council excludes acting agents",
+          all(nm != "research" for nm, _ in contribs))
+
     # seed a little knowledge
     m.skills.add("greet", "hi", "Hey there!")
     m.teach("Congestion causes higher latency.")

@@ -1548,6 +1548,90 @@ class Mind:
         """Alias kept for callers/tests — routing now goes through the live master."""
         return self._route(q)
 
+    # ── agent inspection & collaboration ────────────────────────────────────
+    def agents_report(self):
+        """Roster of every agent + the SHARED knowledge they all read/write. Proves the
+        'communication' model: agents collaborate through this common brain."""
+        reg = getattr(self, "agent_registry", None)
+        roster = reg.roster() if reg else []
+        shared = {"library_passages": len(self.lib.docs),
+                  "memory_facts": len(self.mem.get("facts", [])),
+                  "skills": len(self.skills.skills),
+                  "graph_edges": getattr(self.graph, "edge_count", lambda: 0)()
+                  if hasattr(self.graph, "edge_count") else None,
+                  "episodes": len(self.episodic.episodes)}
+        return {"agents": roster, "shared_brain": shared}
+
+    def agents_summary(self):
+        """Human-readable version of agents_report() for the chat."""
+        rep = self.agents_report()
+        lines = [f"I run {len(rep['agents'])} agents under one master. They don't message "
+                 "each other directly — they collaborate through a SHARED brain, so what "
+                 "any one learns, all can use:"]
+        for a in rep["agents"]:
+            tag = "⚙️ acting" if a["acts"] else "💬 advisory"
+            dom = ", ".join(a["domains"]) or "—"
+            lines.append(f"  • {a['name']:20} [{tag}]  ({dom})")
+        s = rep["shared_brain"]
+        lines.append(f"\nShared brain every agent reads & writes:  "
+                     f"{s['library_passages']} passages · {s['memory_facts']} facts · "
+                     f"{s['skills']} skills · {s['episodes']} episodes.")
+        lines.append("Check routing for a question with:  who answers: <your question>")
+        lines.append("Make several agents team up on one answer with:  council: <question>")
+        return "\n".join(lines)
+
+    def who_answers(self, q):
+        """Show which agents would handle a question, ranked by fit — the routing check."""
+        reg = getattr(self, "agent_registry", None)
+        if not reg:
+            return "No agent registry is active."
+        ranked = reg.ranked(q, {})
+        if not ranked:
+            return "No agent claims that — it would go to the core router / knowledge tail."
+        lines = [f"For: “{q.strip()}”  the agents rank:"]
+        for score, agent in ranked[:8]:
+            lines.append(f"  {score:.2f}  {agent.name}")
+        lines.append(f"\n→ “{ranked[0][1].name}” would answer (highest fit).")
+        return "\n".join(lines)
+
+    def council(self, q):
+        """COLLABORATION: several top agents contribute, then Vio synthesises ONE answer
+        that names who weighed in. This is agents 'communicating' on a single question."""
+        master = getattr(self, "master", None)
+        if master is None:
+            return {"answer": self._ask_core(q).get("answer", ""), "how": "council",
+                    "verified": False, "trace": []}
+        contribs = master.council(q, {}, k=3)
+        if not contribs:
+            r = self._route(q)                              # nobody special — normal route
+            return {"answer": r.get("answer", ""), "how": r.get("how", "council"),
+                    "verified": r.get("verified", False), "trace": r.get("trace", [])}
+        who = ", ".join(name for name, _ in contribs)
+        if len(contribs) == 1:
+            name, res = contribs[0]
+            d = res.as_dict()
+            d["how"] = f"{res.how} (council: only {name} weighed in)"
+            return d
+        blocks = [f"[{name}] {res.answer.strip()}" for name, res in contribs]
+        note = f"\n\n🤝 Combined from {len(contribs)} agents: {who}."
+        if self.llm is not None and self.llm.available:
+            from llm import REASON_SYSTEM_D
+            budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
+            prompt = ("Several expert agents each answered the same question. Merge their "
+                      "points into ONE coherent, non-repetitive answer; keep every distinct "
+                      "insight; note where they disagree.\n\nQuestion: " + q + "\n\n"
+                      + "\n\n".join(blocks))
+            merged = self.llm.generate(prompt, system=REASON_SYSTEM_D, max_tokens=budget)
+            if merged:
+                return {"answer": merged + note, "how": "council (synthesised)",
+                        "verified": any(r.verified for _, r in contribs),
+                        "trace": [f"council of {len(contribs)}: {who}"]}
+        # no LLM — present each agent's contribution, clearly labelled
+        body = "\n\n".join(f"— {name} —\n{res.answer.strip()}" for name, res in contribs)
+        return {"answer": body + note, "how": "council (combined)",
+                "verified": any(r.verified for _, r in contribs),
+                "trace": [f"council of {len(contribs)}: {who}"]}
+
     def _episodic_recall(self, q):
         eps = self.episodic.recall(q, k=3)
         if not eps:
@@ -1699,6 +1783,25 @@ class Mind:
         if rq is not None:
             r = self.research(rq)
             return {"answer": r["answer"], "how": r.get("how", "web research"),
+                    "verified": r.get("verified", False), "trace": r.get("trace", [])}
+
+        # agent inspection & collaboration: "agents"/"list agents", "who answers: X",
+        # "council: X" / "ask all agents X" / "team: X".
+        if re.match(r"^\s*(?:list\s+agents|agents|what\s+agents|show\s+agents|"
+                    r"agent\s+status|which\s+agents)\s*\??\s*$", low):
+            return {"answer": self.agents_summary(), "how": "agents", "verified": True,
+                    "trace": []}
+        wa = re.match(r"^\s*who\s+(?:would\s+)?answers?\s*[:\-]?\s*(.+)$", q, re.I) or \
+            re.match(r"^\s*which\s+agent\s+(?:would\s+)?(?:answers?|handles?)\s*[:\-]?\s*(.+)$",
+                     q, re.I)
+        if wa:
+            return {"answer": self.who_answers(wa.group(1)), "how": "who-answers",
+                    "verified": True, "trace": []}
+        cm = re.match(r"^\s*(?:council|team|ask\s+all(?:\s+agents)?|all\s+agents)\s*[:\-]?\s*(.+)$",
+                      q, re.I)
+        if cm:
+            r = self.council(cm.group(1).strip())
+            return {"answer": r["answer"], "how": r.get("how", "council"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
         # trusted network/security sources: "list sources" / "what sources", and

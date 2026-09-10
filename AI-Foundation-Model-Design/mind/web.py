@@ -829,6 +829,9 @@ class H(BaseHTTPRequestHandler):
                                      "library": lib}, ensure_ascii=False))
         elif path == "/api/skills":
             self._s(200, json.dumps({"skills": MIND.skills.list()}, ensure_ascii=False))
+        elif path == "/api/agents":
+            rep = MIND.agents_report() if hasattr(MIND, "agents_report") else {"agents": []}
+            self._s(200, json.dumps(rep, ensure_ascii=False))
         elif path == "/api/pack":                     # export a portable knowledge pack
             import packs
             domain = (parse_qs(urlparse(self.path).query).get("domain", ["all"])[0])
