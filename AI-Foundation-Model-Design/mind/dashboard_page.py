@@ -89,6 +89,30 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
    border:1px solid var(--line);margin-left:4px}
  .badge.s1{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,var(--line))}
  .badge.s2{color:var(--violet);border-color:color-mix(in srgb,var(--violet) 50%,var(--line))}
+ .pill{font-size:11px;font-family:var(--mono);padding:2px 9px;border-radius:20px;border:1px solid var(--line);color:var(--dim);vertical-align:middle;margin-left:4px}
+ .pill.on{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 50%,var(--line))}
+ .pill.off{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,var(--line))}
+ .agents{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px}
+ .ag{border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:var(--panel2)}
+ .ag.acting{border-color:color-mix(in srgb,var(--violet) 45%,var(--line))}
+ .ag .an{font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;justify-content:space-between}
+ .ag .ad{font-size:11px;color:var(--dim);font-family:var(--mono);margin-top:3px}
+ .ag .badge{font-size:10px;padding:1px 6px;border-radius:10px;white-space:nowrap;
+   background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+ .ag.acting .badge{background:color-mix(in srgb,var(--violet) 20%,transparent);color:var(--violet)}
+ .shared{margin-top:12px;font-size:12px;color:var(--dim);font-family:var(--mono)}
+ .btns{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
+ .act{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:9px;
+   padding:8px 12px;font-size:13px;cursor:pointer}
+ .act:hover{border-color:var(--accent)}
+ .act.ok{border-color:color-mix(in srgb,var(--ok) 55%,var(--line))}
+ .act.bad{border-color:color-mix(in srgb,var(--bad) 55%,var(--line))}
+ .act:disabled{opacity:.5;cursor:wait}
+ .out{white-space:pre-wrap;font-family:var(--mono);font-size:12px;background:var(--panel2);
+   border:1px solid var(--line);border-radius:9px;padding:10px;max-height:240px;overflow:auto}
+ .improve{font-size:12px;color:var(--dim);margin-bottom:8px}
+ .minput{border:1px solid var(--line);background:var(--panel2);color:var(--ink);border-radius:8px;
+   padding:7px 9px;font-size:12px;font-family:var(--mono);width:150px}
 </style></head><body>
 <div class="wrap">
  <header>
@@ -99,6 +123,43 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  </header>
 
  <div class="tiles" id="tiles"></div>
+
+ <div class="card full" style="margin-bottom:16px">
+  <h2>Agents — live blueprint <span class="pill" id="modelPill"></span><span class="pill" id="webPill"></span></h2>
+  <p class="cap">Every agent under the master. They don't message each other directly — they
+    share one brain (the counts below), so what any one learns, all use. 💬 advisory agents
+    answer; ⚙️ acting agents can reach out or change things (guardrail-gated).</p>
+  <div class="agents" id="agentsGrid"></div>
+  <div class="shared" id="sharedBrain"></div>
+ </div>
+
+ <div class="grid" style="margin-bottom:16px">
+  <div class="card">
+   <h2>Learn &amp; cover — live</h2>
+   <p class="cap">Grow the shared brain right now. Each runs and streams its result below.</p>
+   <div class="btns">
+     <button class="act" onclick="runCmd('list gaps')">📋 List gaps</button>
+     <button class="act ok" onclick="runCmd('cover gaps')">🌐 Cover gaps</button>
+     <button class="act" onclick="runCmd('learn essentials')">📚 Learn essentials</button>
+     <button class="act" onclick="runCmd('list sources')">🔗 Sources</button>
+     <button class="act" onclick="runCmd('agents')">🧩 Roster</button>
+   </div>
+   <pre class="out" id="learnOut">Pick an action — its result shows here.</pre>
+  </div>
+  <div class="card">
+   <h2>Self-improvement — approve &amp; promote</h2>
+   <p class="cap">Propose a candidate from behaviour traces (curate + evaluation gate), then
+     approve to switch Vio's live model, or roll back. Nothing changes without your click.</p>
+   <div id="improveStat" class="improve">…</div>
+   <div class="btns">
+     <button class="act" onclick="doImprove('propose')">🔬 Propose</button>
+     <input class="minput" id="promoteModel" placeholder="model to promote">
+     <button class="act ok" onclick="doImprove('promote')">✅ Approve &amp; promote</button>
+     <button class="act bad" onclick="doImprove('rollback')">↩ Rollback</button>
+   </div>
+   <pre class="out" id="improveOut">—</pre>
+  </div>
+ </div>
 
  <div class="card full" style="margin-bottom:16px">
   <h2>How Vio answered — live</h2>
@@ -268,7 +329,63 @@ function renderFlow(d){
  }
 }
 
+// ── live agent blueprint + capability pills ────────────────────────────────
+async function loadAgents(){
+ try{const j=await(await fetch('/api/agents')).json();
+  const ag=j.agents||[];
+  $('agentsGrid').innerHTML=ag.map(a=>{
+    const acts=a.acts, dom=(a.domains||[]).join(', ')||'—';
+    return `<div class="ag ${acts?'acting':''}"><div class="an"><span>${esc(a.name)}</span>`+
+      `<span class="badge">${acts?'⚙️ acting':'💬 advisory'}</span></div>`+
+      `<div class="ad">${esc(dom)}</div></div>`;
+  }).join('')||'<span class="cap">No agents registered.</span>';
+  const s=j.shared_brain||{};
+  $('sharedBrain').innerHTML=`🧠 shared brain (every agent reads &amp; writes): `+
+    `<b>${s.library_passages||0}</b> passages · <b>${s.memory_facts||0}</b> facts · `+
+    `<b>${s.skills||0}</b> skills · <b>${s.episodes||0}</b> episodes`;
+ }catch(e){}
+}
+async function loadCaps(){
+ try{const j=await(await fetch('/api/status')).json();
+  const w=$('webPill'); if(w){w.textContent=j.web?'🌐 web research ON':'🌐 web OFF';w.className='pill '+(j.web?'on':'off');}
+  const m=$('modelPill'); if(m){m.textContent=j.brain?('🧠 '+j.brain):'🧠 no model — install Ollama';m.className='pill '+(j.brain?'on':'off');}
+ }catch(e){}
+}
+async function runCmd(cmd){
+ const out=$('learnOut'); out.textContent='… running: '+cmd+' (this can take a minute for web actions)';
+ const btns=document.querySelectorAll('.act'); btns.forEach(b=>b.disabled=true);
+ try{const j=await(await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({message:cmd})})).json();
+   out.textContent=j.answer||JSON.stringify(j,null,2);
+ }catch(e){out.textContent='failed: '+e;}
+ btns.forEach(b=>b.disabled=false); loadAgents(); loadCaps();
+}
+async function loadImprove(){
+ try{const j=await(await fetch('/api/improve')).json();
+  if(!j||j.available===false){$('improveStat').textContent='Self-improvement engine not available.';return;}
+  const tr=j.traces||{}, n=tr.interactions!=null?tr.interactions:(typeof tr==='number'?tr:'?');
+  $('improveStat').innerHTML=`live model: <b>${esc(''+(j.current_model||'—'))}</b> · `+
+    `behaviour traces: <b>${esc(''+n)}</b> · curated examples: <b>${esc(''+(j.curated_available||0))}</b>`;
+  if(!$('promoteModel').value && j.current_model) $('promoteModel').placeholder=j.current_model;
+ }catch(e){}
+}
+async function doImprove(action){
+ const out=$('improveOut'); out.textContent='… '+action+' …';
+ let url,opts={method:'POST',headers:{'Content-Type':'application/json'},body:'{}'};
+ if(action==='promote'){
+   const model=($('promoteModel').value||'').trim();
+   if(!model){out.textContent='Enter the model name to promote (e.g. a fine-tuned tag in Ollama).';return;}
+   if(!confirm('Approve & promote Vio\'s live model to: '+model+' ?')) {out.textContent='cancelled.';return;}
+   url='/api/improve/promote'; opts.body=JSON.stringify({model:model,approved:true,note:'promoted from dashboard'});
+ } else url = action==='propose'?'/api/improve/propose':'/api/improve/rollback';
+ try{const j=await(await fetch(url,opts)).json();
+   out.textContent=JSON.stringify(j,null,2).slice(0,1800);
+ }catch(e){out.textContent='failed: '+e;}
+ loadImprove(); loadCaps();
+}
+
 async function load(){
+ loadAgents(); loadCaps();
  let d;try{d=await(await fetch('/api/telemetry')).json()}catch(e){return}
  $('who').textContent=d.name+' — Cognitive Dashboard';
  renderFlow(d);
@@ -320,5 +437,6 @@ async function load(){
  $('wish').innerHTML=wl.length?('<b>Wants to learn:</b> '+wl.map(w=>esc(w.topic)+` (${w.count}×)`).join(', ')):'';
 }
 load();
-setInterval(load, 3000);   // live: reflect the latest answer's path automatically
+loadImprove();             // once at start (curation is a touch heavy); refreshed on action
+setInterval(load, 3000);   // live: reflect the latest answer's path + agent blueprint
 </script></body></html>"""
