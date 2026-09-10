@@ -2153,6 +2153,17 @@ class Mind:
             if key[:5] not in blob:              # prefix match tolerates morphology
                 hits = []
 
+        # NUMBER GATE: a specific number in the query (a year like "2050", a port, an id)
+        # is highly distinctive. If the query names one and NO retrieved passage contains
+        # it, the hit is about something else — refuse rather than answer from it. (This is
+        # what stops "who won the 2050 world cup" answering from a passage about the web.)
+        if hits:
+            qnums = set(re.findall(r"\b\d{2,}\b", low))
+            if qnums:
+                blob = " ".join(d.lower() for d, _ in hits)
+                if not any(n in blob for n in qnums):
+                    hits = []
+
         # DOMAIN GATE: FortiGate one-liners (`config router bgp.`) share keywords
         # with analytic questions (BGP flaps, firewall state) and used to be dumped
         # as ✓ verified answers. For multi-hop / attack-path questions: IGNORE the

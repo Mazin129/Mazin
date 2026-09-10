@@ -35,6 +35,14 @@ _INTRINSIC = ("symbolic", "quadratic", "function plot", "exact tool", "clock",
               "sources", "gaps", "agents", "who-answers", "library-write",
               "memory-write", "skill-write")
 
+# GROUNDED-by-construction paths: they answer from the library / knowledge graph /
+# structured config even when they don't populate the evidence slot — so the
+# "no local evidence → unverified" rule must not fire on them (the empty/weak rule still
+# does). Only ungrounded LLM/reasoning replies to a factual/security question get demoted.
+_GROUNDED = ("planning (grounded", "reasoning over knowledge", "world model",
+             "reasoning (causal", "reasoning (deductive", "reasoning (rule",
+             "synthesis", "analysis over your config", "episodic")
+
 
 def is_factual_or_security(q: str) -> bool:
     return bool(_FACTUAL_SEC.search(q or ""))
@@ -76,8 +84,10 @@ def finalize(result: dict, evidence: dict, q: str) -> dict:
         r["verified"] = False
 
     # 2. factual/security claim with no local evidence and no web sources → unverified.
-    #    (Intrinsic and web-research paths are exempt; web research carries its own cites.)
-    if (not intrinsic and "web research" not in how.lower()
+    #    (Intrinsic, grounded-by-construction, and web-research paths are exempt.)
+    hl = how.lower()
+    grounded = any(g in hl for g in _GROUNDED)
+    if (not intrinsic and not grounded and "web research" not in hl
             and is_factual_or_security(q) and not has_evidence(evidence)):
         if r.get("verified"):
             r["verified"] = False

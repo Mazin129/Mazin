@@ -87,6 +87,22 @@ class SolveAgent:
         # for the no-LLM case only; running it over a reasoning prompt is exactly what
         # produced wrong-domain fragments ("Scientist" → biology). So delegate.
         if getattr(self.mind, "llm", None) is not None and self.mind.llm.available:
+            # A genuinely MULTI-PART question ("what is X and what is Y") must be answered
+            # part by part — otherwise a single-topic agent (math/tools) answers only the
+            # first clause. Solve each part through the full router, then combine.
+            subs = _split_subquestions(question)
+            if len(subs) > 1:
+                emit(f"🧩 It has {len(subs)} parts — I'll answer each, then combine.")
+                parts, verified = [], True
+                for i, sub in enumerate(subs, 1):
+                    emit(f"🧠 Part {i}: {sub}")
+                    rr = self.mind.ask(sub)
+                    parts.append(f"• {sub.strip().rstrip('?')} → {(rr.get('answer') or '').strip()}")
+                    verified = verified and bool(rr.get("verified"))
+                return {"answer": "\n".join(parts),
+                        "how": "self-directed reasoning (%d parts)" % len(subs),
+                        "verified": verified, "confidence": 0.9 if verified else 0.5,
+                        "steps": steps}
             emit(f"🧠 Reasoning it through with my local model ({self.mind.llm.model})…")
             r = dict(self.mind.ask(question))
             r["steps"] = steps

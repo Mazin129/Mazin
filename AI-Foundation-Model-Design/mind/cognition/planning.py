@@ -50,6 +50,17 @@ class Planner:
         # 2) pull ordered, actionable sentences from what was retrieved (grounded steps)
         steps = self._extract_steps(hits)
         if not steps:
+            # robust fallback: the top-k ranking may have buried the procedural passage
+            # (semantic vs lexical). Scan the whole library for a passage that names this
+            # goal AND reads like a procedure, so 'how do I configure a vlan' finds the
+            # taught 'To configure a VLAN, first create … assign ports …' steps.
+            gkw = [w for w in re.findall(r"\w+", goal.lower()) if len(w) > 2]
+            proc = [d for d in getattr(self.mind.lib, "docs", [])
+                    if any(k in d.lower() for k in gkw)
+                    and re.search(r"\b(first|then|next|finally|step|configure|assign|"
+                                  r"create|enable|install|set up)\b", d, re.I)]
+            steps = self._extract_steps(proc)
+        if not steps:
             # fall back to a grounded summary if no imperative steps were found —
             # keyed on the goal's topic word so it doesn't drift to unrelated facts.
             gw = [w for w in re.findall(r"\w+", goal.lower()) if len(w) > 2]
