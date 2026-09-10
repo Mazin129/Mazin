@@ -846,14 +846,30 @@ class Mind:
 
         FortiGate-aware: prefers policies with internet/WAN signals when the query
         mentions internet; never marks verified on empty/no-match answers."""
-        if not (self.llm is not None and self.llm.available):
-            return None
         low = q.lower()
         if not re.search(r"\b(all|every|each|list|which|how many|count|any|show|pointing)\b", low):
             return None
         item = next((base for w, base in self._AGG_ITEMS.items()
                      if re.search(rf"\b{w}\b", low)), None)
         if not item:
+            return None
+        # EXACT count from a STRUCTURED parse — deterministic, no LLM, so it's verified.
+        if re.search(r"\bhow many\b|\bcount\b|\bnumber of\b", low):
+            try:
+                import configparse
+                objs = configparse.parse_many(self.lib.docs)
+                matched = configparse.of_kind(objs, configparse.KIND_WORDS.get(item, item))
+                if matched:
+                    self._last_evidence = {"hits": len(matched), "facts": 0,
+                                           "excerpts": [configparse.summary(o) for o in matched[:3]]}
+                    return {"answer": f"There are {len(matched)} {item} object(s) in the "
+                            "loaded configuration.",
+                            "how": "analysis over your config (exact count)",
+                            "verified": True,
+                            "trace": [f"parsed {len(objs)} config object(s) structurally"]}
+            except Exception:
+                pass
+        if not (self.llm is not None and self.llm.available):
             return None
         # gather every config passage for that object type (per-object chunks make this exact)
         cand = [d for d in self.lib.docs
@@ -892,7 +908,15 @@ class Mind:
         capped = ordered[:cap]
 
         def _summarize(doc):
-            """Pull FortiGate-ish fields so the LLM sees structure, not a wall of text."""
+            """Pull FortiGate-ish fields so the LLM sees structure, not a wall of text.
+            Prefers the structured parser; falls back to regex for odd fragments."""
+            try:
+                import configparse
+                parsed = configparse.parse(doc)
+                if parsed:
+                    return "\n".join(configparse.summary(o) for o in parsed)
+            except Exception:
+                pass
             bits = []
             m = re.search(r'^\s*edit\s+("?[^\n"]+"?|\S+)', doc, re.M | re.I)
             if m:
