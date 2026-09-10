@@ -1293,6 +1293,66 @@ class Mind:
         return {"ok": True, "how": "web research (excerpt)", "verified": True,
                 "answer": body + note, "trace": trace}
 
+    def list_gaps(self):
+        """Every open knowledge gap (topic Vio couldn't answer), most-asked first."""
+        gaps = getattr(self.curiosity, "gaps", {}) or {}
+        if not gaps:
+            return "No open knowledge gaps — I've answered what you've asked so far."
+        ranked = sorted(gaps.items(), key=lambda kv: -kv[1].get("count", 0))
+        lines = [f"I have {len(ranked)} open knowledge gap(s) — topics I couldn't answer "
+                 "well and want to learn:"]
+        for i, (t, g) in enumerate(ranked, 1):
+            ex = (g.get("example") or "").strip().replace("\n", " ")
+            tail = f" — e.g. “{ex[:60]}”" if ex and ex.lower() != t else ""
+            lines.append(f"  {i:2}. {t}  (asked {g.get('count', 1)}×){tail}")
+        lines.append("\nClose them automatically with:  cover gaps   — I'll research each "
+                     "on the web and learn it (needs VIO_ALLOW_NET=1). Or teach one with  "
+                     "teach: …")
+        return "\n".join(lines)
+
+    def cover_gaps(self, limit=8, k=2):
+        """Close open gaps by RESEARCHING each on the web and learning it — the gaps engine,
+        the web-research agent, and the shared library working together. Bounded per call
+        (default 8 gaps, 2 pages each) so it finishes; repeat to cover the rest."""
+        import websearch
+        gaps = getattr(self.curiosity, "gaps", {}) or {}
+        if not gaps:
+            return {"answer": "No open gaps to cover — nice and current.",
+                    "how": "cover gaps", "verified": True, "trace": []}
+        if not websearch.net_enabled():
+            return {"answer": "To cover gaps automatically I need web access — start Vio "
+                    "with  VIO_ALLOW_NET=1  and run  cover gaps  again. Or teach any gap "
+                    "directly with  teach: …\n\n" + self.list_gaps(),
+                    "how": "cover gaps (disabled)", "verified": False, "trace": []}
+        ranked = sorted(gaps.items(), key=lambda kv: -kv[1].get("count", 0))[:max(1, limit)]
+        covered, failed = [], []
+        for topic, g in ranked:
+            query = (g.get("example") or topic).strip()
+            try:
+                r = self.research(query, k=k)
+            except Exception as e:
+                failed.append(f"{topic}: {str(e)[:50]}")
+                continue
+            if r.get("ok"):
+                self.curiosity.resolved(query)              # clear by computed topic key
+                if topic in self.curiosity.gaps:            # and by the stored key, to be sure
+                    del self.curiosity.gaps[topic]
+                    self.curiosity._save()
+                covered.append(topic)
+            else:
+                failed.append(f"{topic}: {(r.get('answer') or '')[:40]}")
+        remaining = len(getattr(self.curiosity, "gaps", {}) or {})
+        parts = [f"✓ Covered {len(covered)} of {len(ranked)} gap(s) by researching and "
+                 "learning them."]
+        if covered:
+            parts.append("Learned: " + ", ".join(covered))
+        if failed:
+            parts.append(f"Couldn't cover {len(failed)} (left open): " + "; ".join(failed[:6]))
+        parts.append(f"{remaining} gap(s) remain."
+                     + ("  Run  cover gaps  again for the next batch." if remaining else ""))
+        return {"answer": "\n".join(parts), "how": "cover gaps",
+                "verified": bool(covered), "trace": [f"covered {len(covered)}; {remaining} left"]}
+
     def list_sources(self, topic=None):
         """Show the curated trusted network/security sources Vio can learn from."""
         import sources
@@ -1802,6 +1862,17 @@ class Mind:
         if cm:
             r = self.council(cm.group(1).strip())
             return {"answer": r["answer"], "how": r.get("how", "council"),
+                    "verified": r.get("verified", False), "trace": r.get("trace", [])}
+
+        # knowledge gaps: "list gaps"/"show gaps"/"my gaps", and "cover gaps"/"fill
+        # gaps"/"close gaps"/"learn the gaps" (auto-research + learn each open gap).
+        if re.match(r"^\s*(?:list|show|see|my|the|open)\s*(?:my|the|all|open)?\s*"
+                    r"knowledge?\s*gaps?\s*\??\s*$", low) or low.strip() in ("gaps", "list gaps"):
+            return {"answer": self.list_gaps(), "how": "gaps", "verified": True, "trace": []}
+        if re.match(r"^\s*(?:cover|fill|close|learn|research)\s+(?:up\s+)?(?:all\s+)?"
+                    r"(?:my\s+|the\s+|open\s+)?(?:knowledge\s+)?gaps?\b", low):
+            r = self.cover_gaps()
+            return {"answer": r["answer"], "how": r.get("how", "cover gaps"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
         # trusted network/security sources: "list sources" / "what sources", and

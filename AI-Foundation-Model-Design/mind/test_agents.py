@@ -70,6 +70,15 @@ def main():
     check("council excludes acting agents",
           all(nm != "research" for nm, _ in contribs))
 
+    # knowledge gaps: list + auto-cover (gated on net)
+    m.curiosity.note_gap("how does QUIC congestion control work")
+    lg = m._core_front("list gaps")
+    check("'list gaps' routes and lists", (lg or {}).get("how") == "gaps"
+          and "quic" in (lg or {}).get("answer", "").lower())
+    cg = m._core_front("cover gaps")
+    check("'cover gaps' gated without net",
+          (cg or {}).get("how") == "cover gaps (disabled)")
+
     # seed a little knowledge
     m.skills.add("greet", "hi", "Hey there!")
     m.teach("Congestion causes higher latency.")
