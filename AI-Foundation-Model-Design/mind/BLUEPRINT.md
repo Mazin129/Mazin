@@ -345,6 +345,7 @@ brain — back them up.** All git-ignored (per-machine).
 - **Diagrams:** `diagramdet.py` (deterministic SVG — default, never blank), `diagramgen.py` + `vendor/diagram-design/` (skill engine, Cathryn Lavery MIT — `VIO_DIAGRAM_ENGINE=skill`).
 - **Answer quality:** `quality.py` (verification gate + citations), `configparse.py`
   (structured config), `golden_eval.py` (correctness/safety/latency gate).
+- **Training pipeline:** `trainpipe.py` (licensed collect → sanitize → dedupe → chunk → license-gate → RAG/SFT/eval split → grounded SFT → quality/license/dedup/leakage reports).
 - **Self-improvement:** `selfimprove.py`.
 - **Training (external/offline):** `train_all.py`, `train_model.py`, `build_dataset.py`,
   `build_large_sft.py`, `data_ingest.py`, `neural_model.py`.

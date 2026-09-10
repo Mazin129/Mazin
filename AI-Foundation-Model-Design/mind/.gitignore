@@ -19,3 +19,4 @@ vio_sft.jsonl
 # remote-access login token (secret, per-machine — never commit)
 vio_token.txt
 diagrams/
+trainpipe_out/
