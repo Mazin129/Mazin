@@ -167,6 +167,22 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
  </div>
 
  <div class="card full" style="margin-bottom:16px">
+  <h2>🎨 Draw a diagram</h2>
+  <p class="cap">Describe it — Vio follows the diagram-design skill to render self-contained
+    HTML/SVG. Quality tracks the model; switch to a bigger brain above for editorial output.</p>
+  <div class="btns">
+    <input class="minput" id="drawReq" style="flex:1;min-width:220px"
+      placeholder="e.g. network architecture of our DMZ with a trust boundary"
+      onkeydown="if(event.key==='Enter')draw()">
+    <button class="act ok" onclick="draw()">🎨 Draw</button>
+    <a class="act" id="drawOpen" href="#" target="_blank" rel="noopener" hidden>↗ Open full</a>
+  </div>
+  <div id="drawMsg" class="improve"></div>
+  <iframe id="drawFrame" title="diagram" style="width:100%;height:520px;border:1px solid
+    var(--line);border-radius:10px;background:#fff;display:none"></iframe>
+ </div>
+
+ <div class="card full" style="margin-bottom:16px">
   <h2>How Vio answered — live</h2>
   <p class="cap">The path your last question took through the brain. The glowing box is
     where it stopped. Updates automatically as you chat.</p>
@@ -384,6 +400,23 @@ async function switchModel(){
      : ('failed: '+(j.message||JSON.stringify(j)));
  }catch(e){out.textContent='failed: '+e;}
  loadCaps(); loadModels(); loadImprove();
+}
+async function draw(){
+ const req=($('drawReq').value||'').trim(); if(!req) return;
+ const msg=$('drawMsg'); msg.textContent='… drawing (this can take a while on a small model)…';
+ const btns=document.querySelectorAll('.act'); btns.forEach(b=>b.disabled=true);
+ try{const j=await(await fetch('/api/draw',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({request:req})})).json();
+   if(j.diagram_id){
+     const url='/diagram/'+j.diagram_id;
+     const fr=$('drawFrame'); fr.src=url; fr.style.display='block';
+     const op=$('drawOpen'); op.href=url; op.hidden=false;
+     msg.textContent='✅ '+(j.how||'diagram')+' — rendered below.';
+   } else {
+     msg.textContent='⚠️ '+((j.answer||'could not draw').split('\n')[0]);
+   }
+ }catch(e){msg.textContent='failed: '+e;}
+ btns.forEach(b=>b.disabled=false);
 }
 async function loadImprove(){
  try{const j=await(await fetch('/api/improve')).json();

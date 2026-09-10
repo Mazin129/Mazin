@@ -1023,6 +1023,12 @@ class H(BaseHTTPRequestHandler):
             si = getattr(MIND, "si", None)
             self._s(200, json.dumps(si.rollback() if si else {"ok": False}, ensure_ascii=False))
 
+        elif self.path == "/api/draw":                   # generate a diagram, return its id
+            req = (body.get("request") or body.get("message") or "").strip()
+            r = MIND.draw(req) if hasattr(MIND, "draw") else {"verified": False,
+                                                              "answer": "not available"}
+            self._s(200, json.dumps(r, ensure_ascii=False))
+
         elif self.path == "/api/model":                  # switch the live reasoning brain
             model = (body.get("model") or "").strip()
             llm = getattr(MIND, "llm", None)
