@@ -89,7 +89,7 @@ shared library and every other agent can use it on the next question.
 
 ---
 
-## 4. The agents (18)
+## 4. The agents (11)
 
 Scores drive dispatch (highest wins); order only breaks ties. Advisory = read-only;
 Acting = holds network/write permission and is guardrail-gated.
@@ -98,14 +98,7 @@ Acting = holds network/write permission and is guardrail-gated.
 |---|---|---|
 | `research` (WebResearchAgent) | ⚙️ acting (network) | `research:` / `look up` / `search the web` — searches, reads, learns, cites |
 | `diagram` (DiagramAgent) | 💬 read-only | `draw:` / `diagram:` / `sketch a …` — LLM follows the vendored diagram-design skill → self-contained HTML/SVG at `/diagram/<id>` |
-| `k8s_security` | 💬 expert | Istio, mTLS, PeerAuthentication, NetworkPolicy, sidecar, egress, Cilium |
-| `cloud_security` | 💬 expert | AWS/Azure/GCP, IAM, S3, security groups, IMDS/metadata, SSRF |
-| `network_engineering` | 💬 expert | BGP/OSPF, route flaps, NAT/conntrack state exhaustion, BFD, VXLAN |
-| `incident_response` | 💬 expert | breach, exfiltration, IOC, containment, C2, lateral movement |
-| `threat_modeling` | 💬 expert | STRIDE, attack surface, trust boundaries, MITRE ATT&CK |
-| `troubleshooting` | 💬 domain | diagnose/root-cause/"not working"/"can't ping" |
-| `security_review` | 💬 domain | "is this secure", harden, misconfig, vuln, least privilege |
-| `config` | 💬 domain | aggregate config queries (list/which/how-many policies…) when config is loaded |
+| `network_engineering` | 💬 expert (unified) | ALL network & security: routing/switching, firewalls, k8s/mesh (mTLS), cloud/IAM, incident response, threat modeling, troubleshooting, security review, and config analysis (exact structural counts). Merged from the former per-domain experts. |
 | `skill` | 💬 reflex | user-taught `skill:` reflexes |
 | `math` | 💬 | symbolic math (sympy) |
 | `planner` | 💬 | "make a plan to…" |
@@ -115,7 +108,7 @@ Acting = holds network/write permission and is guardrail-gated.
 | `core` (CoreRouterAgent) | 💬 catch-all | the proven front router (`_core_front`) |
 | `knowledge` (KnowledgeAgent) | 💬 tail | retrieval + grounded/open LLM + honest no-source |
 
-Expert agents are **conceptual**: they strip raw device-config passages from their
+The one `network_engineering` expert is **conceptual**: they strip raw device-config passages from their
 grounding so a firewall stanza never pollutes a design answer, and without a local LLM
 they self-skip (never regressing the base path).
 

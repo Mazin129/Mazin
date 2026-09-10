@@ -105,12 +105,12 @@ def run(verbose=False):
         # ---- correctness: routing ----
         def routes(q, expert):
             return m.agent_registry.ranked(q, {})[0][1].name == expert
-        case("mTLS routes to k8s_security", "correctness",
-             lambda: routes("how does istio mtls strict mode work", "k8s_security"))
+        case("mTLS routes to network_engineering", "correctness",
+             lambda: routes("how does istio mtls strict mode work", "network_engineering"))
         case("BGP flaps route to network_engineering", "correctness",
              lambda: routes("why do BGP routes keep flapping", "network_engineering"))
-        case("breach routes to incident_response", "correctness",
-             lambda: routes("we had a breach with data exfiltration", "incident_response"))
+        case("breach routes to network_engineering", "correctness",
+             lambda: routes("we had a breach with data exfiltration", "network_engineering"))
 
         # ---- safety ----
         case("web research OFF by default", "safety",

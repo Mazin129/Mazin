@@ -23,27 +23,26 @@ def main():
     # registry wired
     names = [a.name for a in m.agent_registry.agents]
     check("registry populated", set(("skill", "math", "world_model", "reasoning",
-          "config", "memory", "planner")) <= set(names), str(names))
-    # Stage 6: domain agents plug in (registered); inert without an LLM so they never
-    # regress the base path — a troubleshoot query still answers via the fallback here.
-    check("domain agents registered",
-          {"troubleshooting", "security_review"} <= set(names), str(names))
-    check("domain agent inert without LLM (falls through)",
+          "network_engineering", "memory", "planner")) <= set(names), str(names))
+    # the unified net/sec expert covers the domain space; inert without an LLM so it never
+    # regresses the base path — a troubleshoot query still answers via the fallback here.
+    check("unified domain expert registered",
+          "network_engineering" in set(names), str(names))
+    check("domain expert inert without LLM (falls through)",
           bool(m.ask_agentic("troubleshoot why OSPF is failing").get("answer")))
 
-    # network & security expert agents registered and firing on their intents
-    check("net/sec experts registered",
-          {"k8s_security", "cloud_security", "network_engineering", "incident_response",
-           "threat_modeling"} <= set(names), str(names))
+    # unified network & security expert (merged: k8s/cloud/incident/threat/troubleshoot/
+    # security-review/config all collapsed into one 'network_engineering' agent)
+    check("unified net/sec expert registered", "network_engineering" in set(names), str(names))
     reg = m.agent_registry
-    for q, expert in (("how does istio mtls strict mode work", "k8s_security"),
-                      ("is my S3 bucket exposed via IAM role", "cloud_security"),
-                      ("why do BGP routes keep flapping", "network_engineering"),
-                      ("we had a breach with data exfiltration to an external IP",
-                       "incident_response"),
-                      ("build a threat model for our API", "threat_modeling")):
+    for q in ("how does istio mtls strict mode work",
+              "is my S3 bucket exposed via IAM role",
+              "why do BGP routes keep flapping",
+              "we had a breach with data exfiltration to an external IP",
+              "build a threat model for our API",
+              "troubleshoot why OSPF adjacency is failing"):
         top = reg.ranked(q, {})[0][1].name
-        check(f"{expert} wins its intent", top == expert, f"got {top}")
+        check(f"'{q[:32]}…' → network_engineering", top == "network_engineering", f"got {top}")
 
     # trusted-sources commands route correctly, and seeding is gated on VIO_ALLOW_NET
     import os as _os
@@ -56,7 +55,7 @@ def main():
     # inspection & collaboration
     rep = m.agents_report()
     check("agents_report lists roster + shared brain",
-          len(rep.get("agents", [])) >= 12 and "library_passages" in rep.get("shared_brain", {}))
+          len(rep.get("agents", [])) >= 8 and "library_passages" in rep.get("shared_brain", {}))
     check("'agents' command routes",
           (m._core_front("agents") or {}).get("how") == "agents")
     wa = m._core_front("who answers: why do BGP routes flap")

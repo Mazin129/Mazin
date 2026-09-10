@@ -440,88 +440,98 @@ class ExpertAgent(DomainAgent):
         return True
 
 
-class KubernetesSecurityAgent(ExpertAgent):
-    name, domains = "k8s_security", ("kubernetes", "security", "cloud-native")
-    intent = re.compile(
-        r"\b(kubernetes|k8s|istio|linkerd|envoy|service ?mesh|sidecar|mtls|"
-        r"peerauthentication|authorizationpolicy|network ?polic\w*|pod security|"
-        r"admission controller|kubelet|namespace isolation|calico|cilium|"
-        r"opa|gatekeeper|egress|ingress gateway)\b", re.I)
-    system = (
-        "You are a KUBERNETES & SERVICE-MESH SECURITY expert. Explain the mechanism "
-        "precisely — mTLS modes (STRICT/PERMISSIVE, port-level), PeerAuthentication & "
-        "AuthorizationPolicy, NetworkPolicy, sidecar interception and its bypasses, egress "
-        "control. Name the exact resource and field, show a minimal manifest when it helps, "
-        "and always state the ATTACK PATH and the HARDENING. Ground specifics in the "
-        "provided facts; use expert knowledge for the method. Answer the whole question, "
-        "including how the pieces correlate.")
-
-
-class CloudSecurityAgent(ExpertAgent):
-    name, domains = "cloud_security", ("cloud", "security")
-    intent = re.compile(
-        r"\b(aws|azure|gcp|cloud|iam|s3 bucket|security group|nacl|\bvpc\b|kms|"
-        r"secrets? manager|metadata (endpoint|service)|169\.254\.169\.254|imds|"
-        r"cloudtrail|guardduty|public bucket|access key|assume ?role|privilege "
-        r"escalation|ssrf)\b", re.I)
-    system = (
-        "You are a CLOUD SECURITY expert (AWS/Azure/GCP). Explain the exposure or control "
-        "precisely — IAM/role trust, network exposure (SGs/NACLs/VPC), key & secret "
-        "handling, the metadata/IMDS attack path, logging/detection. Name the exact "
-        "service and setting, give the concrete fix, and rank findings by risk. Ground "
-        "specifics in the provided facts; use expert knowledge for the method.")
-
-
 class NetworkEngineeringAgent(ExpertAgent):
-    name, domains = "network_engineering", ("networking",)
+    """The single, comprehensive NETWORK & SECURITY expert — one agent covering routing &
+    switching, firewalls, Kubernetes & service mesh, cloud/IAM, incident response, threat
+    modeling, troubleshooting, security review, and firewall-config analysis. Replaces the
+    former per-domain experts (merged by request). Read-only; grounded on the shared
+    library (grown via teach / web research / learn-essentials / cover-gaps); every answer
+    feeds the self-improvement loop. Config aggregate/count queries are answered by the
+    deterministic structured parser (exact, verified)."""
+    name = "network_engineering"
+    domains = ("networking", "security", "cloud", "kubernetes", "incident", "config")
+    base_score = 0.72
+
+    # fires on any analytical network/security question across all merged domains
     intent = re.compile(
-        r"\b(bgp|ospf|eigrp|is-?is|route ?flap\w*|routing table|subnet\w*|vlan|mtu|"
-        r"mpls|vxlan|spanning ?tree|\bnat\b|\bacl\b|\bqos\b|route reflector|as-?path|"
-        r"prefix|\bbfd\b|ecmp|next ?hop|default route|state (table|exhaustion)|"
-        r"conntrack|session table)\b", re.I)
+        r"\b("
+        # routing / switching / firewall
+        r"bgp|ospf|eigrp|is-?is|route ?flap\w*|routing|subnet\w*|vlan|mtu|mpls|vxlan|"
+        r"spanning ?tree|\bnat\b|\bacl\b|\bqos\b|route reflector|as-?path|prefix|\bbfd\b|"
+        r"ecmp|next ?hop|default route|state (table|exhaustion)|conntrack|session table|"
+        r"firewall|polic\w*|vpn|ipsec|wireguard|tunnel|interface|port\b|dns|dhcp|"
+        # kubernetes / service mesh
+        r"kubernetes|k8s|istio|linkerd|envoy|service ?mesh|sidecar|mtls|peerauthentication|"
+        r"authorizationpolicy|network ?polic\w*|pod security|admission controller|kubelet|"
+        r"namespace isolation|calico|cilium|opa|gatekeeper|egress|ingress gateway|"
+        # cloud / iam
+        r"aws|azure|gcp|cloud|\biam\b|s3 bucket|security group|nacl|\bvpc\b|kms|"
+        r"secrets? manager|metadata (endpoint|service)|169\.254\.169\.254|imds|cloudtrail|"
+        r"guardduty|public bucket|access key|assume ?role|privilege escalation|ssrf|"
+        # incident response
+        r"incident|breach|compromis\w*|exfiltrat\w*|data ?loss|ransomware|malware|\bioc\b|"
+        r"indicator of compromise|forensic\w*|containment|\bc2\b|command and control|"
+        r"lateral movement|threat ?hunt\w*|beacon\w*|"
+        # threat modeling / security review
+        r"threat model\w*|attack surface|\bstride\b|\bdread\b|kill ?chain|trust boundar\w*|"
+        r"abuse case|risk assessment|attack tree|mitre att&?ck|adversary|harden\w*|"
+        r"misconfig\w*|vulnerab\w*|least privilege|attack path|"
+        # troubleshooting
+        r"troubleshoot|diagnos\w*|root ?cause|not working|isn'?t working|failing|"
+        r"can'?t (ping|connect|reach|browse)|no connectivity"
+        r")\b", re.I)
+
     system = (
-        "You are a NETWORK ENGINEERING expert (routing, switching, firewalls). Explain the "
-        "protocol/behaviour precisely — BGP/OSPF convergence and route flaps, ECMP, BFD, "
-        "NAT and firewall state/conntrack tables and their exhaustion, MTU/fragmentation. "
-        "Give the exact mechanism, the command to verify it, and the fix. Ground specifics "
-        "in the provided facts; use expert knowledge for the method. Connect cause to effect.")
+        "You are Vio's comprehensive NETWORK & SECURITY expert. Your domains, unified: "
+        "routing & switching (BGP/OSPF, ECMP, BFD, MTU), firewalls & NAT (state/conntrack "
+        "tables and their exhaustion), Kubernetes & service mesh (mTLS STRICT/PERMISSIVE & "
+        "port-level, PeerAuthentication/AuthorizationPolicy, NetworkPolicy, sidecar "
+        "interception & bypass, egress), cloud & IAM (AWS/Azure/GCP roles, exposure, "
+        "IMDS/metadata, SSRF), incident response & threat hunting (attack path, IOCs, "
+        "containment), threat modeling (STRIDE, trust boundaries, ranked mitigations), "
+        "troubleshooting (ranked causes → the exact check → the fix), and security review "
+        "(misconfig, over-permissive rules, hardening, ranked by risk).\n"
+        "Answer the WHOLE question precisely: name the exact protocol/resource/field/"
+        "command, show a minimal config/manifest when it helps, state the attack path and "
+        "the hardening, and connect cause to effect across domains. Ground specifics in the "
+        "provided facts; use expert knowledge for method. If evidence is missing, say what "
+        "you'd need — don't invent device-specific values.")
+
+    # config aggregate/count queries → deterministic structured analysis (exact, verified)
+    _CFG_AGG = re.compile(
+        r"\b(all|every|each|list|which|how many|count|number of|show|any|pointing|matching)\b",
+        re.I)
+    _CFG_OBJ = re.compile(
+        r"\b(polic(?:y|ies)|firewall|rule(?:s)?|interface(?:s)?|vlan(?:s)?|address(?:es)?|"
+        r"object(?:s)?|route(?:s)?|vpn|tunnel|nat|fortigate|forti)\b", re.I)
+
+    def _is_config_agg(self, q):
+        if not (self._CFG_AGG.search(q or "") and self._CFG_OBJ.search(q or "")):
+            return False
+        docs = getattr(getattr(self.mind, "lib", None), "docs", None) or []
+        return any(re.search(r"^\s*(config|edit|set)\b", d, re.M | re.I) for d in docs[:300])
+
+    def score(self, q, ctx):
+        # config aggregate query with config loaded → fire (deterministic path);
+        # otherwise the normal analytical-expert gate applies.
+        if self._is_config_agg(q):
+            return 0.72
+        return super().score(q, ctx)
+
+    def run(self, q, ctx):
+        if self._is_config_agg(q):
+            agg = self.mind._aggregate_answer(q)
+            if agg:
+                return Result.from_dict(agg)
+        return super().run(q, ctx)
 
 
-class IncidentResponseAgent(ExpertAgent):
-    name, domains = "incident_response", ("security", "operations")
-    intent = re.compile(
-        r"\b(incident response|breach|compromis\w*|exfiltrat\w*|data ?loss|ransomware|"
-        r"malware|\bioc\b|indicator of compromise|forensic\w*|containment|\bc2\b|"
-        r"command and control|lateral movement|threat ?hunt\w*|beacon\w*)\b", re.I)
-    system = (
-        "You are an INCIDENT RESPONSE & THREAT-HUNTING expert. Given the scenario, lay out "
-        "the likely attack path step by step, the indicators/telemetry to look for at each "
-        "step, immediate containment, and eradication/recovery. Be concrete about where an "
-        "attacker hides (egress paths, protocol abuse, timing). Ground specifics in the "
-        "provided facts; use expert knowledge for the method. Address correlated signals.")
-
-
-class ThreatModelingAgent(ExpertAgent):
-    name, domains = "threat_modeling", ("security",)
-    intent = re.compile(
-        r"\b(threat model\w*|attack surface|\bstride\b|\bdread\b|kill ?chain|"
-        r"trust boundar\w*|abuse case|risk assessment|attack tree|mitre att&?ck|"
-        r"tabletop|adversary)\b", re.I)
-    system = (
-        "You are a THREAT MODELING expert. Identify assets, trust boundaries, entry points, "
-        "and the ranked threats (STRIDE-style) with concrete abuse cases and the mitigation "
-        "for each. Prioritise by likelihood × impact. Ground specifics in the provided "
-        "facts; use expert knowledge for the method.")
-
-
-# order is only a tie-breaker; scores drive dispatch. Domain experts sit above the
-# catch-alls but fire only on their intent; CoreRouter (front) then Knowledge (tail)
-# remain the bottom fallbacks.
-NET_SEC_EXPERTS = (KubernetesSecurityAgent, CloudSecurityAgent, NetworkEngineeringAgent,
-                   IncidentResponseAgent, ThreatModelingAgent)
+# order is only a tie-breaker; scores drive dispatch. The one net/sec expert sits above
+# the catch-alls; CoreRouter (front) then Knowledge (tail) remain the bottom fallbacks.
+# NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
+# (teach:/math/tools/research/draw/agents/…); folding it in would break those.
 DEFAULT_AGENTS = (WebResearchAgent, DiagramAgent, SkillAgent, MathAgent, PlannerAgent,
-                  WorldModelAgent, ReasoningAgent) + NET_SEC_EXPERTS + (
-                  TroubleshootingAgent, SecurityReviewAgent, ConfigAgent,
+                  WorldModelAgent, ReasoningAgent, NetworkEngineeringAgent,
                   MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
 
