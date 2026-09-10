@@ -37,7 +37,9 @@ rem ── reasoning model: pick one that FITS this PC's GPU so it actually fini
 rem  An 8B model on a 2 GB card runs on the CPU and times out (Vio then falls back
 rem  to raw matches). A 3B model fits and is fast. First run:  ollama pull llama3.2:3b
 rem  Leave blank to let Vio auto-pick the best installed model.
-set "VIO_LLM_MODEL=llama3.2:3b"
+rem  qwen2.5:3b fits a 2 GB GPU and is stronger than llama3.2:3b for network/security.
+rem  Switch to qwen2.5:7b (smarter, CPU, slower) live from the /dashboard brain menu.
+set "VIO_LLM_MODEL=qwen2.5:3b"
 
 rem ── internet research: let Vio search the web, read pages, and learn from them.
 rem  Read-only over the public web, with SSRF protection. To restrict which sites it

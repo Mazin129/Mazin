@@ -147,9 +147,14 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
    <pre class="out" id="learnOut">Pick an action — its result shows here.</pre>
   </div>
   <div class="card">
-   <h2>Self-improvement — approve &amp; promote</h2>
-   <p class="cap">Propose a candidate from behaviour traces (curate + evaluation gate), then
-     approve to switch Vio's live model, or roll back. Nothing changes without your click.</p>
+   <h2>Brain &amp; self-improvement</h2>
+   <p class="cap">Switch the live reasoning model instantly, or run the governed loop to
+     propose/approve/rollback a candidate. Nothing changes without your click.</p>
+   <div class="btns">
+     <span class="cap" style="margin:0 2px 0 0">🧠 Brain:</span>
+     <select class="minput" id="modelSelect" style="width:auto"></select>
+     <button class="act ok" onclick="switchModel()">⚡ Use this brain</button>
+   </div>
    <div id="improveStat" class="improve">…</div>
    <div class="btns">
      <button class="act" onclick="doImprove('propose')">🔬 Propose</button>
@@ -360,6 +365,26 @@ async function runCmd(cmd){
  }catch(e){out.textContent='failed: '+e;}
  btns.forEach(b=>b.disabled=false); loadAgents(); loadCaps();
 }
+async function loadModels(){
+ try{const j=await(await fetch('/api/models')).json();
+  const sel=$('modelSelect'); if(!sel) return;
+  const cur=j.current||'', inst=j.installed||[];
+  sel.innerHTML = inst.length
+    ? inst.map(m=>`<option value="${esc(m)}" ${m===cur?'selected':''}>${esc(m)}${m===cur?' — live':''}</option>`).join('')
+    : '<option value="">— no models installed (ollama pull …) —</option>';
+ }catch(e){}
+}
+async function switchModel(){
+ const m=($('modelSelect').value||'').trim(); if(!m) return;
+ const out=$('improveOut'); out.textContent='… switching brain to '+m+' …';
+ try{const j=await(await fetch('/api/model',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({model:m})})).json();
+   out.textContent = j.ok
+     ? ('✅ Live brain is now: '+(j.current||m)+(j.available===false?' (⚠️ not installed — fell back)':''))
+     : ('failed: '+(j.message||JSON.stringify(j)));
+ }catch(e){out.textContent='failed: '+e;}
+ loadCaps(); loadModels(); loadImprove();
+}
 async function loadImprove(){
  try{const j=await(await fetch('/api/improve')).json();
   if(!j||j.available===false){$('improveStat').textContent='Self-improvement engine not available.';return;}
@@ -437,6 +462,7 @@ async function load(){
  $('wish').innerHTML=wl.length?('<b>Wants to learn:</b> '+wl.map(w=>esc(w.topic)+` (${w.count}×)`).join(', ')):'';
 }
 load();
+loadModels();              // installed-model list for the brain switcher
 loadImprove();             // once at start (curation is a touch heavy); refreshed on action
 setInterval(load, 3000);   // live: reflect the latest answer's path + agent blueprint
 </script></body></html>"""

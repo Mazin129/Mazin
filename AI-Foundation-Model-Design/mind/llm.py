@@ -38,7 +38,7 @@ MODEL = os.environ.get("VIO_LLM_MODEL", "")          # empty → auto-pick from 
 # fine-tune here. A capable base model + retrieval over your data is the reliable path.
 # You can still force any model explicitly with VIO_LLM_MODEL=<name> (e.g. a good
 # fine-tune you've validated).
-_PREFER = ("llama3.1", "llama3.2", "qwen2.5", "qwen2", "mistral", "gemma2", "phi3",
+_PREFER = ("qwen2.5", "llama3.1", "llama3.2", "qwen2", "mistral", "gemma2", "phi3",
            "llama3", "llama2")
 
 
@@ -79,6 +79,15 @@ class LLM:
                     return
         self.model = names[0]
         self.available = True
+
+    # ---- inventory ----
+    def list_models(self):
+        """Names of all models installed in the local Ollama, for the model switcher."""
+        try:
+            tags = self._get("/api/tags", timeout=3)
+        except Exception:
+            return []
+        return [m.get("name", "") for m in (tags or {}).get("models", []) if m.get("name")]
 
     # ---- generation ----
     def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024):

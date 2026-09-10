@@ -832,6 +832,12 @@ class H(BaseHTTPRequestHandler):
         elif path == "/api/agents":
             rep = MIND.agents_report() if hasattr(MIND, "agents_report") else {"agents": []}
             self._s(200, json.dumps(rep, ensure_ascii=False))
+        elif path == "/api/models":
+            llm = getattr(MIND, "llm", None)
+            installed = llm.list_models() if (llm and hasattr(llm, "list_models")) else []
+            current = (llm.model if (llm and getattr(llm, "available", False)) else None)
+            self._s(200, json.dumps({"installed": installed, "current": current},
+                                    ensure_ascii=False))
         elif path == "/api/pack":                     # export a portable knowledge pack
             import packs
             domain = (parse_qs(urlparse(self.path).query).get("domain", ["all"])[0])
@@ -1008,6 +1014,28 @@ class H(BaseHTTPRequestHandler):
         elif self.path == "/api/improve/rollback":
             si = getattr(MIND, "si", None)
             self._s(200, json.dumps(si.rollback() if si else {"ok": False}, ensure_ascii=False))
+
+        elif self.path == "/api/model":                  # switch the live reasoning brain
+            model = (body.get("model") or "").strip()
+            llm = getattr(MIND, "llm", None)
+            si = getattr(MIND, "si", None)
+            if not model:
+                self._s(200, json.dumps({"ok": False, "message": "no model given"}))
+            elif si:                                     # tracked switch (rollback-able)
+                res = si.promote(model, approved=True, note="model switch from UI")
+                res["current"] = (llm.model if (llm and llm.available) else None)
+                res["available"] = bool(llm and llm.available)
+                self._s(200, json.dumps(res, ensure_ascii=False))
+            elif llm:
+                llm.model = model
+                try:
+                    llm._detect()
+                except Exception:
+                    pass
+                self._s(200, json.dumps({"ok": True, "current": llm.model,
+                                         "available": llm.available}, ensure_ascii=False))
+            else:
+                self._s(200, json.dumps({"ok": False, "message": "no LLM"}))
 
         elif self.path == "/api/skills":
             ok, msg = MIND.skills.add(body.get("name", ""), body.get("trigger", ""),
