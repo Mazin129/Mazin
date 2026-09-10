@@ -1293,6 +1293,70 @@ class Mind:
         return {"ok": True, "how": "web research (excerpt)", "verified": True,
                 "answer": body + note, "trace": trace}
 
+    def list_sources(self, topic=None):
+        """Show the curated trusted network/security sources Vio can learn from."""
+        import sources
+        return sources.summary(topic)
+
+    def learn_sources(self, topic=None):
+        """Learn the curated trusted sources: GitHub repos via learn_github (docs only,
+        never runs code) and doc pages via the web fetcher. Robust — skips any source it
+        can't reach and returns a summary of what was learned."""
+        import sources
+        import websearch
+        # Both repo clones and doc fetches reach the network, so require the same opt-in.
+        if not websearch.net_enabled():
+            return {"ok": False, "how": "learn sources (disabled)", "verified": False,
+                    "answer": "Learning trusted sources needs internet access. Start Vio "
+                    "with  VIO_ALLOW_NET=1  and try again.\n\n" + sources.summary(topic)}
+        rows = sources.catalog(topic)
+        if not rows:
+            return {"ok": False, "how": "learn sources", "verified": False,
+                    "answer": sources.summary(topic)}
+        learned, failed, total_chunks, url_chunks = [], [], 0, []
+        for name, kind, ref, _tp in rows:
+            try:
+                if kind == "github":
+                    r = self.learn_github(ref)
+                    if r.get("ok"):
+                        learned.append(f"📦 {name} (+{r.get('passages', 0)})")
+                        total_chunks += int(r.get("passages", 0))
+                    else:
+                        failed.append(f"{name}: {r.get('answer', 'no docs')[:60]}")
+                else:                                          # doc URL
+                    if not websearch.net_enabled():
+                        failed.append(f"{name}: web off (set VIO_ALLOW_NET=1)")
+                        continue
+                    doc = websearch.fetch(ref)
+                    body = (doc.get("text") or "")[:20000]
+                    if len(body) < 200:
+                        failed.append(f"{name}: too little text")
+                        continue
+                    chunks = self._smart_chunks(body)
+                    url_chunks.extend(chunks)
+                    try:
+                        self.graph.learn_text(body)
+                    except Exception:
+                        pass
+                    learned.append(f"🌐 {name} (+{len(chunks)})")
+                    total_chunks += len(chunks)
+            except Exception as e:                             # never abort the whole run
+                failed.append(f"{name}: {str(e)[:60]}")
+        if url_chunks:
+            self.lib.add_many(url_chunks)
+        if total_chunks:
+            self._retrain()
+            self.mem["last_learned"] = {"source": "trusted-sources", "count": total_chunks}
+            self._save()
+        parts = [f"✓ Learned {total_chunks} passages from {len(learned)} trusted source(s)."]
+        if learned:
+            parts.append("Learned:\n  " + "\n  ".join(learned))
+        if failed:
+            parts.append(f"Skipped {len(failed)}:\n  " + "\n  ".join(failed))
+        parts.append("Ask me anything about them now.")
+        return {"ok": bool(total_chunks), "how": "learn sources",
+                "verified": bool(total_chunks), "answer": "\n".join(parts), "trace": []}
+
     def _plot(self, q):
         """ASCII plot of y = f(x) over x∈[-10,10]. Expression is safely parsed."""
         m = re.search(r"(?:plot|graph|draw)\s+(?:of\s+|the\s+)?(?:y\s*=\s*)?(.+)", q, re.I)
@@ -1635,6 +1699,21 @@ class Mind:
         if rq is not None:
             r = self.research(rq)
             return {"answer": r["answer"], "how": r.get("how", "web research"),
+                    "verified": r.get("verified", False), "trace": r.get("trace", [])}
+
+        # trusted network/security sources: "list sources" / "what sources", and
+        # "learn essentials" / "seed security" / "learn (the) trusted sources".
+        if re.search(r"^\s*(?:list|show|what)\s+(?:are\s+)?(?:your\s+|the\s+)?"
+                     r"(?:trusted\s+)?sources\b", low):
+            m = re.search(r"\bfor\s+([\w/ -]+)$", low)
+            return {"answer": self.list_sources(m.group(1).strip() if m else None),
+                    "how": "sources", "verified": True, "trace": []}
+        if re.search(r"^\s*(?:learn|seed|ingest|load)\s+(?:the\s+)?"
+                     r"(?:essential|essentials|trusted\s+sources?|security(?:\s+knowledge)?|"
+                     r"network(?:ing)?(?:\s+and\s+security)?(?:\s+knowledge)?)\s*$", low):
+            topic = None
+            r = self.learn_sources(topic)
+            return {"answer": r["answer"], "how": r.get("how", "learn sources"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
         # 0) "what have I taught you / what did you learn / what's in your library"

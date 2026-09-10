@@ -31,6 +31,28 @@ def main():
     check("domain agent inert without LLM (falls through)",
           bool(m.ask_agentic("troubleshoot why OSPF is failing").get("answer")))
 
+    # network & security expert agents registered and firing on their intents
+    check("net/sec experts registered",
+          {"k8s_security", "cloud_security", "network_engineering", "incident_response",
+           "threat_modeling"} <= set(names), str(names))
+    reg = m.agent_registry
+    for q, expert in (("how does istio mtls strict mode work", "k8s_security"),
+                      ("is my S3 bucket exposed via IAM role", "cloud_security"),
+                      ("why do BGP routes keep flapping", "network_engineering"),
+                      ("we had a breach with data exfiltration to an external IP",
+                       "incident_response"),
+                      ("build a threat model for our API", "threat_modeling")):
+        top = reg.ranked(q, {})[0][1].name
+        check(f"{expert} wins its intent", top == expert, f"got {top}")
+
+    # trusted-sources commands route correctly, and seeding is gated on VIO_ALLOW_NET
+    import os as _os
+    _os.environ.pop("VIO_ALLOW_NET", None)
+    check("'list sources' routes to sources",
+          (m._core_front("list sources") or {}).get("how") == "sources")
+    check("'learn essentials' gated without net",
+          (m._core_front("learn essentials") or {}).get("how") == "learn sources (disabled)")
+
     # seed a little knowledge
     m.skills.add("greet", "hi", "Hey there!")
     m.teach("Congestion causes higher latency.")

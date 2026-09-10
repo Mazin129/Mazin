@@ -290,6 +290,7 @@ class DomainAgent(Agent):
     intent = None            # compiled regex — the query shape this expert owns
     system = ""              # domain system prompt
     base_score = 0.65        # above the catch-alls, below the exact/verified specialists
+    strip_config = False     # conceptual experts set True: raw device config is noise
 
     def _fires(self, q):
         return bool(self.intent and self.intent.search(q))
@@ -305,6 +306,12 @@ class DomainAgent(Agent):
             return None                          # no LLM → let the base path handle it
         hits = self.mind.lib.search(q, k=8)
         passages = [d for d, _ in hits]
+        if self.strip_config:                    # keep raw firewall/router stanzas out of
+            try:                                 # a conceptual answer (the mTLS→VoIP bug)
+                passages = [d for d in passages
+                            if not self.mind._is_configish_snippet(d)]
+            except Exception:
+                pass
         try:
             from llm import grounded_prompt
             prompt = grounded_prompt(q, passages)
@@ -345,11 +352,96 @@ class SecurityReviewAgent(DomainAgent):
               "not invent rules that aren't there. Prioritise the highest-risk findings first.")
 
 
+class ExpertAgent(DomainAgent):
+    """A conceptual domain expert: answers about mechanisms/attacks/design, grounded on
+    prose docs (raw device config is stripped so it never pollutes the answer). Fires a
+    touch higher than the generic catch-alls."""
+    base_score = 0.7
+    strip_config = True
+
+
+class KubernetesSecurityAgent(ExpertAgent):
+    name, domains = "k8s_security", ("kubernetes", "security", "cloud-native")
+    intent = re.compile(
+        r"\b(kubernetes|k8s|istio|linkerd|envoy|service ?mesh|sidecar|mtls|"
+        r"peerauthentication|authorizationpolicy|network ?polic\w*|pod security|"
+        r"admission controller|kubelet|namespace isolation|calico|cilium|"
+        r"opa|gatekeeper|egress|ingress gateway)\b", re.I)
+    system = (
+        "You are a KUBERNETES & SERVICE-MESH SECURITY expert. Explain the mechanism "
+        "precisely — mTLS modes (STRICT/PERMISSIVE, port-level), PeerAuthentication & "
+        "AuthorizationPolicy, NetworkPolicy, sidecar interception and its bypasses, egress "
+        "control. Name the exact resource and field, show a minimal manifest when it helps, "
+        "and always state the ATTACK PATH and the HARDENING. Ground specifics in the "
+        "provided facts; use expert knowledge for the method. Answer the whole question, "
+        "including how the pieces correlate.")
+
+
+class CloudSecurityAgent(ExpertAgent):
+    name, domains = "cloud_security", ("cloud", "security")
+    intent = re.compile(
+        r"\b(aws|azure|gcp|cloud|iam|s3 bucket|security group|nacl|\bvpc\b|kms|"
+        r"secrets? manager|metadata (endpoint|service)|169\.254\.169\.254|imds|"
+        r"cloudtrail|guardduty|public bucket|access key|assume ?role|privilege "
+        r"escalation|ssrf)\b", re.I)
+    system = (
+        "You are a CLOUD SECURITY expert (AWS/Azure/GCP). Explain the exposure or control "
+        "precisely — IAM/role trust, network exposure (SGs/NACLs/VPC), key & secret "
+        "handling, the metadata/IMDS attack path, logging/detection. Name the exact "
+        "service and setting, give the concrete fix, and rank findings by risk. Ground "
+        "specifics in the provided facts; use expert knowledge for the method.")
+
+
+class NetworkEngineeringAgent(ExpertAgent):
+    name, domains = "network_engineering", ("networking",)
+    intent = re.compile(
+        r"\b(bgp|ospf|eigrp|is-?is|route ?flap\w*|routing table|subnet\w*|vlan|mtu|"
+        r"mpls|vxlan|spanning ?tree|\bnat\b|\bacl\b|\bqos\b|route reflector|as-?path|"
+        r"prefix|\bbfd\b|ecmp|next ?hop|default route|state (table|exhaustion)|"
+        r"conntrack|session table)\b", re.I)
+    system = (
+        "You are a NETWORK ENGINEERING expert (routing, switching, firewalls). Explain the "
+        "protocol/behaviour precisely — BGP/OSPF convergence and route flaps, ECMP, BFD, "
+        "NAT and firewall state/conntrack tables and their exhaustion, MTU/fragmentation. "
+        "Give the exact mechanism, the command to verify it, and the fix. Ground specifics "
+        "in the provided facts; use expert knowledge for the method. Connect cause to effect.")
+
+
+class IncidentResponseAgent(ExpertAgent):
+    name, domains = "incident_response", ("security", "operations")
+    intent = re.compile(
+        r"\b(incident response|breach|compromis\w*|exfiltrat\w*|data ?loss|ransomware|"
+        r"malware|\bioc\b|indicator of compromise|forensic\w*|containment|\bc2\b|"
+        r"command and control|lateral movement|threat ?hunt\w*|beacon\w*)\b", re.I)
+    system = (
+        "You are an INCIDENT RESPONSE & THREAT-HUNTING expert. Given the scenario, lay out "
+        "the likely attack path step by step, the indicators/telemetry to look for at each "
+        "step, immediate containment, and eradication/recovery. Be concrete about where an "
+        "attacker hides (egress paths, protocol abuse, timing). Ground specifics in the "
+        "provided facts; use expert knowledge for the method. Address correlated signals.")
+
+
+class ThreatModelingAgent(ExpertAgent):
+    name, domains = "threat_modeling", ("security",)
+    intent = re.compile(
+        r"\b(threat model\w*|attack surface|\bstride\b|\bdread\b|kill ?chain|"
+        r"trust boundar\w*|abuse case|risk assessment|attack tree|mitre att&?ck|"
+        r"tabletop|adversary)\b", re.I)
+    system = (
+        "You are a THREAT MODELING expert. Identify assets, trust boundaries, entry points, "
+        "and the ranked threats (STRIDE-style) with concrete abuse cases and the mitigation "
+        "for each. Prioritise by likelihood × impact. Ground specifics in the provided "
+        "facts; use expert knowledge for the method.")
+
+
 # order is only a tie-breaker; scores drive dispatch. Domain experts sit above the
 # catch-alls but fire only on their intent; CoreRouter (front) then Knowledge (tail)
 # remain the bottom fallbacks.
+NET_SEC_EXPERTS = (KubernetesSecurityAgent, CloudSecurityAgent, NetworkEngineeringAgent,
+                   IncidentResponseAgent, ThreatModelingAgent)
 DEFAULT_AGENTS = (WebResearchAgent, SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
-                  ReasoningAgent, TroubleshootingAgent, SecurityReviewAgent, ConfigAgent,
+                  ReasoningAgent) + NET_SEC_EXPERTS + (
+                  TroubleshootingAgent, SecurityReviewAgent, ConfigAgent,
                   MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
 
