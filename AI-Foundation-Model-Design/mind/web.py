@@ -1083,6 +1083,23 @@ if __name__ == "__main__":
     # --service (or VIO_NO_BROWSER) runs Vio quietly in the background — no browser
     # pop-up — for the always-on autostart. A normal run still opens the browser.
     service = "--service" in sys.argv or os.environ.get("VIO_NO_BROWSER")
+    # A Vio may already be listening on this port. On Windows SO_REUSEADDR lets a SECOND
+    # process bind the same port silently, so two instances answer at random and a
+    # 'restart' looks like it did nothing (the whole 'why is it still old code' saga).
+    # Detect a live listener and refuse rather than become the second copy.
+    import socket as _socket
+    _probe = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+    _probe.settimeout(0.4)
+    _already = _probe.connect_ex(("127.0.0.1", PORT)) == 0
+    _probe.close()
+    if _already and not os.environ.get("VIO_ALLOW_SECOND"):
+        print(f"✋ Vio is ALREADY running on port {PORT} — not starting a second copy.")
+        print("   Two instances would fight over the port and serve stale answers.")
+        print("   Stop the running one first, then start again:")
+        print(f"     netstat -ano | findstr :{PORT}      (note each LISTENING PID)")
+        print("     taskkill /F /PID <that-pid>          (repeat for every LISTENING row)")
+        print("   (Set VIO_ALLOW_SECOND=1 only if you truly want another instance.)")
+        sys.exit(1)
     if not service:
         import webbrowser
         print(f"🧠 {MIND.name()} is starting — opening {url} in your browser...")
