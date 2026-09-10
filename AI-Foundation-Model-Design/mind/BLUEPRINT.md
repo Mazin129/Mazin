@@ -89,7 +89,7 @@ shared library and every other agent can use it on the next question.
 
 ---
 
-## 4. The agents (17)
+## 4. The agents (18)
 
 Scores drive dispatch (highest wins); order only breaks ties. Advisory = read-only;
 Acting = holds network/write permission and is guardrail-gated.
