@@ -1327,7 +1327,10 @@ class Mind:
         r"^\s*(?:draw|sketch|diagram|visuali[sz]e)\s+(?:me\s+)?(?:a|an|the)\s+(.+)$", re.I)
 
     def _draw_request(self, q):
-        m = self._DRAW_RE.match(q or "") or self._DRAW_RE2.match(q or "")
+        # act on the FIRST non-empty line, so a multi-line paste (e.g. several example
+        # commands at once) still triggers on the first 'draw:'/'diagram:' line.
+        first = next((ln for ln in (q or "").splitlines() if ln.strip()), "")
+        m = self._DRAW_RE.match(first) or self._DRAW_RE2.match(first)
         if not m:
             return None
         payload = m.group(1).strip()
