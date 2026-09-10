@@ -189,6 +189,31 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
 
 ---
 
+## 7.5 Answer-quality guarantees (quality > more agents)
+
+Quality is enforced centrally, so it holds no matter which agent answered:
+
+- **Never verify weak/empty** — `quality.finalize()` runs on **every** response after the
+  critic: an empty, too-short, or hedging answer can never wear a ✓; a factual/security
+  claim with **no local evidence and no web source** is shown but tagged *"unverified (no
+  local evidence)."*
+- **Critic on every deliberate answer** — `cognition/critic.py` runs on all System-2
+  paths (LLM, unverified, empty-evidence): it flags memory conflicts, re-searches thin
+  support, downgrades a config-dump served for an analytic question, and — below the
+  honesty threshold — **abstains and asks for clarification instead of bluffing.**
+- **Citations** — a verified grounded answer carries a *Sources:* (web) or *Grounded on:*
+  (passages) footer; evidence is published by the knowledge path, web research, and the
+  expert agents.
+- **Structured config** — `configparse.py` parses firewall/router config into objects
+  before analysis; `how many …` is an **exact structural count** (no LLM → verified).
+- **Read-only experts** — expert agents declare `permissions={read}` and `validate()`
+  their own output (reject stubs/degenerate loops).
+- **Golden gate** — `golden_eval.py` scores correctness + safety + latency over real use
+  cases; `propose()` reports `promotable`, and a model/prompt/retrieval/training change is
+  promoted only when the golden suite is green.
+- **Full reasoning traces** — behaviour traces store the evidence and reasoning steps, so
+  fine-tuning learns judgement, not shallow Q→A mimicry.
+
 ## 8. Inspection & collaboration (how to check it)
 
 - `agents` / `list agents` → the roster (advisory vs acting) + shared-brain counts.
@@ -322,11 +347,13 @@ brain — back them up.** All git-ignored (per-machine).
   `diagrams.py`, `datatable.py`, `gitlearn.py`, `packs.py`, `seed_knowledge.py`,
   `teach_datasets.py`.
 - **Web research:** `websearch.py`, `sources.py`.
+- **Answer quality:** `quality.py` (verification gate + citations), `configparse.py`
+  (structured config), `golden_eval.py` (correctness/safety/latency gate).
 - **Self-improvement:** `selfimprove.py`.
 - **Training (external/offline):** `train_all.py`, `train_model.py`, `build_dataset.py`,
   `build_large_sft.py`, `data_ingest.py`, `neural_model.py`.
-- **Tests:** `capability_test.py` (26 checks), `test_agents.py`, `test_selfimprove.py`,
-  `test_websearch.py`.
+- **Tests:** `capability_test.py` (26 checks), `golden_eval.py` (quality gate),
+  `test_agents.py`, `test_selfimprove.py`, `test_websearch.py`, `test_configparse.py`.
 
 ---
 
