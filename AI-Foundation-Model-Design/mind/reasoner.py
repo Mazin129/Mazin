@@ -1319,6 +1319,43 @@ class Mind:
         return {"ok": True, "how": "web research (excerpt)", "verified": True,
                 "answer": body + note, "trace": trace}
 
+    # diagram request: "draw: X", "diagram: X", "sketch a X", "visualize X" — but NOT a
+    # math function plot ("draw y=x^2" / "graph x^2"), which the plotter owns.
+    _DRAW_RE = re.compile(
+        r"^\s*(?:draw|diagram|sketch|visuali[sz]e|chart)\s*[:\-]\s*(.+)$", re.I)
+    _DRAW_RE2 = re.compile(
+        r"^\s*(?:draw|sketch|diagram|visuali[sz]e)\s+(?:me\s+)?(?:a|an|the)\s+(.+)$", re.I)
+
+    def _draw_request(self, q):
+        m = self._DRAW_RE.match(q or "") or self._DRAW_RE2.match(q or "")
+        if not m:
+            return None
+        payload = m.group(1).strip()
+        if re.search(r"[=^]|\bx\s*\*\*|\bf\(x\)", payload):     # looks like a function plot
+            return None
+        return payload or None
+
+    def draw(self, request):
+        """Generate a diagram via the vendored diagram-design skill + the local LLM."""
+        import diagramgen
+        if not diagramgen.available():
+            return {"answer": "The diagram-design skill isn't installed.",
+                    "how": "diagram", "verified": False, "trace": []}
+        if not (self.llm is not None and self.llm.available):
+            return {"answer": "Drawing a diagram needs a local LLM (Ollama). Start Ollama "
+                    "and try again.", "how": "diagram", "verified": False, "trace": []}
+        r = diagramgen.generate(request, self.llm)
+        if not r.get("ok"):
+            return {"answer": f"I couldn't render that diagram ({r.get('error')}). Try a "
+                    "shorter, clearer description — or point Vio at a bigger model for "
+                    "editorial-quality output.", "how": "diagram", "verified": False,
+                    "trace": []}
+        did, _ = diagramgen.save(r["html"], DATA_DIR)
+        return {"answer": f"✓ Drew a {r['type']} diagram from your description.\n"
+                f"Open it here: /diagram/{did}",
+                "how": f"diagram ({r['type']})", "verified": True,
+                "trace": [f"diagram-design skill · {r['type']}"], "diagram_id": did}
+
     def list_gaps(self):
         """Every open knowledge gap (topic Vio couldn't answer), most-asked first."""
         gaps = getattr(self.curiosity, "gaps", {}) or {}
@@ -1888,6 +1925,13 @@ class Mind:
         if cm:
             r = self.council(cm.group(1).strip())
             return {"answer": r["answer"], "how": r.get("how", "council"),
+                    "verified": r.get("verified", False), "trace": r.get("trace", [])}
+
+        # draw a diagram from a description (vendored diagram-design skill + LLM)
+        dq = self._draw_request(q)
+        if dq is not None:
+            r = self.draw(dq)
+            return {"answer": r["answer"], "how": r.get("how", "diagram"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
         # knowledge gaps: "list gaps"/"show gaps"/"my gaps", and "cover gaps"/"fill

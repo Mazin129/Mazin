@@ -815,6 +815,14 @@ class H(BaseHTTPRequestHandler):
             self._s(200, json.dumps(_status(), ensure_ascii=False))
         elif path == "/dashboard":
             self._s(200, DASHBOARD, "text/html; charset=utf-8")
+        elif path.startswith("/diagram/"):
+            import diagramgen
+            import reasoner
+            html = diagramgen.load(path[len("/diagram/"):], reasoner.DATA_DIR)
+            if html:
+                self._s(200, html, "text/html; charset=utf-8")
+            else:
+                self._s(404, "{}")
         elif path == "/api/telemetry":
             self._s(200, json.dumps(MIND.telemetry(), ensure_ascii=False))
         elif path == "/api/train_all/status":

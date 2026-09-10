@@ -97,6 +97,7 @@ Acting = holds network/write permission and is guardrail-gated.
 | Agent | Kind | Fires on |
 |---|---|---|
 | `research` (WebResearchAgent) | ⚙️ acting (network) | `research:` / `look up` / `search the web` — searches, reads, learns, cites |
+| `diagram` (DiagramAgent) | 💬 read-only | `draw:` / `diagram:` / `sketch a …` — LLM follows the vendored diagram-design skill → self-contained HTML/SVG at `/diagram/<id>` |
 | `k8s_security` | 💬 expert | Istio, mTLS, PeerAuthentication, NetworkPolicy, sidecar, egress, Cilium |
 | `cloud_security` | 💬 expert | AWS/Azure/GCP, IAM, S3, security groups, IMDS/metadata, SSRF |
 | `network_engineering` | 💬 expert | BGP/OSPF, route flaps, NAT/conntrack state exhaustion, BFD, VXLAN |
@@ -282,6 +283,7 @@ A private WireGuard mesh — never a public port. `start_vio_remote.bat` sets al
 | `who answers: <q>` | which agents would handle it |
 | `council: <q>` / `team: <q>` / `ask all agents <q>` | agents collaborate |
 | `learn from github owner/repo` | learn a repo's docs |
+| `draw: <description>` / `diagram:` / `sketch a …` | generate an HTML/SVG diagram (diagram-design skill) |
 | `what do you want to learn` | curiosity wishlist |
 | `what's in your library` | library summary |
 
@@ -291,7 +293,7 @@ A private WireGuard mesh — never a public port. `start_vio_remote.bat` sets al
 
 **GET:** `/` (chat) · `/dashboard` · `/api/status` · `/api/telemetry` · `/api/agents` ·
 `/api/models` · `/api/memory` · `/api/skills` · `/api/improve` · `/api/pack` ·
-`/api/solve` · `/api/train_all/status`
+`/api/solve` · `/api/models` · `/diagram/<id>` · `/api/train_all/status`
 
 **POST:** `/api/login` (open) · `/api/ask` `{message}` · `/api/feedback` `{good}` ·
 `/api/learn` · `/api/learn_folder` · `/api/model` `{model}` · `/api/improve/propose` ·
@@ -347,6 +349,7 @@ brain — back them up.** All git-ignored (per-machine).
   `diagrams.py`, `datatable.py`, `gitlearn.py`, `packs.py`, `seed_knowledge.py`,
   `teach_datasets.py`.
 - **Web research:** `websearch.py`, `sources.py`.
+- **Diagrams:** `diagramgen.py` + `vendor/diagram-design/` (vendored skill, Cathryn Lavery, MIT).
 - **Answer quality:** `quality.py` (verification gate + citations), `configparse.py`
   (structured config), `golden_eval.py` (correctness/safety/latency gate).
 - **Self-improvement:** `selfimprove.py`.

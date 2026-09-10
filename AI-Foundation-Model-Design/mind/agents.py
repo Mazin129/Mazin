@@ -213,6 +213,23 @@ class WebResearchAgent(Agent):
         return Result.from_dict(self.mind.research(payload))
 
 
+class DiagramAgent(Agent):
+    """Turns a description into a diagram by following the vendored diagram-design skill
+    (Cathryn Lavery, MIT) with the local LLM. Read-only: it writes an HTML file under the
+    data dir and returns a link, never acts on anything else."""
+    name, domains = "diagram", ("visualization", "diagram")
+    permissions = frozenset({READ})
+
+    def score(self, q, ctx):
+        return 0.9 if self.mind._draw_request(q) else 0.0
+
+    def run(self, q, ctx):
+        payload = self.mind._draw_request(q)
+        if payload is None:
+            return None
+        return Result.from_dict(self.mind.draw(payload))
+
+
 def agent_from_how(how):
     """Map a result's `how` string to a canonical agent name, for provenance on
     answers produced by the catch-all core router (until every branch is its own agent)."""
@@ -502,8 +519,8 @@ class ThreatModelingAgent(ExpertAgent):
 # remain the bottom fallbacks.
 NET_SEC_EXPERTS = (KubernetesSecurityAgent, CloudSecurityAgent, NetworkEngineeringAgent,
                    IncidentResponseAgent, ThreatModelingAgent)
-DEFAULT_AGENTS = (WebResearchAgent, SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
-                  ReasoningAgent) + NET_SEC_EXPERTS + (
+DEFAULT_AGENTS = (WebResearchAgent, DiagramAgent, SkillAgent, MathAgent, PlannerAgent,
+                  WorldModelAgent, ReasoningAgent) + NET_SEC_EXPERTS + (
                   TroubleshootingAgent, SecurityReviewAgent, ConfigAgent,
                   MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
