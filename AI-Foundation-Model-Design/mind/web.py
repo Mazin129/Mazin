@@ -728,7 +728,6 @@ def _status():
             "contexts": st["contexts"], "skills": len(MIND.skills.skills),
             "memories": len(MIND.episodic.episodes), "gaps": len(MIND.curiosity.gaps),
             "brain": (llm.model if (llm and llm.available) else None),
-            "backend": (getattr(llm, "backend", "ollama") if llm else None),
             "web": _web_research_on(),
             "semantic": (MIND.lib.sem.backend if getattr(MIND.lib, "sem", None) else None)}
 
@@ -1189,9 +1188,7 @@ if __name__ == "__main__":
     _llm = getattr(MIND, "llm", None)
     _model = (getattr(_llm, "model", None) if _llm and getattr(_llm, "available", False)
               else None)
-    _be = getattr(_llm, "backend", "ollama") if _llm else "ollama"
-    _tag = " (hosted — data leaves this PC)" if _be == "openai" else " (local)"
-    print(f"   🧠 model: {_model or '(none — install/start Ollama)'}{_tag if _model else ''}")
+    print(f"   🧠 model: {_model or '(none — install/start Ollama)'}")
     print(f"   🌐 web research: {'ON' if _net else 'OFF (set VIO_ALLOW_NET=1)'}")
     threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
     try:
