@@ -608,6 +608,14 @@ class Mind:
         self.consolidator = Consolidator(self)
         self.curiosity = Curiosity()
         self.cortex = Cortex()
+        # user CORRECTIONS: a wrong answer the user fixed is remembered and served first,
+        # so the same question is never answered the same wrong way again.
+        self._corr_file = os.path.join(DATA_DIR, "corrections.json")
+        try:
+            self.corrections = json.load(open(self._corr_file, encoding="utf-8"))
+        except Exception:
+            self.corrections = {}
+        self._last_q = ""
         # CORTEX-OS Phase 6 — close the confidence loop: calibrate against feedback.
         self.calibration = Calibration(self)
         # Reasoning cortex — a local LLM (via Ollama) for genuine reasoning: grounded on
@@ -1589,11 +1597,52 @@ class Mind:
         return "\n".join(parts)
 
     # ---- episodic wrapper (CORTEX-OS §3.3, §15 step 10) --------------------
+    @staticmethod
+    def _norm_q(q):
+        return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (q or "").lower())).strip()
+
+    def correct(self, question, answer):
+        """Remember the RIGHT answer to a question the user corrected."""
+        import time
+        key = self._norm_q(question)
+        if key and answer:
+            self.corrections[key] = {"question": question.strip(),
+                                     "answer": answer.strip(), "ts": time.time()}
+            try:
+                json.dump(self.corrections, open(self._corr_file, "w", encoding="utf-8"),
+                          ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        return f"Got it — from now on I'll answer “{question.strip()[:80]}” with that."
+
+    def _correction_for(self, q):
+        """A stored correction matching this question (exact or high token overlap)."""
+        c = self.corrections.get(self._norm_q(q))
+        if c:
+            return c
+        qt = set(self._norm_q(q).split())
+        if len(qt) < 2:
+            return None
+        for k, cc in self.corrections.items():
+            kt = set(k.split())
+            if kt and len(qt & kt) / max(len(qt), len(kt)) >= 0.8:
+                return cc
+        return None
+
     def ask(self, q):
         """Public entry: recall past chats on request, run the core reasoner, then
         write the interaction to episodic memory so Vio remembers it."""
         q = (q or "").strip()
         low = q.lower()
+
+        # teach the RIGHT answer to the PREVIOUS question: "correct: <answer>" (or "the
+        # correct answer is …") — so it is never answered the same wrong way again.
+        mcorr = re.match(r"^\s*(?:correct|correction)\s*[:\-]\s*(.+)$", q, re.I) or \
+            re.match(r"^\s*(?:the\s+)?(?:correct\s+)?answer\s+is\s*[:\-]?\s*(.+)$", q, re.I)
+        if mcorr and self._last_q:
+            return {"answer": self.correct(self._last_q, mcorr.group(1)),
+                    "how": "correction-write", "verified": True, "confidence": 0.95,
+                    "trace": []}
         # "what did we talk about", "have we discussed…", "did I ask you before" -> recall
         if re.search(r"\bwhat did we\b|\bwhat have we\b|\bdid we (talk|discuss)|"
                      r"what did i ask|talked about|(have we|did we) discuss|"
@@ -1619,7 +1668,8 @@ class Mind:
                     "verified": True, "confidence": 0.9, "trace": []}
         if re.fullmatch(r"(that('?s| is)\s+)?(wrong|incorrect|not right|no|👎|"
                         r"bad( answer)?|nope|false)\s*[.!]*", low):
-            return {"answer": self.feedback(False), "how": "feedback",
+            return {"answer": self.feedback(False) + "  Tell me the right answer with  "
+                    "correct: <answer>  and I'll use it next time.", "how": "feedback",
                     "verified": True, "confidence": 0.9, "trace": []}
         # Phase-6 calibration report — "how accurate is your confidence"
         if re.search(r"how (calibrated|accurate|reliable) (are|is) (you|your confidence)|"
@@ -1637,6 +1687,15 @@ class Mind:
             return {"answer": "\n".join(lines), "how": "self-reflection",
                     "verified": True, "confidence": 0.85, "trace": []}
 
+        # LEARNED CORRECTION: if the user fixed this question before, serve that — never
+        # repeat the same wrong answer. Checked before the reasoner runs.
+        corr = self._correction_for(q)
+        if corr:
+            self._last_q = q
+            return {"answer": corr["answer"], "how": "learned correction", "verified": True,
+                    "confidence": 0.96, "trace": ["you taught me the right answer earlier"]}
+
+        self._last_q = q                                 # remember for a later 'correct:'
         r = self.executive.process(q)                   # two-clock: confidence + critic
 
         # Curiosity (§12): a miss becomes a tracked knowledge gap + a teachable follow-up;

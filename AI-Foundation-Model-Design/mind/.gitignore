@@ -20,3 +20,5 @@ vio_sft.jsonl
 vio_token.txt
 diagrams/
 trainpipe_out/
+corrections.json
+transcript.jsonl

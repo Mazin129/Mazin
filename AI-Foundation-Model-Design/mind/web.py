@@ -419,7 +419,11 @@ function finalize(b,j){
  m.querySelectorAll('.fb').forEach(el=>el.onclick=async()=>{
    await fetch('/api/feedback',{method:'POST',headers:{'Content-Type':'application/json'},
      body:JSON.stringify({good:el.dataset.g==='1'})});
-   el.parentElement.querySelectorAll('.fb').forEach(x=>x.style.opacity=.3);el.style.opacity=1;});
+   el.parentElement.querySelectorAll('.fb').forEach(x=>x.style.opacity=.3);el.style.opacity=1;
+   if(el.dataset.g==='0'){
+     const fix=prompt('What is the correct answer? Vio will remember it and use it next time. (blank to skip)');
+     if(fix&&fix.trim()){const t='correct: '+fix.trim();addUser(t);const nb=bubble('bot');await ask(t,nb.b);}
+   }});
  b.appendChild(m);log.scrollTop=log.scrollHeight;
 }
 function autosize(){inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,140)+'px'}
@@ -645,6 +649,27 @@ try{const th=localStorage.getItem('vio-theme');
  if(th){document.documentElement.setAttribute('data-theme',th);
    document.getElementById('themeBtn').textContent=th==='dark'?'🌙':'☀️';}}catch(e){}
 renderChips();loadStatus();
+// Restore earlier conversation so history survives reloads and new devices.
+async function loadHistory(){
+ try{const j=await(await fetch('/api/history?n=60')).json();const turns=j.turns||[];
+  if(!turns.length)return;
+  for(const t of turns){
+    addUser(t.q||'');
+    const {b}=bubble('bot');
+    b.classList.toggle('rtl',isAr(t.a||''));
+    b.innerHTML=fmt(t.a||'');
+    const m=document.createElement('div');m.className='meta';
+    m.innerHTML=(t.verified?'<span class="ok">✓ verified</span>':'<span class="no">…</span>')+
+      ' · '+esc(t.how||'');
+    b.appendChild(m);
+  }
+  const d=document.createElement('div');d.className='meta';
+  d.style.cssText='text-align:center;margin:10px 0;opacity:.6';
+  d.textContent='— earlier conversation above · new messages below —';
+  log.appendChild(d);log.scrollTop=log.scrollHeight;
+ }catch(e){}
+}
+loadHistory();
 // If a training run is already going (page was reloaded / reopened), re-attach it.
 (async()=>{try{const s=await(await fetch('/api/train_all/status')).json();
   if(s.running){const {b}=bubble('bot');
@@ -705,6 +730,35 @@ def _status():
             "brain": (llm.model if (llm and llm.available) else None),
             "web": _web_research_on(),
             "semantic": (MIND.lib.sem.backend if getattr(MIND.lib, "sem", None) else None)}
+
+
+def _hist_file():
+    import reasoner
+    return os.path.join(reasoner.DATA_DIR, "transcript.jsonl")
+
+
+def _append_history(q, r):
+    """Persist one chat turn so history survives page reloads and new devices."""
+    if not q:
+        return
+    try:
+        import time as _t
+        rec = {"t": _t.time(), "q": q[:4000], "a": (r.get("answer") or "")[:8000],
+               "how": r.get("how", ""), "verified": bool(r.get("verified")),
+               "agent": r.get("agent", "")}
+        with open(_hist_file(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _read_history(n=60):
+    try:
+        with open(_hist_file(), encoding="utf-8") as f:
+            lines = f.readlines()[-n:]
+        return [json.loads(x) for x in lines if x.strip()]
+    except Exception:
+        return []
 
 
 def _web_research_on():
@@ -840,6 +894,11 @@ class H(BaseHTTPRequestHandler):
         elif path == "/api/agents":
             rep = MIND.agents_report() if hasattr(MIND, "agents_report") else {"agents": []}
             self._s(200, json.dumps(rep, ensure_ascii=False))
+        elif path == "/api/history":
+            from urllib.parse import urlparse as _up, parse_qs as _pq
+            n = int((_pq(_up(self.path).query).get("n", ["60"])[0]) or 60)
+            self._s(200, json.dumps({"turns": _read_history(min(max(n, 1), 300))},
+                                    ensure_ascii=False))
         elif path == "/api/models":
             llm = getattr(MIND, "llm", None)
             installed = llm.list_models() if (llm and hasattr(llm, "list_models")) else []
@@ -914,9 +973,11 @@ class H(BaseHTTPRequestHandler):
             self._s(413, '{"answer":"That is too large."}'); return
 
         if self.path == "/api/ask":
-            r = reply(MIND, (body.get("message") or "").strip())
+            msg = (body.get("message") or "").strip()
+            r = reply(MIND, msg)
             # talk.py's own fast paths (greeting/identity/time/skills) are deterministic
             r.setdefault("confidence", 0.9 if r.get("verified") else 0.4)
+            _append_history(msg, r)                       # persist the turn for history
             self._s(200, json.dumps(r, ensure_ascii=False))
 
         elif self.path == "/api/feedback":

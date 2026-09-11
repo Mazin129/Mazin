@@ -78,6 +78,15 @@ def main():
     check("'cover gaps' gated without net",
           (cg or {}).get("how") == "cover gaps (disabled)")
 
+    # learned corrections: a corrected answer overrides future answers (and fuzzy-matches)
+    m.ask("what is our vpn gateway address")
+    m.ask("correct: 203.0.113.9")
+    ca = m.ask("what is our vpn gateway address")
+    check("correction served next time",
+          ca.get("how") == "learned correction" and "203.0.113.9" in ca.get("answer", ""))
+    check("correction fuzzy-matches a variant",
+          m.ask("what's the vpn gateway address?").get("how") == "learned correction")
+
     # seed a little knowledge
     m.skills.add("greet", "hi", "Hey there!")
     m.teach("Congestion causes higher latency.")
