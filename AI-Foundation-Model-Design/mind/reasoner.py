@@ -504,18 +504,34 @@ class Library:
         from sklearn.feature_extraction.text import TfidfVectorizer
         with self._lock:
             docs = self.docs
+            self._gen = getattr(self, "_gen", 0) + 1     # fit generation (async guard)
+            gen = self._gen
             if docs:
                 # prefix-stemming analyzer so a query word matches every form of it in
                 # the library ("overfit"↔"overfitting", "powered"↔"powering"), on BOTH
                 # documents and query. Precision is still enforced by the distinctive-
-                # term and multi-keyword gates. Everything is built locally and assigned
-                # together, so a concurrent search never sees a half-rebuilt index.
+                # term and multi-keyword gates. The LEXICAL index is built synchronously
+                # (retrieval works immediately); the meaning layer is heavy (loads a
+                # transformer) so it builds in the BACKGROUND and slots in when ready —
+                # this keeps startup fast even with sentence-transformers installed.
                 vec = TfidfVectorizer(analyzer=_stem_analyzer).fit(docs)
                 mat = vec.transform(docs)
-                sem = self._build_semantic(docs)
-                self.vec, self.mat, self.sem = vec, mat, sem
+                self.vec, self.mat = vec, mat
             else:
                 self.vec, self.mat, self.sem = None, None, None
+                return
+        if os.environ.get("VIO_SEMANTIC_ASYNC", "1") == "0":
+            self.sem = self._build_semantic(docs)        # opt back into synchronous
+        else:
+            import threading
+            threading.Thread(target=self._bg_semantic, args=(list(docs), gen),
+                             daemon=True).start()
+
+    def _bg_semantic(self, docs, gen):
+        sem = self._build_semantic(docs)
+        with self._lock:
+            if getattr(self, "_gen", 0) == gen:          # still the current library
+                self.sem = sem
 
     @staticmethod
     def _build_semantic(docs):
@@ -659,7 +675,13 @@ class Mind:
                 self.si.models.state["current"] = live
         except Exception:
             self.si = None
-        self._retrain()
+        # Train the open-ended thinker in the BACKGROUND at startup so web.py binds fast;
+        # it's only used for synthesis fallback, which degrades gracefully until ready.
+        if os.environ.get("VIO_TRAIN_ASYNC", "1") == "0":
+            self._retrain()
+        else:
+            import threading
+            threading.Thread(target=self._retrain, daemon=True).start()
 
     def _own_model_info(self):
         """Describe Vio's own trained model for the dashboard, without loading it
