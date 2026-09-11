@@ -92,3 +92,10 @@ SEED = [
     "is AI that improves by finding patterns in data rather than being programmed with "
     "fixed rules.",
 ]
+
+# Fold in the built-in NETWORK & SECURITY knowledge so a fresh Vio knows the domain.
+try:
+    from seed_netsec import NETSEC
+    SEED = SEED + NETSEC
+except Exception:
+    pass

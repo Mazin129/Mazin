@@ -279,6 +279,7 @@ A private WireGuard mesh — never a public port. `start_vio_remote.bat` sets al
 | `draw: <description>` / `diagram:` / `sketch a …` | generate an HTML/SVG diagram (diagram-design skill) |
 | `what do you want to learn` | curiosity wishlist |
 | `what's in your library` | library summary |
+| `load knowledge` | load the built-in network & security knowledge base (offline) |
 
 ---
 

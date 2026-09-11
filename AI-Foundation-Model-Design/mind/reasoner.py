@@ -1398,6 +1398,29 @@ class Mind:
                 "trace": [f"deterministic renderer · {r.get('nodes', 0)} node(s)"],
                 "diagram_id": did}
 
+    def load_builtin(self):
+        """Load Vio's built-in network & security knowledge base into the library
+        (deterministic, no network). Deduped against what's already there."""
+        try:
+            from seed_netsec import NETSEC
+        except Exception:
+            return {"answer": "The built-in knowledge base isn't available.",
+                    "how": "builtin-knowledge", "verified": False, "trace": []}
+        existing = set(self.lib.docs)
+        new = [p for p in NETSEC if p not in existing]
+        if not new:
+            return {"answer": "My built-in network & security knowledge is already loaded. "
+                    "Ask me about BGP, OSPF, mTLS, firewalls, IAM, incident response, and "
+                    "more — or add your own with  learn essentials  /  teach:  / 📄.",
+                    "how": "builtin-knowledge", "verified": True, "trace": []}
+        self.lib.add_many(new)
+        self._retrain()
+        return {"answer": f"✓ Loaded {len(new)} built-in network & security passages "
+                "(routing, firewalls, VPN/TLS, Kubernetes & mesh, cloud/IAM, security "
+                "concepts, incident response, protocols). Ask me anything in those areas. "
+                "For live/vendor docs, add  learn essentials.",
+                "how": "builtin-knowledge", "verified": True, "trace": [f"+{len(new)} passages"]}
+
     def list_gaps(self):
         """Every open knowledge gap (topic Vio couldn't answer), most-asked first."""
         gaps = getattr(self.curiosity, "gaps", {}) or {}
@@ -2046,6 +2069,14 @@ class Mind:
             r = self.cover_gaps()
             return {"answer": r["answer"], "how": r.get("how", "cover gaps"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
+
+        # load the built-in network/security knowledge base (offline, instant)
+        if re.match(r"^\s*(?:load|add|install|import)\s+(?:the\s+)?(?:built-?in\s+)?"
+                    r"(?:network\s*(?:&|and)?\s*security\s+)?(?:knowledge|netsec|"
+                    r"kb)\b", low) or low.strip() in ("load knowledge", "load builtin"):
+            r = self.load_builtin()
+            return {"answer": r["answer"], "how": r.get("how", "builtin-knowledge"),
+                    "verified": r.get("verified", True), "trace": r.get("trace", [])}
 
         # trusted network/security sources: "list sources" / "what sources", and
         # "learn essentials" / "seed security" / "learn (the) trusted sources".
