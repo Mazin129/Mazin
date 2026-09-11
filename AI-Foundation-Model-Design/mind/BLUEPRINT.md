@@ -310,6 +310,8 @@ All routes except `/` and `/api/login` require a valid session (token login firs
 | `VIO_HTTPS` | — | mark cookie `Secure` (TLS terminates in front) |
 | `VIO_LLM_URL` | `http://localhost:11434` | Ollama endpoint |
 | `VIO_LLM_MODEL` | *(auto)* | force a model tag |
+| `VIO_LLM_API` | — | `openai` → use a hosted OpenAI-compatible endpoint (else local Ollama) — see BIGBRAIN.md |
+| `VIO_LLM_KEY` | — | API key for the hosted endpoint (secret; never commit) |
 | `VIO_LLM_TIMEOUT` | `300` | generation timeout (s) |
 | `VIO_LLM_MAX_TOKENS` | `3072` | max answer length |
 | `VIO_ALLOW_NET` | off | enable web research |

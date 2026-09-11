@@ -32,6 +32,13 @@ import urllib.request
 
 URL = os.environ.get("VIO_LLM_URL", "http://localhost:11434")
 MODEL = os.environ.get("VIO_LLM_MODEL", "")          # empty → auto-pick from installed
+# Backend: local Ollama (default) OR any OpenAI-COMPATIBLE endpoint — a hosted big model
+# (OpenRouter/Together/Groq/…), a rented GPU running vLLM, or a cloud Ollama. This is how
+# you break the local model-quality ceiling WITHOUT a deploy: set VIO_LLM_API=openai,
+# VIO_LLM_URL=https://…, VIO_LLM_KEY=…, VIO_LLM_MODEL=<big-model>. Data then leaves the box
+# for that model, so it's opt-in and off by default.
+API = (os.environ.get("VIO_LLM_API", "") or "").strip().lower()
+KEY = os.environ.get("VIO_LLM_KEY", "") or os.environ.get("VIO_LLM_API_KEY", "")
 # preference order when auto-picking an installed model (best general reasoners first).
 # NOTE: a narrow fine-tune on a few hundred terse pairs tends to DAMAGE a base model
 # (overfitting → degenerate, tautological answers), so we do NOT auto-prefer a local
@@ -51,12 +58,19 @@ class LLM:
         # ceiling so it finishes instead of silently timing out into a bad fallback.
         self.gen_timeout = int(os.environ.get("VIO_LLM_TIMEOUT", "300"))
         self.model = model
+        self.key = KEY
+        # openai-compatible when explicitly asked, a key is set, or the URL is a /v1 API.
+        self.backend = "openai" if (API == "openai" or self.key
+                                    or "/v1" in self.url) else "ollama"
         self.available = False
         self._detect()
 
     # ---- discovery ----
     def _detect(self):
-        """Is a local Ollama server up, and which model should we use?"""
+        """Detect the backend and pick a model."""
+        if self.backend == "openai":
+            self._detect_openai()
+            return
         try:
             tags = self._get("/api/tags", timeout=2)
         except Exception:
@@ -80,20 +94,50 @@ class LLM:
         self.model = names[0]
         self.available = True
 
+    def _detect_openai(self):
+        """A hosted / OpenAI-compatible endpoint is reachable; pick or keep the model."""
+        try:
+            data = self._get("/v1/models", timeout=4)
+            ids = [m.get("id", "") for m in (data or {}).get("data", []) if m.get("id")]
+        except Exception:
+            ids = []
+        if self.model:
+            self.available = True                        # trust an explicitly-set model
+        elif ids:
+            self.model = ids[0]
+            self.available = True
+        else:
+            # some gateways don't expose /v1/models; if a model was configured we still go.
+            self.available = bool(self.model)
+
     # ---- inventory ----
     def list_models(self):
-        """Names of all models installed in the local Ollama, for the model switcher."""
+        """Available model names (local Ollama tags, or the hosted endpoint's /v1/models)."""
         try:
+            if self.backend == "openai":
+                data = self._get("/v1/models", timeout=4)
+                return [m.get("id", "") for m in (data or {}).get("data", []) if m.get("id")]
             tags = self._get("/api/tags", timeout=3)
+            return [m.get("name", "") for m in (tags or {}).get("models", []) if m.get("name")]
         except Exception:
             return []
-        return [m.get("name", "") for m in (tags or {}).get("models", []) if m.get("name")]
 
     # ---- generation ----
     def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024):
         """One-shot completion. Returns the text, or None if the server/model fails."""
         if not self.available:
             return None
+        if self.backend == "openai":
+            msgs = ([{"role": "system", "content": system}] if system else []) + \
+                   [{"role": "user", "content": prompt}]
+            body = {"model": self.model, "messages": msgs, "temperature": temperature,
+                    "max_tokens": max_tokens, "stream": False}
+            try:
+                out = self._post("/v1/chat/completions", body, timeout=self.gen_timeout)
+                text = (out["choices"][0]["message"]["content"] or "").strip()
+            except Exception:
+                return None
+            return text or None
         body = {
             "model": self.model,
             "prompt": prompt,
@@ -110,15 +154,21 @@ class LLM:
         return text or None
 
     # ---- http (stdlib) ----
+    def _auth(self, headers):
+        if self.key:
+            headers["Authorization"] = "Bearer " + self.key
+        return headers
+
     def _get(self, path, timeout=None):
-        req = urllib.request.Request(self.url + path, method="GET")
+        req = urllib.request.Request(self.url + path, method="GET",
+                                     headers=self._auth({}))
         with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
             return json.loads(r.read().decode("utf-8"))
 
     def _post(self, path, body, timeout=None):
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(self.url + path, data=data, method="POST",
-                                     headers={"Content-Type": "application/json"})
+                                     headers=self._auth({"Content-Type": "application/json"}))
         with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
             return json.loads(r.read().decode("utf-8"))
 

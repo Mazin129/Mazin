@@ -41,6 +41,15 @@ rem  qwen2.5:3b fits a 2 GB GPU and is stronger than llama3.2:3b for network/sec
 rem  Switch to qwen2.5:7b (smarter, CPU, slower) live from the /dashboard brain menu.
 set "VIO_LLM_MODEL=qwen2.5:3b"
 
+rem ── OPTIONAL: break the local model-quality ceiling with a HOSTED big model.
+rem  Uncomment and fill in to point Vio at any OpenAI-compatible endpoint (OpenRouter,
+rem  Together, Groq, a rented vLLM/GPU, …). Fast AND smart, but it COSTS money per use
+rem  and your prompts leave this PC — so it's off by default. Keep the key secret.
+rem  set "VIO_LLM_API=openai"
+rem  set "VIO_LLM_URL=https://openrouter.ai/api/v1"
+rem  set "VIO_LLM_KEY=sk-your-key-here"
+rem  set "VIO_LLM_MODEL=meta-llama/llama-3.1-70b-instruct"
+
 rem ── internet research: let Vio search the web, read pages, and learn from them.
 rem  Read-only over the public web, with SSRF protection. To restrict which sites it
 rem  may read, set VIO_NET_ALLOW=example.com,docs.site (blank = any public site).
