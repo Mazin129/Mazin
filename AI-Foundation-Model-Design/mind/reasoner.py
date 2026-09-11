@@ -1615,17 +1615,26 @@ class Mind:
                 pass
         return f"Got it — from now on I'll answer “{question.strip()[:80]}” with that."
 
+    _CORR_STOP = {"what", "whats", "what's", "is", "are", "the", "a", "an", "our", "my",
+                  "your", "of", "to", "in", "on", "for", "s", "do", "does", "did", "was",
+                  "were", "it", "this", "that", "me", "we", "you", "please", "tell"}
+
     def _correction_for(self, q):
-        """A stored correction matching this question (exact or high token overlap)."""
+        """A stored correction matching this question (exact, or high CONTENT-word overlap
+        so 'what is our X' and 'what's the X?' match)."""
         c = self.corrections.get(self._norm_q(q))
         if c:
             return c
-        qt = set(self._norm_q(q).split())
+
+        def _content(s):
+            return {w for w in self._norm_q(s).split()
+                    if len(w) > 1 and w not in self._CORR_STOP}
+        qt = _content(q)
         if len(qt) < 2:
             return None
         for k, cc in self.corrections.items():
-            kt = set(k.split())
-            if kt and len(qt & kt) / max(len(qt), len(kt)) >= 0.8:
+            kt = _content(cc.get("question", k))
+            if kt and len(qt & kt) / max(len(qt), len(kt)) >= 0.75:
                 return cc
         return None
 
