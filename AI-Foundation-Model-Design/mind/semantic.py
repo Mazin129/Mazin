@@ -68,6 +68,13 @@ class SemanticIndex:
 
     # ---- transformer backend ----
     def _try_transformer(self):
+        # Load the model OFFLINE from the local cache by default — otherwise every startup
+        # pings HuggingFace to check for updates and can get rate-limited (HTTP 429) into a
+        # slow retry loop. Set VIO_SEMANTIC_ONLINE=1 for a one-time online (re)download.
+        import os
+        if not os.environ.get("VIO_SEMANTIC_ONLINE"):
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         try:
             from sentence_transformers import SentenceTransformer
         except Exception:
@@ -76,7 +83,7 @@ class SemanticIndex:
             self._model = SentenceTransformer("all-MiniLM-L6-v2")
             return True
         except BaseException:
-            # package present but the model can't be fetched/loaded — fall back to LSA
+            # not cached yet (and offline), or unloadable — fall back to lexical/LSA.
             self._model = None
             return False
 
