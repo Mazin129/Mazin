@@ -130,9 +130,30 @@ def run(verbose=False):
                                "Static routes send traffic to a fixed next-hop gateway."]}))
 
         # ---- correctness: structured config ----
+        # through the REAL path (Mind.ask), so the brain's learned vocabulary and the
+        # config answerer are both exercised — not a helper the live route no longer uses.
         case("exact policy count (structural, verified)", "correctness", lambda: (
-            (lambda r: r and r.get("verified") and "3 policy" in r.get("answer", ""))(
-                m._aggregate_answer("how many policies are configured"))))
+            (lambda r: r.get("verified") and "3 firewall policy object" in r.get("answer", ""))(
+                m.ask("how many policies are configured"))))
+        case("exact policy listing (structural, verified)", "correctness", lambda: (
+            (lambda r: r.get("verified") and "allow-web" in r.get("answer", ""))(
+                m.ask("show me the firewall policies"))))
+        case("multi-part config question answers every part", "correctness", lambda: (
+            (lambda r: r.get("answer", "").count("firewall policy object") >= 2)(
+                m.ask("how many policies are configured\nshow me the firewall policies"))))
+        def _no_config_refusal():
+            """With no configuration loaded, a config question must refuse and say what
+            is missing — checked on the decision itself, because reasoner.DATA_DIR is
+            fixed at import so a second Mind cannot be given an empty library here."""
+            empty = quality.Evidence()
+            empty.passages = 80
+            u = quality.understand("how many policies are configured", {})
+            plan = quality.decide(u, empty)
+            msg = quality.shortfall_message(plan, empty)
+            return (u.requires == quality.CONFIG and plan.strategy == "need-config"
+                    and "configuration" in msg and "show full-configuration" in msg)
+        case("config question with no config refuses honestly", "correctness",
+             _no_config_refusal)
         case("config parses to 3 policy objects", "correctness",
              lambda: len(configparse.of_kind(configparse.parse(CONFIG), "policy")) == 3)
 

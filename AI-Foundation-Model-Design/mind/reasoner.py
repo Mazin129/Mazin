@@ -871,11 +871,51 @@ class Mind:
 
     # config-object words a "list/filter all" query can target, mapped to the token that
     # identifies that object's config passages (per-object chunks start "config … <word>").
-    _AGG_ITEMS = {"policy": "policy", "policies": "policy", "rule": "policy",
-                  "rules": "policy", "interface": "interface", "interfaces": "interface",
-                  "vlan": "vlan", "vlans": "vlan", "address": "address",
-                  "addresses": "address", "object": "object", "objects": "object",
-                  "route": "route", "routes": "route", "vpn": "vpn", "tunnel": "phase"}
+    def _config_answer(self, u, ev):
+        """Answer ONE config question straight from the parsed configuration, using the
+        object kind the BRAIN resolved from the user's own file.
+
+        This replaces the old `_AGG_ITEMS`/`KIND_WORDS` lookup, which carried hardcoded
+        kind names ("policy", "router") and so matched nothing on a device whose kinds
+        are spelled differently — the question then fell through to lexical retrieval
+        and came back as config scraps. The brain's vocabulary is learned from the
+        loaded config, so it cannot disagree with what is actually in the file."""
+        objs = ev.config_objects
+        if not objs or not u.kind:
+            return None
+        kind = u.kind.lower()
+        matched = [o for o in objs
+                   if kind == (o.kind or "").lower() or kind in (o.kind or "").lower()]
+        if not matched:
+            return None
+
+        kinds = sorted({o.kind for o in matched})
+        self._last_evidence = {"hits": len(matched), "facts": 0, "excerpts": []}
+        try:
+            import configparse
+            self._last_evidence["excerpts"] = [configparse.summary(o) for o in matched[:3]]
+        except Exception:
+            pass
+
+        if u.form == "count":
+            return {"answer": f"There are {len(matched)} {u.kind} object(s) in the "
+                    f"loaded configuration"
+                    + (f" ({', '.join(kinds)})." if kinds != [u.kind] else "."),
+                    "how": "analysis over your config (exact count)", "verified": True,
+                    "confidence": 0.97,
+                    "trace": [f"counted from {len(objs)} parsed config object(s)"]}
+
+        shown = matched[:80]
+        lines = [self._fmt_cfg_object(o) for o in shown]
+        more = (f"\n  … and {len(matched) - len(shown)} more "
+                f"(ask for a narrower set, e.g. by interface or address)"
+                if len(matched) > len(shown) else "")
+        head = (f"{len(matched)} {u.kind} object(s) in the loaded configuration"
+                + (f" ({', '.join(kinds)})" if kinds != [u.kind] else "") + ":")
+        return {"answer": head + "\n" + "\n".join(lines) + more,
+                "how": "analysis over your config (exact listing)", "verified": True,
+                "confidence": 0.97,
+                "trace": [f"listed from {len(objs)} parsed config object(s)"]}
 
     @staticmethod
     def _fmt_cfg_object(o):
@@ -901,35 +941,6 @@ class Mind:
             return f"  [{o.name}] {g('subnet') or g('type') or configparse.summary(o)}"
         return "  " + configparse.summary(o)
 
-    def _config_list(self, item, low):
-        """Deterministic listing of config objects of one kind, straight from the parsed
-        configuration. Exact, verified, and independent of the LLM and of lexical search."""
-        try:
-            import configparse
-            objs = configparse.parse_many(self.lib.docs)
-        except Exception:
-            return None
-        if not objs:
-            return None
-        kind_sub = configparse.KIND_WORDS.get(item, item)
-        matched = configparse.of_kind(objs, kind_sub)
-        # "static route" → narrow to the static table when the user said so
-        if "static" in low:
-            static = [o for o in matched if "static" in (o.kind or "").lower()]
-            matched = static or matched
-        if not matched:
-            return None
-        lines = [self._fmt_cfg_object(o) for o in matched[:80]]
-        kinds = sorted({o.kind for o in matched})
-        head = (f"{len(matched)} {item} object(s) in the loaded configuration "
-                f"({', '.join(kinds)}):")
-        more = f"\n  … and {len(matched) - 80} more" if len(matched) > 80 else ""
-        self._last_evidence = {"hits": len(matched), "facts": 0,
-                               "excerpts": [configparse.summary(o) for o in matched[:3]]}
-        return {"answer": head + "\n" + "\n".join(lines) + more,
-                "how": "analysis over your config (exact listing)", "verified": True,
-                "trace": [f"parsed {len(objs)} config object(s) structurally"]}
-
     def _aggregate_answer(self, q):
         """Answer 'show/list ALL <objects> that <condition>' by scanning matching
         config objects and letting the LLM filter — instead of returning the top few by
@@ -940,40 +951,19 @@ class Mind:
         low = q.lower()
         if not re.search(r"\b(all|every|each|list|which|how many|count|any|show|pointing)\b", low):
             return None
-        item = next((base for w, base in self._AGG_ITEMS.items()
-                     if re.search(rf"\b{w}\b", low)), None)
+        # The object kind comes from the BRAIN, which learned it from the loaded
+        # configuration. The old local table of kind names ("policy", "router") is gone:
+        # it disagreed with configs whose kinds are spelled differently, matched nothing,
+        # and dropped the question into lexical retrieval — which is what returned config
+        # scraps. Exact listing and counting now happen in Mind.ask via _config_answer;
+        # what remains here is the FILTERED case ("…that point to the internet"), which
+        # needs the model to judge each candidate.
+        import brain
+        intents = getattr(self, "_intents", None) or brain.read(
+            q, getattr(getattr(self, "_evidence_survey", None), "vocabulary", {}) or {})
+        item = intents[0].kind or intents[0].subject
         if not item:
             return None
-        # EXACT LIST from a STRUCTURED parse — deterministic, no LLM, immune to lexical
-        # retrieval gates. This is what answers "show static route on <device>" with the
-        # real routes instead of shredded config fragments. Filtered/conditional queries
-        # ("…that point to the internet") still go to the LLM path below.
-        if re.search(r"\b(show|list|display|give me|what are)\b", low) and \
-                not re.search(r"\b(that|which|with|pointing|matching|using|where)\b", low):
-            listed = self._config_list(item, low)
-            if listed:
-                return listed
-            # Nothing to list. The brain already refuses config questions when no
-            # configuration is loaded (see Mind.ask), so reaching here means the
-            # question wasn't recognised as instance-specific — fall through rather
-            # than duplicating that judgement with a second copy of the message.
-
-        # EXACT count from a STRUCTURED parse — deterministic, no LLM, so it's verified.
-        if re.search(r"\bhow many\b|\bcount\b|\bnumber of\b", low):
-            try:
-                import configparse
-                objs = configparse.parse_many(self.lib.docs)
-                matched = configparse.of_kind(objs, configparse.KIND_WORDS.get(item, item))
-                if matched:
-                    self._last_evidence = {"hits": len(matched), "facts": 0,
-                                           "excerpts": [configparse.summary(o) for o in matched[:3]]}
-                    return {"answer": f"There are {len(matched)} {item} object(s) in the "
-                            "loaded configuration.",
-                            "how": "analysis over your config (exact count)",
-                            "verified": True,
-                            "trace": [f"parsed {len(objs)} config object(s) structurally"]}
-            except Exception:
-                pass
         if not (self.llm is not None and self.llm.available):
             return None
         # gather every config passage for that object type (per-object chunks make this exact)
@@ -1942,6 +1932,42 @@ class Mind:
             self._plan = brain.decide(self._intents[0], self._evidence_survey)
         except Exception:
             self._intents, self._plan, self._evidence_survey = [], None, None
+
+        # CONFIG QUESTIONS ARE ANSWERED FROM THE CONFIG — every part of the message.
+        # A four-question paste used to produce ONE answer built from whichever part
+        # won the keyword race; now each part is resolved against the configuration
+        # with its own reading, and the parts are returned together.
+        if self._intents and self._evidence_survey is not None:
+            cfg_parts = [u for u in self._intents if u.requires == brain.CONFIG]
+            if cfg_parts and len(cfg_parts) == len(self._intents):
+                answers, ok = [], True
+                for u in self._intents:
+                    part = self._config_answer(u, self._evidence_survey)
+                    if part is None:
+                        p = brain.decide(u, self._evidence_survey)
+                        part = {"answer": brain.shortfall_message(p, self._evidence_survey),
+                                "verified": False, "confidence": 0.1,
+                                "how": f"no-source ({p.strategy})",
+                                "trace": [f"plan: {p.strategy} — {p.reason}"]}
+                        ok = False
+                    answers.append((u, part))
+                if len(answers) == 1:
+                    r = dict(answers[0][1])
+                else:
+                    body = "\n\n".join(
+                        f"**{u.text.strip()}**\n{(p.get('answer') or '').strip()}"
+                        for u, p in answers)
+                    r = {"answer": body, "verified": ok, "confidence": 0.95 if ok else 0.3,
+                         "how": f"analysis over your config ({len(answers)} questions)",
+                         "trace": [f"answered {len(answers)} question(s) separately"]}
+                self._last_q = q
+                r.setdefault("trace", [])
+                r["understood"] = self._intents[0].summary()
+                r["intent"] = self._intents[0].as_dict()
+                r["trace"] = list(r["trace"]) + [
+                    "understood: " + "; ".join(u.summary() for u in self._intents[:4])]
+                self._remember_episode(q, r)
+                return r
 
         # THE PLAN IS AUTHORITATIVE. When the evidence a question REQUIRES does not
         # exist, nothing downstream may improvise an answer out of whatever text
