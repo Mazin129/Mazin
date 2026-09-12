@@ -869,6 +869,59 @@ class Mind:
                   "addresses": "address", "object": "object", "objects": "object",
                   "route": "route", "routes": "route", "vpn": "vpn", "tunnel": "phase"}
 
+    @staticmethod
+    def _fmt_cfg_object(o):
+        """One readable line per config object — routes/policies/addresses get their
+        meaningful fields; anything else falls back to a structured summary."""
+        import configparse
+        k = (o.kind or "").lower()
+        g = lambda f: (o.get(f) or "").strip('"')            # noqa: E731
+        if "static" in k or "router" in k:
+            bits = [f"dst {g('dst')}" if g("dst") else "", f"via {g('gateway')}" if g("gateway") else "",
+                    f"dev {g('device')}" if g("device") else "",
+                    f"distance {g('distance')}" if g("distance") else ""]
+            line = "  ".join(b for b in bits if b)
+            cm = g("comment") or g("comments")
+            return f"  [{o.name}] {line}" + (f"   — {cm}" if cm else "")
+        if "policy" in k:
+            bits = [g("name") and f'"{g("name")}"', g("srcintf") and f"{g('srcintf')} →",
+                    g("dstintf"), g("srcaddr") and f"src {g('srcaddr')}",
+                    g("dstaddr") and f"dst {g('dstaddr')}", g("service") and f"svc {g('service')}",
+                    g("action"), g("nat") == "enable" and "NAT"]
+            return f"  [{o.name}] " + " ".join(str(b) for b in bits if b)
+        if "address" in k:
+            return f"  [{o.name}] {g('subnet') or g('type') or configparse.summary(o)}"
+        return "  " + configparse.summary(o)
+
+    def _config_list(self, item, low):
+        """Deterministic listing of config objects of one kind, straight from the parsed
+        configuration. Exact, verified, and independent of the LLM and of lexical search."""
+        try:
+            import configparse
+            objs = configparse.parse_many(self.lib.docs)
+        except Exception:
+            return None
+        if not objs:
+            return None
+        kind_sub = configparse.KIND_WORDS.get(item, item)
+        matched = configparse.of_kind(objs, kind_sub)
+        # "static route" → narrow to the static table when the user said so
+        if "static" in low:
+            static = [o for o in matched if "static" in (o.kind or "").lower()]
+            matched = static or matched
+        if not matched:
+            return None
+        lines = [self._fmt_cfg_object(o) for o in matched[:80]]
+        kinds = sorted({o.kind for o in matched})
+        head = (f"{len(matched)} {item} object(s) in the loaded configuration "
+                f"({', '.join(kinds)}):")
+        more = f"\n  … and {len(matched) - 80} more" if len(matched) > 80 else ""
+        self._last_evidence = {"hits": len(matched), "facts": 0,
+                               "excerpts": [configparse.summary(o) for o in matched[:3]]}
+        return {"answer": head + "\n" + "\n".join(lines) + more,
+                "how": "analysis over your config (exact listing)", "verified": True,
+                "trace": [f"parsed {len(objs)} config object(s) structurally"]}
+
     def _aggregate_answer(self, q):
         """Answer 'show/list ALL <objects> that <condition>' by scanning matching
         config objects and letting the LLM filter — instead of returning the top few by
@@ -883,6 +936,16 @@ class Mind:
                      if re.search(rf"\b{w}\b", low)), None)
         if not item:
             return None
+        # EXACT LIST from a STRUCTURED parse — deterministic, no LLM, immune to lexical
+        # retrieval gates. This is what answers "show static route on <device>" with the
+        # real routes instead of shredded config fragments. Filtered/conditional queries
+        # ("…that point to the internet") still go to the LLM path below.
+        if re.search(r"\b(show|list|display|give me|what are)\b", low) and \
+                not re.search(r"\b(that|which|with|pointing|matching|using|where)\b", low):
+            listed = self._config_list(item, low)
+            if listed:
+                return listed
+
         # EXACT count from a STRUCTURED parse — deterministic, no LLM, so it's verified.
         if re.search(r"\bhow many\b|\bcount\b|\bnumber of\b", low):
             try:
