@@ -871,6 +871,31 @@ class Mind:
 
     # config-object words a "list/filter all" query can target, mapped to the token that
     # identifies that object's config passages (per-object chunks start "config … <word>").
+    def audit_config(self):
+        """A real review of the loaded configuration — shadowed rules, any/any accepts,
+        contradictions, dead references. Deterministic: every finding is arithmetic over
+        the parsed objects, so nothing in it can be invented."""
+        import brain
+        import configaudit
+        ev = getattr(self, "_evidence_survey", None) or brain.survey(self)
+        objs = ev.config_objects
+        if not objs:
+            return {"answer": brain.shortfall_message(
+                brain.Plan("need-config", "a review needs the configuration itself",
+                           brain.understand("review my configuration", ev.vocabulary),
+                           missing="the device configuration"), ev),
+                "how": "no-source (need-config)", "verified": False, "confidence": 0.1,
+                "trace": []}
+        findings = configaudit.audit(objs)
+        c = configaudit.counts(findings)
+        self._last_evidence = {"hits": len(objs), "facts": 0,
+                               "excerpts": [f.title for f in findings[:3]]}
+        return {"answer": configaudit.report(findings, objs),
+                "how": "analysis over your config (review)", "verified": True,
+                "confidence": 0.95,
+                "trace": [f"{len(findings)} finding(s) over {len(objs)} parsed object(s): "
+                          f"{c['high']} high, {c['medium']} medium, {c['low']} low"]}
+
     def _config_answer(self, u, ev):
         """Answer ONE config question straight from the parsed configuration, using the
         object kind the BRAIN resolved from the user's own file.
@@ -1932,6 +1957,23 @@ class Mind:
             self._plan = brain.decide(self._intents[0], self._evidence_survey)
         except Exception:
             self._intents, self._plan, self._evidence_survey = [], None, None
+
+        # A REVIEW of the configuration is its own strategy: "audit my config", "review
+        # the firewall", "any problems with my policies", "is this secure". The brain
+        # already classified these as evaluate-form questions about a specific system;
+        # they are answered by deterministic analysis, not by asking a model's opinion.
+        if self._intents and self._evidence_survey is not None:
+            _u0 = self._intents[0]
+            if _u0.requires == brain.CONFIG and (
+                    _u0.form == "evaluate"
+                    or re.search(r"\b(audit|review|analy[sz]e|check|inspect|problems?|"
+                                 r"issues?|misconfig\w*|shadow\w*|harden|posture)\b", low)):
+                r = self.audit_config()
+                self._last_q = q
+                r["understood"] = _u0.summary()
+                r["intent"] = _u0.as_dict()
+                self._remember_episode(q, r)
+                return r
 
         # CONFIG QUESTIONS ARE ANSWERED FROM THE CONFIG — every part of the message.
         # A four-question paste used to produce ONE answer built from whichever part

@@ -81,9 +81,13 @@ _FORMS = (
                      r"can'?t (reach|connect|ping|access)|unreachable|troubleshoot|debug"),
     ("procedure",    r"\bhow (do|can|would|should) (i|we|you)\b|\bhow to\b|\bsteps\b|"
                      r"\bconfigure\b|\bset up\b|\bdeploy\b|\binstall\b"),
-    ("evaluate",     r"\b(is it|are they) (safe|secure|ok|correct)\b|\brisk\w*|"
-                     r"\bvulnerab\w*|\baudit\b|\breview\b|\bharden\b|\bbest practice\b|"
-                     r"\bshould (i|we)\b|\bany (issues?|problems?)\b"),
+    ("evaluate",     r"\b(is|are)\s+(it|they|my|our|the|this|these)\b[^?]{0,40}"
+                     r"\b(safe|secure|ok|correct|right|hardened|exposed|open)\b|"
+                     r"\brisk\w*|\bvulnerab\w*|\baudit\b|\breview\b|\bharden\b|"
+                     r"\bbest practice\b|\bshould (i|we)\b|\bany (issues?|problems?)\b|"
+                     r"\b(problems?|issues?|mistakes?|misconfig\w*|shadow\w*|"
+                     r"posture|weakness\w*)\b|\b(analy[sz]e|inspect|sanity[- ]check)\b|"
+                     r"\bcheck\s+(my|our|the|this)\b"),
     ("explain",      r"\bexplain\b|\bdescribe\b|\btell me about\b|\bwalk me through\b|"
                      r"\bhow does\b|\bhow do\b|\bwhat happens\b|\bwhy does\b"),
     ("define",       r"^\s*(what|which)\s+(is|are|was|were)\b|\bwhat'?s\b|\bdefine\b|"
@@ -104,6 +108,12 @@ _STATEFUL = re.compile(r"\b(configured|installed|deployed|running|enabled|disabl
                        r"do i have|do we have)\b", re.I)
 # a hostname-shaped token: SA-OCC, FGT-DC1, FW01 — capitals with a separator or digits
 _HOSTNAME = re.compile(r"\b([A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)+|[A-Z]{2,}\d{1,3})\b")
+# Nouns naming the user's SYSTEM AS A WHOLE rather than an object inside it. With a
+# possessive or an evaluate form, these mean "look at my box" — the one thing only the
+# configuration can answer, even though no object kind is mentioned.
+_SYSTEM_NOUN = re.compile(r"\b(config|configuration|configs|firewall|device|box|setup|"
+                          r"deployment|network|ruleset|rule\s?base|environment|"
+                          r"appliance|gateway|router|switch)\b", re.I)
 _VENDOR = re.compile(r"\b(fortigate|fortios|forti|palo\s*alto|pan-?os|cisco|asa|ios-xe|"
                      r"juniper|junos|checkpoint|sophos|mikrotik|pfsense|opnsense|"
                      r"f5|big-?ip|arista|nsx)\b", re.I)
@@ -257,6 +267,16 @@ def understand(q, vocabulary=None):
     if u.form in ("count", "enumerate") and _CONTENTS:
         u.requires = CONFIG
         u.why = "it asks what a specific system contains"
+        return u
+
+    # A question can name the SYSTEM ITSELF rather than an object in it — "audit my
+    # config", "any problems with my firewall", "is our setup secure". There is no
+    # object kind to match, but it is unmistakably about the user's own box, and only
+    # the configuration can answer it.
+    if _SYSTEM_NOUN.search(low) and (_POSSESSIVE.search(low) or _DEMONSTRATIVE.search(low)
+                                     or u.host or u.form == "evaluate"):
+        u.requires = CONFIG
+        u.why = "it asks about your own system as a whole"
         return u
 
     # INSTANCE vs CONCEPT — the general rule.

@@ -154,6 +154,20 @@ def run(verbose=False):
                     and "configuration" in msg and "show full-configuration" in msg)
         case("config question with no config refuses honestly", "correctness",
              _no_config_refusal)
+        # ---- correctness: the configuration review ----
+        case("review finds an any/any accept", "correctness", lambda: (
+            (lambda f: any(x.rule == "any-any-accept" for x in f))(
+                __import__("configaudit").audit(configparse.parse(
+                    'config firewall policy\n edit 1\n  set srcaddr "all"\n'
+                    '  set dstaddr "all"\n  set service "ALL"\n  set action accept\n'
+                    ' next\nend')))))
+        case("review is silent on a clean config", "correctness", lambda: (
+            (lambda f: not [x for x in f if x.severity != "info"])(
+                __import__("configaudit").audit(configparse.parse(CONFIG)))))
+        case("review routes through Mind.ask", "correctness", lambda: (
+            (lambda r: r.get("verified") and "object(s) analysed" in r.get("answer", ""))(
+                m.ask("review my firewall configuration"))))
+
         case("config parses to 3 policy objects", "correctness",
              lambda: len(configparse.of_kind(configparse.parse(CONFIG), "policy")) == 3)
 
