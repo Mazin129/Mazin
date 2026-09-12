@@ -102,8 +102,8 @@ class Executive:
         # Answer-quality gate (applies to EVERY path): never verify an empty/weak answer,
         # never verify a factual/security claim with no evidence, and cite the grounding.
         try:
-            import quality
-            result = quality.finalize(result, evidence, q)
+            import brain as quality
+            result = quality.verify(result, evidence, q)
             if not result.get("verified") and conf > 0.6 \
                     and (result.get("how") or "").endswith("unverified (no local evidence)"):
                 conf = 0.5                    # keep confidence honest when we drop 'verified'

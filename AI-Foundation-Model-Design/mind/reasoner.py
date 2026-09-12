@@ -953,35 +953,10 @@ class Mind:
             listed = self._config_list(item, low)
             if listed:
                 return listed
-            # Nothing to list. Be HONEST about why instead of falling through to retrieval,
-            # which would dump manual/prose fragments that look like an answer but aren't.
-            try:
-                import configparse
-                objs = configparse.parse_many(self.lib.docs)
-            except Exception:
-                objs = []
-            if not objs:
-                # Say what was searched, not just that nothing was found — if the user
-                # HAS uploaded a config, this is the line that shows where it went.
-                return {"answer":
-                        f"I can't list {item} objects — I parsed all "
-                        f"{len(self.lib.docs)} passage(s) in my library and found no "
-                        "device-configuration objects at all.\n\n"
-                        + self._config_inventory()
-                        + "\n\nIf you did upload the config, it didn't reach the library "
-                        "in a parseable form. Run  config status  to see exactly what I "
-                        "hold, or re-upload the .conf (📄) and I'll report what I parsed "
-                        "out of it.",
-                        "how": "no config loaded", "verified": False, "confidence": 0.1,
-                        "trace": [f"structured parse over {len(self.lib.docs)} passage(s) "
-                                  "found 0 config objects"]}
-            kinds = sorted({o.kind for o in objs})[:8]
-            return {"answer":
-                    f"I have {len(objs)} parsed config object(s) — {', '.join(kinds)} — but "
-                    f"none of them are {item} objects. If the {item} table is in a different "
-                    "file or section, upload that part and I'll list it exactly.",
-                    "how": "no matching config objects", "verified": False, "confidence": 0.2,
-                    "trace": [f"parsed {len(objs)} object(s), no '{item}' kind"]}
+            # Nothing to list. The brain already refuses config questions when no
+            # configuration is loaded (see Mind.ask), so reaching here means the
+            # question wasn't recognised as instance-specific — fall through rather
+            # than duplicating that judgement with a second copy of the message.
 
         # EXACT count from a STRUCTURED parse — deterministic, no LLM, so it's verified.
         if re.search(r"\bhow many\b|\bcount\b|\bnumber of\b", low):
@@ -1337,7 +1312,7 @@ class Mind:
         directives and dangling headings that chunking severed from their bodies. They
         match keywords well and say nothing, which is how `config router static.` ended
         up as an answer. Deliberate `teach:` is never filtered — only bulk ingest."""
-        import quality
+        import brain as quality
         keep = [c for c in chunks if not quality.is_stub_passage(c)]
         return keep, len(chunks) - len(keep)
 
@@ -1397,7 +1372,7 @@ class Mind:
 
     def clean_library(self):
         """Remove already-stored ingest noise from the library. Reports what went."""
-        import quality
+        import brain as quality
         before = list(self.lib.docs)
         keep = [d for d in before if not quality.is_stub_passage(d)]
         removed = len(before) - len(keep)
@@ -1941,8 +1916,8 @@ class Mind:
         um = re.match(r"^\s*(?:understand|parse|how do you read)\s*[:\-]\s*(.+)$", q,
                       re.I | re.S)
         if um:
-            import understand
-            return {"answer": understand.explain(um.group(1).strip()),
+            import brain
+            return {"answer": brain.explain(um.group(1).strip(), brain.survey(self)),
                     "how": "understanding", "verified": True, "confidence": 0.9,
                     "trace": []}
         if re.match(r"^\s*(?:config\s+status|configuration\s+status|"
@@ -1957,11 +1932,42 @@ class Mind:
         # reading (operation, object, device, and — critically — what evidence the
         # question REQUIRES) computed before any agent runs, and attached to the answer
         # so the interpretation is visible and correctable.
+        # The brain reads the question against what Vio ACTUALLY holds (the evidence
+        # survey), so the reading knows which object kinds exist and whether a model is
+        # running. `_plan` is the decision the rest of the pipeline must respect.
         try:
-            import understand
-            self._intents = understand.parse(q)
+            import brain
+            self._evidence_survey = brain.survey(self)
+            self._intents = brain.read(q, self._evidence_survey.vocabulary)
+            self._plan = brain.decide(self._intents[0], self._evidence_survey)
         except Exception:
-            self._intents = []
+            self._intents, self._plan, self._evidence_survey = [], None, None
+
+        # THE PLAN IS AUTHORITATIVE. When the evidence a question REQUIRES does not
+        # exist, nothing downstream may improvise an answer out of whatever text
+        # happened to match — that is precisely how manual prose got served as device
+        # data. One general check here replaces the per-symptom branches that used to
+        # be added one bad answer at a time.
+        if self._plan is not None and self._plan.strategy in (
+                "need-config", "need-config-kind", "abstain") \
+                and self._plan.understanding.requires in (brain.CONFIG, brain.LIVE):
+            self._last_q = q
+            self._last_evidence = {}
+            return {"answer": brain.shortfall_message(self._plan, self._evidence_survey),
+                    # "no-source …" is the established contract for an honest
+                    # abstention; keep it stable so callers and tests can rely on it.
+                    "how": ("no-source (live data)"
+                            if self._plan.understanding.requires == brain.LIVE
+                            else f"no-source ({self._plan.strategy})"),
+                    "verified": False,
+                    "confidence": 0.1,
+                    "understood": self._intents[0].summary(),
+                    "intent": self._intents[0].as_dict(),
+                    "plan": self._plan.as_dict(),
+                    "trace": [f"understood: {self._intents[0].summary()}",
+                              f"plan: {self._plan.strategy} — {self._plan.reason}",
+                              f"held: {len(self._evidence_survey.config_objects)} config "
+                              f"object(s), {self._evidence_survey.passages} passage(s)"]}
         # CORTEX AUDIT: count model calls across the whole route (every agent, every
         # branch). Vio has many deterministic short-circuits, and when one of them fires
         # the reasoning model never runs — which looked identical to "the model answered
@@ -2344,18 +2350,8 @@ class Mind:
             return {"answer": r["answer"], "how": r.get("how", "learn sources"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
 
-        # honest abstention on LIVE / real-time data Vio has no feed for — never guess a
-        # price, rate, weather, or score. (Config questions with 'current' don't match:
-        # this needs an explicit live-data noun.)
-        if re.search(r"\b(stock|share)\s+price|exchange rate|\bweather\b|"
-                     r"(latest|current|today'?s|breaking)\s+news|"
-                     r"(current|latest|real-?time|live)\s+(price|value|rate|score|"
-                     r"temperature|quote)\b", low):
-            return {"answer": "I can't look up live or real-time data — I have no market, "
-                    "weather, or news feed, and I won't guess a number that changes by the "
-                    "minute. For live values, check a source that updates in real time.",
-                    "how": "no-source (live data)", "verified": False, "confidence": 0.08,
-                    "trace": []}
+        # (Live/real-time abstention now lives in brain.decide — a question needing a
+        # data feed Vio has no access to is refused before routing, for every path.)
 
         # 0) "what have I taught you / what did you learn / what's in your library"
         #    (NOT "what do you know about X" — that is a topic query -> retrieval below)
@@ -2622,7 +2618,7 @@ class Mind:
         # Structured config analysis reads self.lib.docs directly, so dropping these
         # from retrieval costs nothing and removes a whole class of empty answers.
         if hits:
-            import quality as _q
+            import brain as _q
             # unconditional: if EVERY hit is a stub there is genuinely nothing to
             # answer from, and honest no-source beats a confident-looking nothing.
             hits = [(d, s) for d, s in hits if not _q.is_stub_passage(d)]

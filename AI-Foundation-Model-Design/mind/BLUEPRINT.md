@@ -336,7 +336,8 @@ brain — back them up.** All git-ignored (per-machine).
 - **Cognition core:** `reasoner.py` (the Mind), `kernel/executive.py` (two-clock),
   `kernel/workspace.py`.
 - **Agents:** `agents.py`.
-- **Brain:** `llm.py`, `make_modelfile.py`.
+- **Brain:** `brain.py` (decision core: understanding → evidence survey →
+  strategy → verification), `llm.py` (local model client).
 - **Cognition modules:** `cognition/` — `confidence`, `critic`, `calibration`,
   `curiosity`, `consolidation`, `learning`, `planning`, `reasoning`, `world_model`.
 - **Knowledge/IO:** `semantic.py`, `think.py`, `ingest.py`, `pdftext.py`, `pdfcheck.py`,
@@ -348,8 +349,8 @@ brain — back them up.** All git-ignored (per-machine).
   (structured config), `golden_eval.py` (correctness/safety/latency gate).
 - **Training pipeline:** `trainpipe.py` (licensed collect → sanitize → dedupe → chunk → license-gate → RAG/SFT/eval split → grounded SFT → quality/license/dedup/leakage reports).
 - **Self-improvement:** `selfimprove.py`.
-- **Training (external/offline):** `train_all.py`, `train_model.py`, `build_dataset.py`,
-  `build_large_sft.py`, `data_ingest.py`, `neural_model.py`.
+- **Training (external/offline):** `train_all.py`, `train_model.py`,
+  `data_ingest.py`, `neural_model.py`, `trainpipe.py`.
 - **Tests:** `capability_test.py` (26 checks), `golden_eval.py` (quality gate),
   `test_agents.py`, `test_selfimprove.py`, `test_websearch.py`, `test_configparse.py`.
 

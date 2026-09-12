@@ -52,7 +52,7 @@ def run(verbose=False):
     os.environ.pop("VIO_ALLOW_NET", None)          # safety default must hold
     cases, safety, correctness = [], [], []
     try:
-        import quality
+        import brain as quality
         import configparse
         from agents import Guardrail, Result, READ, WRITE
         m = _mind()
@@ -75,16 +75,16 @@ def run(verbose=False):
 
         # ---- correctness: verification discipline ----
         case("empty answer never verified", "correctness",
-             lambda: quality.finalize({"answer": "", "verified": True}, {}, "q")["verified"] is False)
+             lambda: quality.verify({"answer": "", "verified": True}, {}, "q")["verified"] is False)
         case("weak answer never verified", "correctness",
-             lambda: quality.finalize({"answer": "I don't know that yet", "verified": True},
+             lambda: quality.verify({"answer": "I don't know that yet", "verified": True},
                                       {}, "q")["verified"] is False)
         case("security answer w/o evidence is unverified", "correctness",
-             lambda: quality.finalize({"answer": "mTLS uses certificates", "how": "reasoning (LLM)",
+             lambda: quality.verify({"answer": "mTLS uses certificates", "how": "reasoning (LLM)",
                                        "verified": True}, {}, "how does mtls work")["verified"] is False)
         case("grounded security answer stays verified + cited", "correctness", lambda: (
             (lambda r: r["verified"] and "Grounded on" in r["answer"])(
-                quality.finalize({"answer": "mTLS is mutual TLS.", "how": "k8s_security (LLM)",
+                quality.verify({"answer": "mTLS is mutual TLS.", "how": "k8s_security (LLM)",
                                   "verified": True},
                                  {"hits": 2, "excerpts": ["mTLS means mutual TLS between services"]},
                                  "how does mtls work"))))
@@ -98,11 +98,11 @@ def run(verbose=False):
         case("config-scrap pile is not an answer", "correctness",
              lambda: quality.looks_fragmentary(FRAG) is True)
         case("fragment pile never verified", "correctness",
-             lambda: quality.finalize({"answer": FRAG, "verified": True,
+             lambda: quality.verify({"answer": FRAG, "verified": True,
                                        "how": "reasoning over knowledge (synthesis)"},
                                       {"hits": 3}, "show static routes")["verified"] is False)
         case("fragment pile is replaced, not shown as the answer", "correctness",
-             lambda: "only fragments" in quality.finalize(
+             lambda: "only fragments" in quality.verify(
                  {"answer": FRAG, "verified": True, "how": "synthesis"}, {"hits": 3},
                  "show static routes")["answer"])
         case("real prose answer survives the gate", "correctness",
@@ -110,7 +110,7 @@ def run(verbose=False):
                  "A static route sends traffic for a prefix to a fixed next-hop. "
                  "Three are configured on this device.") is False)
         case("exact listing is never called a fragment", "correctness",
-             lambda: quality.finalize(
+             lambda: quality.verify(
                  {"answer": "  [1] dst 10.0.0.0/8  via 192.168.1.1\n  [2] dst 0.0.0.0/0",
                   "verified": True, "how": "analysis over your config (exact listing)"},
                  {"hits": 2}, "show static routes")["verified"] is True)

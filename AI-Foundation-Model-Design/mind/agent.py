@@ -84,15 +84,15 @@ class SolveAgent:
         # it has to be visible — a wrong answer is usually a wrong reading, and the user
         # can only catch that if they can see it.
         try:
-            import understand
-            _its = understand.parse(question)
+            import brain
+            _its = brain.read(question, brain.survey(self.mind).vocabulary)
             if len(_its) > 1:
                 emit(f"🧭 I read this as {len(_its)} questions:")
                 for _i, _it in enumerate(_its, 1):
                     emit(f"   {_i}. {_it.summary()}")
             else:
                 emit(f"🧭 Understood: {_its[0].summary()}")
-            _need = _its[0].evidence
+            _need = _its[0].requires
         except Exception:
             emit("🧭 Understanding your question…")
             _need = None
