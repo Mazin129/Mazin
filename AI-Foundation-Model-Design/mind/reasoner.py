@@ -961,14 +961,20 @@ class Mind:
             except Exception:
                 objs = []
             if not objs:
+                # Say what was searched, not just that nothing was found — if the user
+                # HAS uploaded a config, this is the line that shows where it went.
                 return {"answer":
-                        f"I can't list {item} objects — I don't have a parsed device "
-                        "configuration loaded. What I have looks like documentation, not a "
-                        "config export.\n\nUpload the actual device config (📄 the .conf file "
-                        "or the output of  show full-configuration ) and ask again — I'll "
-                        "list the real objects exactly, straight from the file.",
+                        f"I can't list {item} objects — I parsed all "
+                        f"{len(self.lib.docs)} passage(s) in my library and found no "
+                        "device-configuration objects at all.\n\n"
+                        + self._config_inventory()
+                        + "\n\nIf you did upload the config, it didn't reach the library "
+                        "in a parseable form. Run  config status  to see exactly what I "
+                        "hold, or re-upload the .conf (📄) and I'll report what I parsed "
+                        "out of it.",
                         "how": "no config loaded", "verified": False, "confidence": 0.1,
-                        "trace": ["structured parse found 0 config objects"]}
+                        "trace": [f"structured parse over {len(self.lib.docs)} passage(s) "
+                                  "found 0 config objects"]}
             kinds = sorted({o.kind for o in objs})[:8]
             return {"answer":
                     f"I have {len(objs)} parsed config object(s) — {', '.join(kinds)} — but "
@@ -1334,6 +1340,60 @@ class Mind:
         import quality
         keep = [c for c in chunks if not quality.is_stub_passage(c)]
         return keep, len(chunks) - len(keep)
+
+    def _config_inventory(self):
+        """One line describing what the library actually looks like — config or prose."""
+        docs = self.lib.docs
+        cfgish = sum(1 for d in docs if self._is_configish_snippet(d))
+        if not docs:
+            return "My library is empty."
+        if not cfgish:
+            return (f"All {len(docs)} passage(s) look like prose/documentation — "
+                    "none of them are device-configuration text.")
+        return (f"{cfgish} of {len(docs)} passage(s) look config-shaped, but none "
+                "parsed into complete objects (a stanza may have been cut mid-block).")
+
+    def config_status(self):
+        """What device configuration does Vio actually hold? Answers the question the
+        user cannot otherwise check: 'I uploaded my config — did it arrive?'"""
+        import configparse
+        docs = self.lib.docs
+        objs = configparse.parse_many(docs)
+        cfgish = [d for d in docs if self._is_configish_snippet(d)]
+        lines = [f"**Library:** {len(docs)} passage(s) · "
+                 f"{len(cfgish)} config-shaped · {len(objs)} parsed config object(s)"]
+        if objs:
+            kinds = {}
+            for o in objs:
+                kinds[o.kind] = kinds.get(o.kind, 0) + 1
+            lines.append("")
+            lines.append("**Parsed objects — these I can list and count exactly:**")
+            for k, n in sorted(kinds.items(), key=lambda kv: (-kv[1], kv[0])):
+                lines.append(f"  • {n} × `{k}`")
+            names = [o.name for o in objs if o.name][:8]
+            if names:
+                lines.append(f"  ids: {', '.join(str(n) for n in names)}"
+                             + (" …" if len(objs) > 8 else ""))
+            lines.append("")
+            lines.append("Ask me to `show static routes` or `how many policies` and "
+                         "I'll answer from these exactly.")
+        else:
+            lines.append("")
+            lines.append("**No device configuration is loaded.**")
+            lines.append(self._config_inventory())
+            if cfgish:
+                lines.append("")
+                lines.append("Config-shaped passages I could not parse (first 3):")
+                for d in cfgish[:3]:
+                    first = " / ".join(d.strip().splitlines()[:3])
+                    lines.append(f"  • {first[:150]}")
+            lines.append("")
+            lines.append("To load one: 📄 upload the `.conf` backup, or paste the output "
+                         "of `show full-configuration`. I keep each `edit … next` block "
+                         "whole, so every policy and route becomes its own object.")
+        return {"answer": "\n".join(lines), "how": "config status", "verified": True,
+                "confidence": 0.95,
+                "trace": [f"parsed {len(docs)} passage(s) structurally"]}
 
     def clean_library(self):
         """Remove already-stored ingest noise from the library. Reports what went."""
@@ -1875,7 +1935,33 @@ class Mind:
             return {"answer": corr["answer"], "how": "learned correction", "verified": True,
                     "confidence": 0.96, "trace": ["you taught me the right answer earlier"]}
 
+        # INSPECTION COMMANDS — these must be answered before routing, or the config
+        # engine claims them ("understand: show static routes" contains 'show routes'
+        # and was being answered as a routes question instead of explained).
+        um = re.match(r"^\s*(?:understand|parse|how do you read)\s*[:\-]\s*(.+)$", q,
+                      re.I | re.S)
+        if um:
+            import understand
+            return {"answer": understand.explain(um.group(1).strip()),
+                    "how": "understanding", "verified": True, "confidence": 0.9,
+                    "trace": []}
+        if re.match(r"^\s*(?:config\s+status|configuration\s+status|"
+                    r"what\s+config(?:uration)?\s+(?:do\s+you\s+have|is\s+loaded)|"
+                    r"do\s+you\s+have\s+(?:my\s+)?config(?:uration)?|"
+                    r"which\s+config(?:uration)?\s+(?:do\s+you|is)\b)", low):
+            return self.config_status()
+
         self._last_q = q                                 # remember for a later 'correct:'
+        # UNDERSTAND FIRST. The GUI used to print "Understanding your question…" while
+        # going straight to keyword matching. This is the real thing: a structured
+        # reading (operation, object, device, and — critically — what evidence the
+        # question REQUIRES) computed before any agent runs, and attached to the answer
+        # so the interpretation is visible and correctable.
+        try:
+            import understand
+            self._intents = understand.parse(q)
+        except Exception:
+            self._intents = []
         # CORTEX AUDIT: count model calls across the whole route (every agent, every
         # branch). Vio has many deterministic short-circuits, and when one of them fires
         # the reasoning model never runs — which looked identical to "the model answered
@@ -1902,6 +1988,11 @@ class Mind:
             r["trace"].append(f"cortex: {self.llm.model} was NOT called — this answer "
                               f"came from the '{r.get('how', '?')}' path, which is "
                               f"deterministic (no model involved)")
+        if self._intents:
+            r["understood"] = self._intents[0].summary()
+            r["intent"] = self._intents[0].as_dict()
+            r["trace"].insert(0, "understood: " + "; ".join(
+                i.summary() for i in self._intents[:4]))
 
         # Curiosity (§12): a miss becomes a tracked knowledge gap + a teachable follow-up;
         # a confident answer closes any gap on that topic.

@@ -79,7 +79,35 @@ class SolveAgent:
                 except Exception:
                     pass
 
-        emit("🧭 Understanding your question…")
+        # Show the REAL reading of the question, not a decorative "Understanding…".
+        # The interpretation is what decides routing and what evidence is required, so
+        # it has to be visible — a wrong answer is usually a wrong reading, and the user
+        # can only catch that if they can see it.
+        try:
+            import understand
+            _its = understand.parse(question)
+            if len(_its) > 1:
+                emit(f"🧭 I read this as {len(_its)} questions:")
+                for _i, _it in enumerate(_its, 1):
+                    emit(f"   {_i}. {_it.summary()}")
+            else:
+                emit(f"🧭 Understood: {_its[0].summary()}")
+            _need = _its[0].evidence
+        except Exception:
+            emit("🧭 Understanding your question…")
+            _need = None
+
+        # A question that requires the user's device configuration cannot be answered
+        # from documentation, no matter how well it matches. Check the requirement
+        # BEFORE searching, and say so plainly instead of serving manual prose.
+        if _need == "config":
+            try:
+                import configparse
+                _objs = configparse.parse_many(self.mind.lib.docs)
+            except Exception:
+                _objs = []
+            emit(f"📂 That needs your device configuration — I have "
+                 f"{len(_objs)} parsed config object(s).")
 
         # When the LLM reasoning cortex is available, IT is the "think it through" engine
         # — it understands the whole prompt and reasons (or answers grounded on retrieved
