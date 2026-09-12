@@ -1836,7 +1836,32 @@ class Mind:
                     "confidence": 0.96, "trace": ["you taught me the right answer earlier"]}
 
         self._last_q = q                                 # remember for a later 'correct:'
+        # CORTEX AUDIT: count model calls across the whole route (every agent, every
+        # branch). Vio has many deterministic short-circuits, and when one of them fires
+        # the reasoning model never runs — which looked identical to "the model answered
+        # badly". Now every answer says which of the two actually happened.
+        _c0 = getattr(self.llm, "calls", 0) if self.llm else 0
+        _a0 = getattr(self.llm, "attempts", 0) if self.llm else 0
         r = self.executive.process(q)                   # two-clock: confidence + critic
+        r = dict(r)
+        r["trace"] = list(r.get("trace") or [])
+        if self.llm is None or not getattr(self.llm, "available", False):
+            why = getattr(self.llm, "reason", "") if self.llm else "no LLM client"
+            r["cortex"] = "unavailable"
+            r["trace"].append(f"cortex: NOT used — {why or 'no local model available'}")
+        elif getattr(self.llm, "calls", 0) > _c0:
+            r["cortex"] = self.llm.model
+            r["trace"].append(f"cortex: {self.llm.model} ran "
+                              f"({self.llm.last_ms/1000:.1f}s)")
+        elif getattr(self.llm, "attempts", 0) > _a0:
+            r["cortex"] = "failed"
+            r["trace"].append(f"cortex: {self.llm.model} was called but FAILED — "
+                              f"{self.llm.last_error or 'no output'}")
+        else:
+            r["cortex"] = "skipped"
+            r["trace"].append(f"cortex: {self.llm.model} was NOT called — this answer "
+                              f"came from the '{r.get('how', '?')}' path, which is "
+                              f"deterministic (no model involved)")
 
         # Curiosity (§12): a miss becomes a tracked knowledge gap + a teachable follow-up;
         # a confident answer closes any gap on that topic.

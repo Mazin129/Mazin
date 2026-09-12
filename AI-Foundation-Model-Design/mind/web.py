@@ -407,7 +407,15 @@ function bubble(who){hideEmpty();
 function addUser(t){const {b}=bubble('me');b.classList.toggle('rtl',isAr(t));b.textContent=t;}
 function badge(j){const c=(j.confidence!=null)?' · '+Math.round(j.confidence*100)+'% sure':'';
  const ag=(j.agent&&j.agent!=='core')?' · <span class="prov">🧩 '+esc(j.agent)+' agent</span>':'';
- return (j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c+ag;}
+ /* CORTEX badge — says outright whether the reasoning model ran for THIS answer.
+    'skipped' means a deterministic path (retrieval/config/skill) answered and the
+    model was never consulted; without this the two were indistinguishable. */
+ var cx='';
+ if(j.cortex==='skipped')      cx=' · <span class="no" title="a deterministic path answered; the reasoning model was not called">🧠 model not used</span>';
+ else if(j.cortex==='unavailable') cx=' · <span class="no" title="no local model server reachable — run: ollama serve">🧠 no model</span>';
+ else if(j.cortex==='failed')  cx=' · <span class="no" title="the model was called but produced nothing (timeout or error)">🧠 model failed</span>';
+ else if(j.cortex)             cx=' · <span class="ok" title="the reasoning model wrote this answer">🧠 '+esc(j.cortex)+'</span>';
+ return (j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c+cx+ag;}
 function finalize(b,j){
  b.classList.toggle('rtl',isAr(j.answer));
  b.innerHTML=fmt(j.answer);
@@ -659,8 +667,7 @@ async function loadHistory(){
     b.classList.toggle('rtl',isAr(t.a||''));
     b.innerHTML=fmt(t.a||'');
     const m=document.createElement('div');m.className='meta';
-    m.innerHTML=(t.verified?'<span class="ok">✓ verified</span>':'<span class="no">…</span>')+
-      ' · '+esc(t.how||'');
+    m.innerHTML=badge({verified:t.verified,how:t.how,cortex:t.cortex,agent:t.agent});
     b.appendChild(m);
   }
   const d=document.createElement('div');d.className='meta';
@@ -745,7 +752,7 @@ def _append_history(q, r):
         import time as _t
         rec = {"t": _t.time(), "q": q[:4000], "a": (r.get("answer") or "")[:8000],
                "how": r.get("how", ""), "verified": bool(r.get("verified")),
-               "agent": r.get("agent", "")}
+               "agent": r.get("agent", ""), "cortex": r.get("cortex", "")}
         with open(_hist_file(), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
@@ -1189,6 +1196,15 @@ if __name__ == "__main__":
     _model = (getattr(_llm, "model", None) if _llm and getattr(_llm, "available", False)
               else None)
     print(f"   🧠 model: {_model or '(none — install/start Ollama)'}")
+    if _model is None:
+        # Without a cortex Vio still answers — from keyword retrieval — and those
+        # answers look like fragments. Say so at startup instead of letting the user
+        # discover it one bad answer at a time.
+        print(f"      ⚠️  NO REASONING MODEL: {getattr(_llm, 'reason', '') or 'unknown'}")
+        print("      Vio will answer from keyword retrieval only (short, fragmentary).")
+        print("      Diagnose with:  python doctor.py")
+    elif getattr(_llm, "note", ""):
+        print(f"      ⚠️  {_llm.note}")
     print(f"   🌐 web research: {'ON' if _net else 'OFF (set VIO_ALLOW_NET=1)'}")
     threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
     try:

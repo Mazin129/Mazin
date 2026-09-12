@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -52,6 +53,17 @@ class LLM:
         self.gen_timeout = int(os.environ.get("VIO_LLM_TIMEOUT", "300"))
         self.model = model
         self.available = False
+        # ---- honesty counters -------------------------------------------------
+        # Vio used to answer from lexical retrieval while LOOKING like it had reasoned.
+        # These make every call auditable: how often the cortex actually ran, how long
+        # it took, why it failed, and — when unavailable — the precise reason.
+        self.calls = 0            # successful generations
+        self.attempts = 0         # generate() entered with a live server
+        self.total_ms = 0.0
+        self.last_ms = 0.0
+        self.last_error = ""
+        self.reason = ""          # why .available is False (empty when it is True)
+        self.note = ""            # a warning even when available (e.g. model not installed)
         self._detect()
 
     # ---- discovery ----
@@ -59,13 +71,23 @@ class LLM:
         """Is a local Ollama server up, and which model should we use?"""
         try:
             tags = self._get("/api/tags", timeout=2)
-        except Exception:
+        except Exception as ex:
             self.available = False
+            self.reason = (f"no Ollama server answering at {self.url} ({type(ex).__name__}). "
+                           "Start it with:  ollama serve")
             return
         names = [m.get("name", "") for m in (tags or {}).get("models", [])]
         if not names:
             self.available = False
+            self.reason = ("Ollama is running but has NO models installed. "
+                           "Install one with:  ollama pull qwen2.5:3b")
             return
+        if self.model and not any(n == self.model or n.startswith(self.model + ":")
+                                  for n in names):
+            # a typo'd or uninstalled VIO_LLM_MODEL silently fell through to auto-pick,
+            # so the user thought they were running a model they had never installed.
+            self.note = (f"VIO_LLM_MODEL={self.model!r} is NOT installed "
+                         f"(installed: {', '.join(names)}) — auto-picked another model")
         if self.model and any(n == self.model or n.startswith(self.model + ":")
                               for n in names):
             self.available = True
@@ -91,8 +113,13 @@ class LLM:
 
     # ---- generation ----
     def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024):
-        """One-shot completion. Returns the text, or None if the server/model fails."""
+        """One-shot completion. Returns the text, or None if the server/model fails.
+
+        Every call is counted and timed, and every failure keeps its reason in
+        .last_error — silent `except: return None` is exactly how Vio ended up
+        answering from raw keyword matches while looking like it had reasoned."""
         if not self.available:
+            self.last_error = self.reason or "no local model available"
             return None
         body = {
             "model": self.model,
@@ -102,12 +129,26 @@ class LLM:
         }
         if system:
             body["system"] = system
+        self.attempts += 1
+        t0 = time.time()
         try:
             out = self._post("/api/generate", body, timeout=self.gen_timeout)
-        except Exception:
+        except Exception as ex:
+            self.last_ms = (time.time() - t0) * 1000.0
+            self.last_error = (f"{type(ex).__name__}: {ex} "
+                               f"(after {self.last_ms/1000:.0f}s, limit "
+                               f"{self.gen_timeout}s — raise VIO_LLM_TIMEOUT or use a "
+                               f"smaller model)")
             return None
+        self.last_ms = (time.time() - t0) * 1000.0
+        self.total_ms += self.last_ms
         text = (out or {}).get("response", "").strip()
-        return text or None
+        if not text:
+            self.last_error = f"model returned empty text after {self.last_ms/1000:.1f}s"
+            return None
+        self.last_error = ""
+        self.calls += 1
+        return text
 
     # ---- http (stdlib) ----
     def _get(self, path, timeout=None):
