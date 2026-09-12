@@ -945,6 +945,29 @@ class Mind:
             listed = self._config_list(item, low)
             if listed:
                 return listed
+            # Nothing to list. Be HONEST about why instead of falling through to retrieval,
+            # which would dump manual/prose fragments that look like an answer but aren't.
+            try:
+                import configparse
+                objs = configparse.parse_many(self.lib.docs)
+            except Exception:
+                objs = []
+            if not objs:
+                return {"answer":
+                        f"I can't list {item} objects — I don't have a parsed device "
+                        "configuration loaded. What I have looks like documentation, not a "
+                        "config export.\n\nUpload the actual device config (📄 the .conf file "
+                        "or the output of  show full-configuration ) and ask again — I'll "
+                        "list the real objects exactly, straight from the file.",
+                        "how": "no config loaded", "verified": False, "confidence": 0.1,
+                        "trace": ["structured parse found 0 config objects"]}
+            kinds = sorted({o.kind for o in objs})[:8]
+            return {"answer":
+                    f"I have {len(objs)} parsed config object(s) — {', '.join(kinds)} — but "
+                    f"none of them are {item} objects. If the {item} table is in a different "
+                    "file or section, upload that part and I'll list it exactly.",
+                    "how": "no matching config objects", "verified": False, "confidence": 0.2,
+                    "trace": [f"parsed {len(objs)} object(s), no '{item}' kind"]}
 
         # EXACT count from a STRUCTURED parse — deterministic, no LLM, so it's verified.
         if re.search(r"\bhow many\b|\bcount\b|\bnumber of\b", low):
