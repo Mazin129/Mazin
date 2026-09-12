@@ -2475,6 +2475,18 @@ class Mind:
         elif hits and not config_q:
             hits = [(d, s) for d, s in hits if not self._is_configish_snippet(d)]
 
+        # STUB GATE: a lone config directive (`config router static.`) or a dangling
+        # label (`Per Route`, `Confirm the policy:`) is ingest noise — a heading or a
+        # stanza opener chunked away from its body. Grounding on it yields text that
+        # LOOKS sourced and says nothing ("Policy configuration — Confirm the policy:").
+        # Structured config analysis reads self.lib.docs directly, so dropping these
+        # from retrieval costs nothing and removes a whole class of empty answers.
+        if hits:
+            import quality as _q
+            # unconditional: if EVERY hit is a stub there is genuinely nothing to
+            # answer from, and honest no-source beats a confident-looking nothing.
+            hits = [(d, s) for d, s in hits if not _q.is_stub_passage(d)]
+
         if re.search(r"about (me|myself)|(who|what) am i|know about me", low):
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
         else:

@@ -89,6 +89,46 @@ def run(verbose=False):
                                  {"hits": 2, "excerpts": ["mTLS means mutual TLS between services"]},
                                  "how does mtls work"))))
 
+        # ---- correctness: the fragment gate ----
+        # Regression guard for the real failure: "show static route on SA-OCC firewall"
+        # answered with `config router static. config router static6.` under a ✓ badge.
+        # These pin the SHAPE of that bug, so any path that produces it is caught.
+        FRAG = ("config router static. config router static6. "
+                "Configure a policy that accepts direct routes.")
+        case("config-scrap pile is not an answer", "correctness",
+             lambda: quality.looks_fragmentary(FRAG) is True)
+        case("fragment pile never verified", "correctness",
+             lambda: quality.finalize({"answer": FRAG, "verified": True,
+                                       "how": "reasoning over knowledge (synthesis)"},
+                                      {"hits": 3}, "show static routes")["verified"] is False)
+        case("fragment pile is replaced, not shown as the answer", "correctness",
+             lambda: "only fragments" in quality.finalize(
+                 {"answer": FRAG, "verified": True, "how": "synthesis"}, {"hits": 3},
+                 "show static routes")["answer"])
+        case("real prose answer survives the gate", "correctness",
+             lambda: quality.looks_fragmentary(
+                 "A static route sends traffic for a prefix to a fixed next-hop. "
+                 "Three are configured on this device.") is False)
+        case("exact listing is never called a fragment", "correctness",
+             lambda: quality.finalize(
+                 {"answer": "  [1] dst 10.0.0.0/8  via 192.168.1.1\n  [2] dst 0.0.0.0/0",
+                  "verified": True, "how": "analysis over your config (exact listing)"},
+                 {"hits": 2}, "show static routes")["verified"] is True)
+        case("lone config directive is a stub passage", "correctness",
+             lambda: quality.is_stub_passage("config router static.") is True)
+        case("dangling label is a stub passage", "correctness",
+             lambda: quality.is_stub_passage("Per Route") is True)
+        case("real sentence is not a stub passage", "correctness",
+             lambda: quality.is_stub_passage(
+                 "Static routes are configured under config router static on FortiOS.") is False)
+        case("multi-line stanza is not a stub passage", "correctness",
+             lambda: quality.is_stub_passage(
+                 "config router static\n  edit 1\n  set gateway 10.0.0.1\nnext") is False)
+        case("stub passages are never cited", "correctness",
+             lambda: "Per Route" not in quality.citations(
+                 {"excerpts": ["Per Route", "config router static.",
+                               "Static routes send traffic to a fixed next-hop gateway."]}))
+
         # ---- correctness: structured config ----
         case("exact policy count (structural, verified)", "correctness", lambda: (
             (lambda r: r and r.get("verified") and "3 policy" in r.get("answer", ""))(
