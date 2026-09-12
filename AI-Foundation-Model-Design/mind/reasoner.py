@@ -558,6 +558,14 @@ class Library:
                       ensure_ascii=False, indent=2)
             self._fit()
 
+    def replace(self, texts):
+        """Swap the whole corpus (used by library cleaning) and rebuild the index."""
+        with self._lock:
+            self.docs = list(texts)
+            json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=2)
+            self._fit()
+
     def search(self, q, k=3):
         with self._lock:                    # take a coherent snapshot of the index
             vec, mat, docs, sem = self.vec, self.mat, self.docs, self.sem
@@ -1317,8 +1325,40 @@ class Mind:
         self.tables = self.tables[-5:]              # keep the last few tables
         return t.describe()
 
+    @staticmethod
+    def _drop_stubs(chunks):
+        """Filter ingest noise out of BULK learning (files, URLs, repos): lone config
+        directives and dangling headings that chunking severed from their bodies. They
+        match keywords well and say nothing, which is how `config router static.` ended
+        up as an answer. Deliberate `teach:` is never filtered — only bulk ingest."""
+        import quality
+        keep = [c for c in chunks if not quality.is_stub_passage(c)]
+        return keep, len(chunks) - len(keep)
+
+    def clean_library(self):
+        """Remove already-stored ingest noise from the library. Reports what went."""
+        import quality
+        before = list(self.lib.docs)
+        keep = [d for d in before if not quality.is_stub_passage(d)]
+        removed = len(before) - len(keep)
+        if not removed:
+            return {"answer": f"Library is clean — all {len(before)} passage(s) carry "
+                    "real content. Nothing to remove.", "how": "library-write",
+                    "verified": True, "confidence": 0.95, "trace": []}
+        self.lib.replace(keep)
+        self._retrain()
+        sample = [d for d in before if quality.is_stub_passage(d)][:6]
+        return {"answer": f"Removed {removed} empty passage(s) from the library "
+                f"({len(before)} → {len(keep)}). These matched keywords but carried no "
+                "information, so they were being retrieved as if they were answers:\n"
+                + "\n".join(f"  • {s}" for s in sample)
+                + ("\n  …" if removed > len(sample) else ""),
+                "how": "library-write", "verified": True, "confidence": 0.95,
+                "trace": [f"pruned {removed} stub passage(s)"]}
+
     def learn_text(self, text, source=""):
         chunks = self._smart_chunks(text)           # config-aware: keeps stanzas whole
+        chunks, _dropped = self._drop_stubs(chunks)
         self.lib.add_many(chunks)
         self.graph.learn_text(text)                 # relational edges (cheap, teach-time)
         self._retrain()
@@ -2180,6 +2220,15 @@ class Mind:
             r = self.cover_gaps()
             return {"answer": r["answer"], "how": r.get("how", "cover gaps"),
                     "verified": r.get("verified", False), "trace": r.get("trace", [])}
+
+        # clean ingest noise out of the library: "clean library", "prune library",
+        # "remove empty passages" — removes lone config directives and dangling
+        # headings that chunking severed from their bodies.
+        if re.match(r"^\s*(?:clean|prune|tidy|clear)\s+(?:up\s+)?(?:the\s+|my\s+)?"
+                    r"(?:library|knowledge\s*base|kb|passages?)\b", low) or \
+                re.match(r"^\s*remove\s+(?:the\s+)?(?:empty|stub|junk|noise|useless)\s+"
+                         r"(?:passages?|lines?|entries)\b", low):
+            return self.clean_library()
 
         # load the built-in network/security knowledge base (offline, instant)
         if re.match(r"^\s*(?:load|add|install|import)\s+(?:the\s+)?(?:built-?in\s+)?"

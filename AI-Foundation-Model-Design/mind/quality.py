@@ -59,6 +59,18 @@ _GROUNDED = ("planning (grounded", "reasoning over knowledge", "world model",
 _CFG_STUB = re.compile(r"^\s*(config|edit|set|unset|next|end|append|select)\b", re.I)
 # a bare heading / dangling label: "Per Route", "Confirm the policy:", "Example 1"
 _LABEL_STUB = re.compile(r"^[\w ()/-]{1,40}:?$")
+def _is_heading_shaped(t: str) -> bool:
+    """A heading is Title Case or ends with a colon; a sentence has a lowercase word.
+
+    Shape beats a verb list here: in this domain 'route', 'block' and 'allow' are
+    nouns as often as verbs, so 'Per Route' would pass a verb check. But a real
+    statement — 'OSPF is link-state', 'TLS encrypts traffic' — always carries at
+    least one lowercase word that isn't the leading one."""
+    if t.endswith(":"):
+        return True
+    words = t.rstrip(".").split()
+    # every word capitalised or numeric → "Per Route", "Example 1", "Static Routes"
+    return all(w[:1].isupper() or w[:1].isdigit() or not w[:1].isalpha() for w in words)
 # deterministic paths whose short output is exact by construction — never fragments
 _EXACT = ("exact listing", "exact count", "library-write", "memory-write", "skill-write",
           "correction-write", "feedback", "calibration", "consolidation")
@@ -106,7 +118,12 @@ def is_stub_passage(text: str) -> bool:
         return False
     if _CFG_STUB.match(t):                     # `config router static.` / `end`
         return True
-    return bool(_LABEL_STUB.match(t)) and len(words) <= 4
+    if not _LABEL_STUB.match(t) or len(words) > 4:
+        return False
+    # A short line is only a LABEL if it is shaped like a heading. "OSPF is link-state"
+    # and "TLS encrypts traffic" are real (if terse) facts and must survive; "Per Route"
+    # and "Confirm the policy:" are headings.
+    return _is_heading_shaped(t)
 
 
 def fragment_reply(ans: str, q: str) -> str:
