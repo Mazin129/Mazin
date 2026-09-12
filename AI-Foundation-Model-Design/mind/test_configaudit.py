@@ -175,8 +175,11 @@ def main():
           any(x.rule == "conflicting-policy" for x in high))
 
     print("\n-- findings name the objects they came from --")
-    check("every finding cites objects or explains why not",
-          all(x.objects or x.rule in ("no-default-route", "interfaces-not-checked")
+    # A finding either names its objects, or carries them as "Examples:" in the detail
+    # (grouped and list-style findings do the latter so ids are not printed twice).
+    check("every finding names its objects, in the title or the detail",
+          all(x.objects or "Examples:" in x.detail
+              or x.rule in ("no-default-route", "interfaces-not-checked")
               for x in f))
     contra = next(x for x in f if x.rule == "conflicting-policy")
     check("contradiction names both policies", len(contra.objects) == 2)
@@ -193,13 +196,49 @@ def main():
     check("clean config still reports what it checked",
           "object(s) analysed" in configaudit.report(cf, cobjs))
 
+    print("\n-- a big config must not become a 120-line dump --")
+    # 120 policies that all share one wide axis. The old report printed the same
+    # sentence 120 times, which buried everything that mattered underneath it.
+    many = ["config firewall policy"]
+    for i in range(1, 121):
+        many.append(f'  edit {i}\n   set srcintf "port2"\n   set dstintf "port1"\n'
+                    f'   set srcaddr "NET-{i}"\n   set dstaddr "all"\n'
+                    f'   set service "HTTPS"\n   set action accept\n'
+                    f'   set logtraffic all\n  next')
+    many.append("end")
+    big = configparse.parse("\n".join(many))
+    bf = configaudit.audit(big)
+    grouped = configaudit.group(bf, {"policies": 120, "routes": 0})
+    check("120 repeats collapse to one finding",
+          sum(1 for x in grouped if x.rule == "permissive") == 1)
+    g = next(x for x in grouped if x.rule == "permissive")
+    check("the grouped finding states the real population", "120 of 120 policies" in g.title)
+    check("a universal pattern is demoted to an observation",
+          g.severity == configaudit.INFO)
+    check("grouped finding shows examples", "Examples:" in g.detail)
+    check("grouped finding does not print the same ids twice", not g.objects)
+
+    big_report = configaudit.report(bf, big)
+    check("big report stays short (< 2500 chars)", len(big_report) < 2500)
+    check("big report does not repeat one line many times",
+          big_report.count("leaves one axis unrestricted") <= 1)
+    check("big report leads with a verdict",
+          any(v in big_report for v in ("Nothing serious found", "worth acting on",
+                                        "**Clean.**")))
+
+    faulty_report = configaudit.report(f, objs)
+    check("a faulty config leads with what needs acting on",
+          "worth acting on" in faulty_report)
+    check("few occurrences are still listed individually",
+          faulty_report.count("is shadowed by") >= 1)
+
     print("\n-- the report states its own limits --")
     rep = configaudit.report(f, objs)
     check("report says no model was involved", "No model was involved" in rep
           or "no model was involved" in rep)
     check("report discloses the address-group limitation",
           "address groups are not expanded" in rep)
-    check("report gives severity counts", "high ·" in rep)
+    check("report gives severity counts", "high," in rep and "medium," in rep)
 
     print("\n-- multi-value fields parse correctly --")
     p = configparse.parse('config firewall policy\n edit 1\n'

@@ -307,14 +307,14 @@ def _check_unused(objects, policies):
                    and "group" not in (o.kind or "").lower()]
         unused = [o for o in defined if str(o.name).lower() not in referenced]
         if unused and defined:
-            shown = ", ".join(str(o.name) for o in unused[:12])
+            shown = ", ".join(str(o.name) for o in unused[:8])
             out.append(Finding(
                 "unused-object", LOW,
                 f"{len(unused)} of {len(defined)} {label}s are referenced by no policy",
-                f"{shown}" + (" …" if len(unused) > 12 else "")
+                f"Examples: {shown}" + (" …" if len(unused) > 8 else "")
                 + ". Harmless but they accumulate, and an unused object is often the "
                 "leftover of a change that was only half applied.",
-                [o.name for o in unused[:12]]))
+                []))                          # examples are in the detail; don't repeat
     return out
 
 
@@ -370,6 +370,89 @@ def audit(objects):
     return findings
 
 
+# How a repeated finding should be phrased once, instead of N times. {n} is the count,
+# {total} the population it was drawn from, {names} a few example objects.
+_GROUPED = {
+    "permissive": ("{n} of {total} policies leave one axis unrestricted",
+                   "Same shape on all of them, so this is a design pattern rather than "
+                   "a mistake — but it means each rule is wider than its name suggests. "
+                   "Examples: {names}."),
+    "overly-permissive": ("{n} of {total} policies leave two or more axes unrestricted",
+                          "Each of these is a wide opening. Narrow whichever axis you can "
+                          "name concretely. Examples: {names}."),
+    "no-logging": ("{n} accept rules have logging disabled",
+                   "Traffic permitted by these leaves no record — a blind spot during an "
+                   "incident. Examples: {names}."),
+    "disabled-policy": ("{n} policies are disabled",
+                        "Dead config that still reads as live. Examples: {names}."),
+    "duplicate-policy": ("{n} duplicate policy pairs",
+                         "Identical match criteria; one of each pair never fires. "
+                         "Examples: {names}."),
+    "shadowed-policy": ("{n} policies are shadowed by an earlier rule",
+                        "These never take effect. Examples: {names}."),
+    "conflicting-policy": ("{n} policy pairs contradict each other",
+                           "Same match criteria, opposite actions — the earlier one "
+                           "silently wins. Examples: {names}."),
+    "dangling-interface": ("{n} interfaces are referenced but never defined",
+                           "Either the export is partial, or these rules point at "
+                           "interfaces that no longer exist. Examples: {names}."),
+    "duplicate-route": ("{n} duplicate route destinations", "Examples: {names}."),
+    "conflicting-route": ("{n} destinations have routes with different gateways",
+                          "Deliberate failover is fine; otherwise one of each pair is "
+                          "wrong. Examples: {names}."),
+}
+
+# Which population each rule's "{n} of {total}" is drawn from. Guessing this from the
+# rule name produced "120 of 40 policies"; it is small enough to state outright.
+_POPULATION = {
+    "permissive": "policies", "overly-permissive": "policies",
+    "no-logging": "policies", "disabled-policy": "policies",
+    "duplicate-policy": "policies", "shadowed-policy": "policies",
+    "conflicting-policy": "policies", "dangling-interface": "interfaces",
+    "duplicate-route": "routes", "conflicting-route": "routes",
+}
+
+# Below this many occurrences, list them individually — the detail is still readable.
+_GROUP_AT = 4
+
+
+def group(findings, population=None):
+    """Collapse a repeated finding into ONE that states the pattern and its size.
+
+    A review that prints the same sentence 120 times is a linter dump: the reader
+    learns nothing they could not have learned from the first line, and the findings
+    that matter are buried under the ones that don't. Stating it once, with a count and
+    examples, is both shorter and more informative."""
+    population = population or {}
+    by_rule = {}
+    for f in findings:
+        by_rule.setdefault(f.rule, []).append(f)
+
+    out = []
+    for rule, group_ in by_rule.items():
+        if len(group_) < _GROUP_AT or rule not in _GROUPED:
+            out.extend(group_)
+            continue
+        title_t, detail_t = _GROUPED[rule]
+        names = []
+        for f in group_:
+            for o in f.objects:
+                if str(o) not in names:
+                    names.append(str(o))
+        total = population.get(_POPULATION.get(rule, "policies")) or len(group_)
+        ctx = {"n": len(group_), "total": total,
+               "names": ", ".join(names[:6]) + (" …" if len(names) > 6 else "")}
+        # A pattern present on essentially everything is a design choice, not a defect.
+        sev = group_[0].severity
+        if len(group_) >= max(4, int(total * 0.9)) and sev == LOW:
+            sev = INFO
+        # objects=[] on purpose: the detail already names examples, and Finding.line()
+        # would otherwise print the same ids twice on one finding.
+        out.append(Finding(rule, sev, title_t.format(**ctx), detail_t.format(**ctx), []))
+    out.sort(key=lambda f: (_ORDER.get(f.severity, 9), f.rule))
+    return out
+
+
 def counts(findings):
     c = {HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0}
     for f in findings:
@@ -382,22 +465,35 @@ def report(findings, objects, limit=40):
     objects = list(objects or [])
     policies = sum(1 for o in objects if "policy" in (o.kind or "").lower())
     routes = sum(1 for o in objects if "static" in (o.kind or "").lower())
+    # Say each thing ONCE. 120 copies of the same sentence is a linter dump: the reader
+    # learns nothing after the first, and the findings that matter get buried under the
+    # ones that don't.
+    findings = group(findings, {"policies": policies, "routes": routes})
     c = counts(findings)
     real = [f for f in findings if f.severity != INFO]
+    serious = [f for f in findings if f.severity in (HIGH, MEDIUM)]
+
+    # Lead with the verdict: whether anything needs acting on is the first thing the
+    # reader wants, and they should not have to infer it by counting bullets.
+    if serious:
+        verdict = (f"**{len(serious)} thing(s) worth acting on** — "
+                   f"{c[HIGH]} high, {c[MEDIUM]} medium, {c[LOW]} low.")
+    elif real:
+        verdict = ("**Nothing serious found.** No shadowed rules, contradictions, "
+                   "any/any accepts or dangling references. What follows is "
+                   "observation, not a problem list.")
+    else:
+        verdict = ("**Clean.** No shadowed rules, contradictions, any/any accepts, "
+                   "duplicates or dangling references — every check ran and found "
+                   "nothing.")
 
     head = (f"**Configuration review** — {len(objects)} object(s) analysed "
-            f"({policies} policies, {routes} static routes).\n"
-            f"Findings: {c[HIGH]} high · {c[MEDIUM]} medium · {c[LOW]} low")
+            f"({policies} policies, {routes} static routes).\n\n{verdict}")
 
-    if not real:
-        body = ("\nNo shadowed rules, any/any accepts, duplicates or dangling references "
-                "found. That is a real result, not a default — every check below ran and "
-                "came back clean.")
+    if not findings:
+        body = ""
     else:
-        lines = []
-        for f in findings[:limit]:
-            lines.append(f.line())
-        body = "\n\n" + "\n".join(lines)
+        body = "\n\n" + "\n".join(f.line() for f in findings[:limit])
         if len(findings) > limit:
             body += f"\n\n… and {len(findings) - limit} more finding(s)."
 
