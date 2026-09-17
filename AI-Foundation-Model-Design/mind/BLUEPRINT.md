@@ -89,21 +89,22 @@ shared library and every other agent can use it on the next question.
 
 ---
 
-## 4. The agents (11)
+## 4. The agents (12)
 
 Scores drive dispatch (highest wins); order only breaks ties. Advisory = read-only;
 Acting = holds network/write permission and is guardrail-gated.
 
 | Agent | Kind | Fires on |
 |---|---|---|
-| `research` (WebResearchAgent) | ⚙️ acting (network) | `research:` / `look up` / `search the web` — searches, reads, learns, cites |
+| `research` (WebResearchAgent) | ⚙️ acting (network) | `research:` / `look up` / `search the web` — learns pages, cites; may draft a **pending** skill proposal |
+| `skill_grow` (SkillGrowAgent) | 💬 advisory | `train skill:` / `approve skill:` / `reject skill:` / `list skill proposals` — self-develop via **proposals only** (web via research gate) |
 | `diagram` (DiagramAgent) | 💬 read-only | `draw:` / `diagram:` / `sketch a …` — LLM follows the vendored diagram-design skill → deterministic self-contained SVG at `/diagram/<id>` (model only emits a node/edge spec; `VIO_DIAGRAM_ENGINE=skill` for full editorial SVG on a strong model) |
 | `network_engineering` | 💬 expert (unified) | ALL network & security: routing/switching, firewalls, k8s/mesh (mTLS), cloud/IAM, incident response, threat modeling, troubleshooting, security review, and config analysis (exact structural counts). Merged from the former per-domain experts. |
 | `skill` | 💬 reflex | user-taught `skill:` reflexes |
 | `math` | 💬 | symbolic math (sympy) |
 | `planner` | 💬 | "make a plan to…" |
-| `world_model` | 💬 | "what happens if…" causal what-ifs |
-| `reasoning` | 💬 | general reasoning |
+| `world_model` | 💬 | "what happens if…" causal what-ifs (intent-scored only) |
+| `reasoning` | 💬 | structured graph reasoning (intent-scored only) |
 | `memory` | 💬 | "what did we discuss", "what do you know about me" |
 | `core` (CoreRouterAgent) | 💬 catch-all | the proven front router (`_core_front`) |
 | `knowledge` (KnowledgeAgent) | 💬 tail | retrieval + grounded/open LLM + honest no-source |
@@ -163,7 +164,7 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
 
 - **Teach directly:** `teach: <fact>`, `remember: <fact>`, drop a file (📄 PDF/TXT/MD via
   `pdftext.py`/`ingest.py`; diagrams via `diagrams.py`), a folder, or a GitHub repo
-  (`gitlearn.py`, docs only — never runs repo code).
+  (`gitlearn.py`, docs only — never runs repo code; **requires `VIO_ALLOW_NET=1`**).
 - **Web research** (`websearch.py` + `Mind.research`): `research: <topic>` searches
   (DuckDuckGo → Bing → DuckDuckGo-lite fallback), reads the top pages, **learns them into
   the library**, and answers grounded with citations. Off unless `VIO_ALLOW_NET=1`.
@@ -180,6 +181,16 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
   - **ModelManager** — versioned promote/rollback of the live model (`model_state.json`).
   - **`propose()`** runs curate + evaluate and **stops at the human approval gate** — it
     never trains or promotes on its own.
+  - **`promote(approved=True)`** for candidates **re-runs the golden suite** and refuses
+    if not `promotable`. The dashboard brain dropdown uses `require_golden=False` (live
+    switch only — not a candidate promotion).
+- **Governed skill growth** (`skill_proposals.py` + `SkillGrowAgent`):
+  - Agents may use the web (`VIO_ALLOW_NET=1`) to research a topic and **propose** a
+    SkillBook reflex (name / trigger / reply) — plain data, never executable code.
+  - Chat: `train skill: <topic>`, `list skill proposals`, `approve skill: <id>`,
+    `reject skill: <id>`. APIs under `/api/skills/*`.
+  - Installation requires human approve → `SkillBook.add`. No auto-promote of skills,
+    agents, or models.
 
 ---
 
@@ -399,9 +410,36 @@ Banner confirms `🧠 model:` and `🌐 web research:`. Then open `http://localh
 - **Retrieval:** install `sentence-transformers` to turn on semantic re-rank (sharper
   retrieval than lexical-only).
 - **Self-improvement:** the fine-tune/train step is external (GPU-heavy); `propose` tells
-  you when there's enough curated data. Promotion is always human-gated.
+  you when there's enough curated data. Promotion is always human-gated + golden-gated.
 - **Next ideas:** a "🌐 Research" and "📊 Dashboard" link in the chat header; scheduled
-  idle `cover gaps`; per-domain source packs.
+  idle `cover gaps`; per-domain source packs; declarative `AgentSpec` (JSON domains +
+  prompts) registered at runtime without shipping new Python.
+
+---
+
+## 20. Max-level autonomy (governed — not unconstrained)
+
+**Goal:** every agent is free to *develop itself* — research the internet, draft new
+skills, grow the shared library — while remaining under hard safety rails.
+
+| Allowed (agents may do freely when opted-in) | Forbidden (never automatic) |
+|---|---|
+| Web research + learn passages (`VIO_ALLOW_NET=1`) | Rewrite / exec their own Python |
+| Propose SkillBook reflexes from research | Auto-install skills |
+| Cover curiosity gaps from trusted sources | Auto-promote models or agent code |
+| Draft declarative AgentSpec ideas (future) | Bypass Guardrail WRITE/NETWORK gates |
+
+**How to use it today**
+
+1. Start with `VIO_ALLOW_NET=1`.
+2. `research: mTLS in service mesh` — learns pages; may append a **pending skill proposal**.
+3. Or explicitly: `train skill: FortiGate VIP checklist`.
+4. `list skill proposals` → `approve skill: <id>` (or `reject skill: <id>`).
+5. Model candidates: `propose` → train offline → golden green →
+   `POST /api/improve/promote` with `approved: true` (golden re-checked).
+
+This is the max level that stays honest: **autonomy over data and proposals**, never
+over executable self-modification.
 
 ---
 

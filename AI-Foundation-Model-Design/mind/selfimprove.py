@@ -216,13 +216,24 @@ class ModelManager:
     def current(self):
         return self.state.get("current") or os.environ.get("VIO_LLM_MODEL", "(auto)")
 
-    def promote(self, model, approved=False, note=""):
+    def promote(self, model, approved=False, note="", require_golden=True, golden=None):
+        """Promote a candidate model. UI brain-dropdown uses require_golden=False
+        (live switch only). Candidate promotion from /api/improve/promote always
+        re-checks the golden suite when require_golden=True."""
         if not approved:
             return {"ok": False, "gated": True,
                     "message": f"Promotion of '{model}' needs approval. Nothing changed."}
+        if require_golden:
+            g = golden if isinstance(golden, dict) else None
+            if not g or not g.get("promotable"):
+                return {"ok": False, "gated": True, "golden": g,
+                        "message": (f"Promotion of '{model}' blocked: golden suite "
+                                    f"must be green (correctness+safety+latency). "
+                                    f"Run propose / golden_eval first.")}
         prev = self.state.get("current")
         self.state.setdefault("history", []).append(
-            {"from": prev, "to": model, "ts": time.time(), "note": note})
+            {"from": prev, "to": model, "ts": time.time(), "note": note,
+             "golden": bool((golden or {}).get("promotable")) if require_golden else None})
         self.state["current"] = model
         self._save()
         return {"ok": True, "current": model, "previous": prev}
@@ -259,8 +270,10 @@ class SelfImprovement:
                 "current_model": self.models.current(),
                 "history": self.models.state.get("history", [])[-5:]}
 
-    def promote(self, model, approved=False, note=""):
-        r = self.models.promote(model, approved=approved, note=note)
+    def promote(self, model, approved=False, note="", require_golden=True):
+        golden = self._golden() if (approved and require_golden) else None
+        r = self.models.promote(model, approved=approved, note=note,
+                                require_golden=require_golden, golden=golden)
         if r.get("ok") and self._apply:      # actually switch Vio's live brain
             self._apply(model)
         return r

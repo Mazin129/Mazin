@@ -1,12 +1,12 @@
 """
 agents  —  Stage 1 of the agentic architecture (see the blueprint).
 
-This introduces the AGENT CONTRACT and a REGISTRY + MASTER, and wraps Vio's
-existing engines as agents WITHOUT changing the live router. Nothing here alters
-behaviour: Mind.ask() still uses the proven _ask_core chain. The new
-Mind.ask_agentic() routes through the master and falls back to _ask_core for any
-capability not yet migrated — so the two paths agree, and later stages can move
-logic out of _ask_core into agents one at a time.
+AGENT CONTRACT + REGISTRY + MASTER. Live path: Mind.ask() → ask_agentic() →
+Master → agents (score/run/validate) with Guardrail gating write/network.
+Agents may PROPOSE skills and research the web when VIO_ALLOW_NET=1, but they
+never rewrite their own Python, never auto-promote models, and never install
+executable code — growth is data-only (skills, library passages, AgentSpecs)
+behind human approval.
 
 The contract every agent implements:
     name         — stable identifier, shown in provenance
@@ -128,20 +128,35 @@ class WorldModelAgent(Agent):
     name, domains = "world_model", ("reasoning", "simulation")
 
     def score(self, q, ctx):
-        return 0.6
+        # Mirror world_model triggers — never constant-score every query.
+        try:
+            from cognition.world_model import _PREDICT, _COUNTERFACT
+            return 0.6 if (_PREDICT.match(q or "") or _COUNTERFACT.search(q or "")) else 0.0
+        except Exception:
+            return 0.0
 
     def run(self, q, ctx):
-        return Result.from_dict(self.mind.world.answer(q))
+        r = self.mind.world.answer(q)
+        return Result.from_dict(r) if r else None
 
 
 class ReasoningAgent(Agent):
     name, domains = "reasoning", ("reasoning",)
 
     def score(self, q, ctx):
-        return 0.55
+        try:
+            from cognition.reasoning import _RELATE, _RELATE2, _CAUSE, _WHY, _KIND
+            ql = (q or "").strip()
+            if (_RELATE.search(ql) or _RELATE2.search(ql) or _CAUSE.search(ql)
+                    or _WHY.search(ql) or _KIND.search(ql)):
+                return 0.55
+        except Exception:
+            return 0.0
+        return 0.0
 
     def run(self, q, ctx):
-        return Result.from_dict(self.mind.reasoning.answer(q))
+        r = self.mind.reasoning.answer(q)
+        return Result.from_dict(r) if r else None
 
 
 class ConfigAgent(Agent):
@@ -193,7 +208,8 @@ class WebResearchAgent(Agent):
     them into the library, and answers grounded on those fresh sources with citations.
     Read-only over the web. Holds NETWORK permission, so it is subject to the guardrail;
     it only fires once the user has opted in with VIO_ALLOW_NET=1 (otherwise it abstains
-    and the core router returns a friendly 'enable internet' hint)."""
+    and the core router returns a friendly 'enable internet' hint).
+    After a successful research, may also draft a SkillProposal (pending human approve)."""
     name, domains = "research", ("research", "web")
     permissions = frozenset({READ, NETWORK})
 
@@ -210,7 +226,43 @@ class WebResearchAgent(Agent):
         payload = self.mind._research_request(q)
         if payload is None:
             return None
-        return Result.from_dict(self.mind.research(payload))
+        return Result.from_dict(self.mind.research(payload, propose_skill=True))
+
+
+class SkillGrowAgent(Agent):
+    """Governed self-development: agents propose SkillBook reflexes from research /
+    explicit 'train skill:' requests. Never installs without human approve.
+    Permissions stay READ — live web access is performed inside Mind.research()
+    which already requires VIO_ALLOW_NET (same as WebResearchAgent's opt-in)."""
+    name, domains = "skill_grow", ("skills", "autonomy", "research")
+    permissions = frozenset({READ})
+    _TRAIN = re.compile(
+        r"^\s*(?:train\s+skill|propose\s+skill|learn\s+skill\s+from\s+web|"
+        r"skill\s+from\s+(?:web|research))\s*[:\-]?\s*(.+)$", re.I)
+    _LIST = re.compile(r"^\s*(?:list\s+skill\s+proposals|skill\s+proposals|"
+                       r"pending\s+skills)\s*\??\s*$", re.I)
+    _APPROVE = re.compile(r"^\s*approve\s+skill\s*[:\-]?\s*(.+)$", re.I)
+    _REJECT = re.compile(r"^\s*reject\s+skill\s*[:\-]?\s*(.+)$", re.I)
+
+    def score(self, q, ctx):
+        if (self._LIST.match(q or "") or self._APPROVE.match(q or "")
+                or self._REJECT.match(q or "") or self._TRAIN.match(q or "")):
+            return 0.95
+        return 0.0
+
+    def run(self, q, ctx):
+        if self._LIST.match(q or ""):
+            return Result.from_dict(self.mind.list_skill_proposals())
+        m = self._APPROVE.match(q or "")
+        if m:
+            return Result.from_dict(self.mind.approve_skill_proposal(m.group(1).strip()))
+        m = self._REJECT.match(q or "")
+        if m:
+            return Result.from_dict(self.mind.reject_skill_proposal(m.group(1).strip()))
+        m = self._TRAIN.match(q or "")
+        if m:
+            return Result.from_dict(self.mind.train_skill_from_web(m.group(1).strip()))
+        return None
 
 
 class DiagramAgent(Agent):
@@ -530,8 +582,8 @@ class NetworkEngineeringAgent(ExpertAgent):
 # the catch-alls; CoreRouter (front) then Knowledge (tail) remain the bottom fallbacks.
 # NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
 # (teach:/math/tools/research/draw/agents/…); folding it in would break those.
-DEFAULT_AGENTS = (WebResearchAgent, DiagramAgent, SkillAgent, MathAgent, PlannerAgent,
-                  WorldModelAgent, ReasoningAgent, NetworkEngineeringAgent,
+DEFAULT_AGENTS = (WebResearchAgent, SkillGrowAgent, DiagramAgent, SkillAgent, MathAgent,
+                  PlannerAgent, WorldModelAgent, ReasoningAgent, NetworkEngineeringAgent,
                   MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
 

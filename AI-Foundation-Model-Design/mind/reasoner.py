@@ -29,6 +29,7 @@ from sympy.parsing.sympy_parser import (parse_expr, standard_transformations,
                                         convert_xor)
 from think import Thinker
 from skills import SkillBook, parse_skill_definition
+from skill_proposals import SkillProposalStore, draft_from_research
 from memory.episodic import EpisodicMemory
 from memory.working import WorkingMemory
 from memory.semantic import SemanticMemory
@@ -605,6 +606,7 @@ class Mind:
         self.mem.setdefault("solved", {})
         self.thinker = Thinker()                           # open-ended thinking engine
         self.skills = SkillBook()                          # user-teachable reflexes
+        self.skill_proposals = SkillProposalStore()        # agent-proposed, human-gated
         # CORTEX-OS Phase 1 — the four memory tiers (§3). Working/Semantic/Procedural
         # are live adapters over existing stores; Episodic is a new autobiographical log.
         self.wm = WorkingMemory()
@@ -1420,7 +1422,14 @@ class Mind:
 
     def learn_github(self, spec):
         """Clone a public GitHub repo and learn its docs (Markdown/txt/PDF). Reads
-        only — never runs repo code. Returns a summary dict."""
+        only — never runs repo code. Networked: requires VIO_ALLOW_NET=1 (same gate
+        as web research). Returns a summary dict."""
+        import websearch
+        if not websearch.net_enabled():
+            return {"ok": False,
+                    "answer": "GitHub learning needs internet access. Start Vio with "
+                              "VIO_ALLOW_NET=1, then retry "
+                              "`learn from github owner/repo`."}
         from gitlearn import fetch_repo_docs
         owner, repo, docs, skipped = fetch_repo_docs(spec)
         if not docs:
@@ -1456,10 +1465,12 @@ class Mind:
         payload = (m.group(1).strip() if m else "")
         return payload or None
 
-    def research(self, query, k=4):
+    def research(self, query, k=4, propose_skill=False):
         """WEB RESEARCH: search the public web, read the top pages, LEARN them into the
         library, then answer grounded on those fresh sources with citations. Read-only;
-        requires the user to opt in with VIO_ALLOW_NET=1. Returns a result dict."""
+        requires the user to opt in with VIO_ALLOW_NET=1. Returns a result dict.
+        If propose_skill=True and research succeeds, also drafts a pending SkillProposal
+        (never auto-installed — use approve skill: <id>)."""
         import websearch
         if not websearch.net_enabled():
             return {"ok": False, "how": "web research (disabled)", "verified": False,
@@ -1511,19 +1522,72 @@ class Mind:
         ctx = [f"[{d['title']}] {d['text'][:4000]}" for d in fetched]
         note = (f"\n\nSources I read just now (and learned):\n{cites}")
         trace = [f"fetched {len(fetched)} page(s); learned {len(all_chunks)} passages"]
+        ans_body = ""
         if self.llm is not None and self.llm.available:
             from llm import grounded_prompt, GROUNDED_SYSTEM_D
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-            ans = self.llm.generate(grounded_prompt(query, ctx), system=GROUNDED_SYSTEM_D,
-                                    max_tokens=budget)
-            if ans:
-                return {"ok": True, "how": "web research (LLM, grounded)", "verified": True,
-                        "answer": ans + note, "trace": trace}
-        # no LLM (or it didn't answer) — extract the most relevant lines from what we read
-        excerpt = self.thinker.synthesize(query, [d["text"] for d in fetched], [])
-        body = excerpt or (fetched[0]["text"][:1200].rstrip() + " …")
-        return {"ok": True, "how": "web research (excerpt)", "verified": True,
-                "answer": body + note, "trace": trace}
+            ans_body = self.llm.generate(grounded_prompt(query, ctx), system=GROUNDED_SYSTEM_D,
+                                         max_tokens=budget) or ""
+        if not ans_body:
+            excerpt = self.thinker.synthesize(query, [d["text"] for d in fetched], [])
+            ans_body = excerpt or (fetched[0]["text"][:1200].rstrip() + " …")
+        how = ("web research (LLM, grounded)" if (self.llm and self.llm.available and ans_body)
+               else "web research (excerpt)")
+        out = {"ok": True, "how": how, "verified": True,
+               "answer": ans_body + note, "trace": trace}
+        if propose_skill:
+            prop_note = self._maybe_propose_skill(query, ans_body, fetched)
+            if prop_note:
+                out["answer"] += prop_note
+                out["trace"] = list(out["trace"]) + ["skill proposal drafted (pending)"]
+        return out
+
+    def _maybe_propose_skill(self, topic, answer_text, fetched):
+        """Draft a pending SkillProposal from research — never auto-installs."""
+        try:
+            srcs = [f"{d.get('title')} — {d.get('url')}" for d in (fetched or [])]
+            draft = draft_from_research(topic, answer_text, sources=srcs, llm=self.llm)
+            if not draft:
+                return ""
+            item, msg = self.skill_proposals.propose(
+                draft["name"], draft["trigger"], draft["reply"],
+                source=draft.get("source", ""), evidence=draft.get("evidence", ""),
+                agent="research")
+            if not item:
+                return ""
+            return f"\n\n— Skill proposal (pending approval) —\n{msg}"
+        except Exception:
+            return ""
+
+    def train_skill_from_web(self, topic):
+        """Explicit: research a topic and propose a skill (human must approve)."""
+        r = self.research(topic, propose_skill=True)
+        if not r.get("ok"):
+            return r
+        r["how"] = "skill_grow (research → proposal)"
+        return r
+
+    def list_skill_proposals(self, status="pending"):
+        items = self.skill_proposals.list(status=status or None)
+        if not items:
+            return {"answer": "No skill proposals"
+                    + (f" with status={status}." if status else "."),
+                    "how": "skill_grow", "verified": True, "trace": []}
+        lines = [f"Skill proposals ({status or 'all'}):"]
+        for it in items[-30:]:
+            lines.append(f"  • [{it.get('status')}] {it.get('id')}  {it.get('name')}"
+                         f"  trigger={it.get('trigger')!r}")
+        lines.append("Approve: approve skill: <id>   Reject: reject skill: <id>")
+        return {"answer": "\n".join(lines), "how": "skill_grow", "verified": True,
+                "trace": [], "proposals": items}
+
+    def approve_skill_proposal(self, key):
+        ok, msg = self.skill_proposals.approve(key, self.skills)
+        return {"answer": msg, "how": "skill_grow (approve)", "verified": ok, "trace": []}
+
+    def reject_skill_proposal(self, key):
+        ok, msg = self.skill_proposals.reject(key)
+        return {"answer": msg, "how": "skill_grow (reject)", "verified": ok, "trace": []}
 
     # diagram request: "draw: X", "diagram: X", "sketch a X", "visualize X" — but NOT a
     # math function plot ("draw y=x^2" / "graph x^2"), which the plotter owns.
@@ -2316,6 +2380,21 @@ class Mind:
         if sdef:
             ok, msg = self.skills.add(*sdef)
             return {"answer": msg, "how": "skill-write", "verified": ok, "trace": []}
+
+        # governed skill growth (propose / list / approve / reject)
+        if re.match(r"^\s*(?:list\s+skill\s+proposals|skill\s+proposals|"
+                    r"pending\s+skills)\s*\??\s*$", low):
+            return self.list_skill_proposals()
+        m = re.match(r"^\s*approve\s+skill\s*[:\-]?\s*(.+)$", q, re.I)
+        if m:
+            return self.approve_skill_proposal(m.group(1).strip())
+        m = re.match(r"^\s*reject\s+skill\s*[:\-]?\s*(.+)$", q, re.I)
+        if m:
+            return self.reject_skill_proposal(m.group(1).strip())
+        m = re.match(r"^\s*(?:train\s+skill|propose\s+skill|learn\s+skill\s+from\s+web|"
+                     r"skill\s+from\s+(?:web|research))\s*[:\-]?\s*(.+)$", q, re.I)
+        if m:
+            return self.train_skill_from_web(m.group(1).strip())
 
         # a user-taught skill reflex fires before the built-in tools
         sk = self.skills.match(q)

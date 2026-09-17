@@ -1085,14 +1085,43 @@ class H(BaseHTTPRequestHandler):
             si = getattr(MIND, "si", None)
             self._s(200, json.dumps(si.propose() if si else {"available": False},
                                     ensure_ascii=False))
-        elif self.path == "/api/improve/promote":        # requires explicit approval
+        elif self.path == "/api/improve/promote":        # requires explicit approval + golden
             si = getattr(MIND, "si", None)
             res = (si.promote(body.get("model", ""), approved=bool(body.get("approved")),
-                              note=body.get("note", "")) if si else {"ok": False})
+                              note=body.get("note", ""),
+                              require_golden=body.get("require_golden", True) is not False
+                              ) if si else {"ok": False})
             self._s(200, json.dumps(res, ensure_ascii=False))
         elif self.path == "/api/improve/rollback":
             si = getattr(MIND, "si", None)
             self._s(200, json.dumps(si.rollback() if si else {"ok": False}, ensure_ascii=False))
+
+        elif self.path == "/api/skills/proposals":
+            status = body.get("status", "pending")
+            items = (MIND.skill_proposals.list(status=status or None)
+                     if hasattr(MIND, "skill_proposals") else [])
+            self._s(200, json.dumps({"proposals": items}, ensure_ascii=False))
+        elif self.path == "/api/skills/propose":
+            # draft from web research (needs VIO_ALLOW_NET) or accept explicit fields
+            if body.get("topic"):
+                r = MIND.train_skill_from_web(body["topic"])
+                self._s(200, json.dumps(r, ensure_ascii=False))
+            elif body.get("name") and body.get("trigger") and body.get("reply"):
+                item, msg = MIND.skill_proposals.propose(
+                    body["name"], body["trigger"], body["reply"],
+                    source=body.get("source", "api"), evidence=body.get("evidence", ""),
+                    agent=body.get("agent", "api"))
+                self._s(200, json.dumps({"ok": bool(item), "message": msg,
+                                         "proposal": item}, ensure_ascii=False))
+            else:
+                self._s(200, json.dumps({"ok": False,
+                                         "message": "need topic or name+trigger+reply"}))
+        elif self.path == "/api/skills/approve":
+            r = MIND.approve_skill_proposal(body.get("id") or body.get("name") or "")
+            self._s(200, json.dumps(r, ensure_ascii=False))
+        elif self.path == "/api/skills/reject":
+            r = MIND.reject_skill_proposal(body.get("id") or body.get("name") or "")
+            self._s(200, json.dumps(r, ensure_ascii=False))
 
         elif self.path == "/api/draw":                   # generate a diagram, return its id
             req = (body.get("request") or body.get("message") or "").strip()
@@ -1107,7 +1136,9 @@ class H(BaseHTTPRequestHandler):
             if not model:
                 self._s(200, json.dumps({"ok": False, "message": "no model given"}))
             elif si:                                     # tracked switch (rollback-able)
-                res = si.promote(model, approved=True, note="model switch from UI")
+                # Live brain dropdown = switch only; golden gate is for candidate promote.
+                res = si.promote(model, approved=True, note="model switch from UI",
+                                 require_golden=False)
                 res["current"] = (llm.model if (llm and llm.available) else None)
                 res["available"] = bool(llm and llm.available)
                 self._s(200, json.dumps(res, ensure_ascii=False))
