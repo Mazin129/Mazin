@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.git/
+# runtime state — belongs in the mounted volume, never baked into the image
+traces.jsonl
+curated_sft.jsonl
+model_state.json
+vio_sft.jsonl
+*.jsonl
+train_all.log
+own_model/
+corpus/rfc_clean/
+*.pt
+data/
+mind_memory.json
+knowledge.json
+skills.json
+episodic.json
+graph.json
+gaps.json
+# secrets
+deploy/.env

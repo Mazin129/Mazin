@@ -1,0 +1,33 @@
+# systemd unit for running Vio without Docker on a VPS.
+#   1. edit the paths, User, and Environment values below
+#   2. sudo cp vio.service /etc/systemd/system/
+#   3. sudo systemctl enable --now vio
+# Put Caddy/nginx in front for TLS; Vio binds to localhost so only the proxy reaches it.
+[Unit]
+Description=Vio local reasoning assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vio
+WorkingDirectory=/opt/vio/AI-Foundation-Model-Design/mind
+Environment=MIND_HOST=127.0.0.1
+Environment=MIND_PORT=8100
+Environment=VIO_NO_BROWSER=1
+Environment=VIO_DATA_DIR=/var/lib/vio
+Environment=VIO_HTTPS=1
+Environment=VIO_TOKEN=change-me-to-a-long-random-code
+Environment=VIO_ALLOWED_HOSTS=vio.example.com
+Environment=VIO_LLM_URL=http://127.0.0.1:11434
+ExecStart=/usr/bin/python3 web.py --service
+Restart=on-failure
+RestartSec=3
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vio
+
+[Install]
+WantedBy=multi-user.target
