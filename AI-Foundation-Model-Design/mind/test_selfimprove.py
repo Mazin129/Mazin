@@ -39,14 +39,33 @@ def main():
     check("curator kept some", len(curated) >= 2, str(len(curated)))
     check("curator dropped no-source", all((r.get("how") or "") != "no-source" for r in curated))
 
-    # model manager: promotion is GATED, rollback works
+    # Model manager: promotion is gated TWICE — by human approval, and by the golden
+    # suite. Approval alone is no longer enough for a candidate model; the caller must
+    # also present a green golden result. (The UI brain dropdown is a live switch
+    # between already-installed models, not a promotion, so it opts out with
+    # require_golden=False.) All four paths are checked here.
     mm = m.si.models
     gated = mm.promote("candidate-v2")
     check("promote gated without approval", gated.get("gated") and not gated.get("ok"))
-    ok = mm.promote("candidate-v2", approved=True)
-    check("approved promote applies", ok.get("ok") and mm.current() == "candidate-v2")
+
+    no_golden = mm.promote("candidate-v2", approved=True)
+    check("approved promote still blocked without a green golden suite",
+          no_golden.get("gated") and not no_golden.get("ok")
+          and "golden" in (no_golden.get("message") or "").lower())
+
+    switched = mm.promote("candidate-v2", approved=True, require_golden=False)
+    check("live model switch applies (golden not required)",
+          switched.get("ok") and mm.current() == "candidate-v2")
+
     rb = mm.rollback()
     check("rollback reverts", rb.get("ok") and mm.current() != "candidate-v2")
+
+    # the orchestrator runs the golden suite itself, then promotes if it is green
+    promoted = m.si.promote("candidate-v3", approved=True)
+    check("orchestrator promotes when the golden suite is green",
+          promoted.get("ok") and mm.current() == "candidate-v3", str(promoted.get("message", "")))
+    check("rollback reverts the orchestrator promotion too",
+          m.si.rollback().get("ok") and mm.current() != "candidate-v3")
 
     # propose(): runs curate + eval, stops at the approval gate (never trains/promotes)
     prop = m.si.propose()
