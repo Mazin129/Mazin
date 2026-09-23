@@ -54,7 +54,7 @@ def run(verbose=False):
     try:
         import brain as quality
         import configparse
-        from agents import Guardrail, Result, READ, WRITE
+        from agents import Guardrail, Result, READ
         m = _mind()
         m.teach("OSPF is a link-state interior gateway routing protocol.")
         m.learn_text(CONFIG, source="golden.conf")

@@ -177,7 +177,6 @@ def test_agent_scoring(monkeypatch):
 
 
 if __name__ == "__main__":
-    import types
 
     class _MP:
         """Tiny monkeypatch shim so this runs with plain `python test_websearch.py`."""

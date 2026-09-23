@@ -36,7 +36,6 @@ def main():
 
     # curator: keeps good, drops no-source and 👎
     curated = m.si.curator.curate()
-    hows = {r.get("how", "").split(" ")[0] for r in curated}
     check("curator kept some", len(curated) >= 2, str(len(curated)))
     check("curator dropped no-source", all((r.get("how") or "") != "no-source" for r in curated))
 

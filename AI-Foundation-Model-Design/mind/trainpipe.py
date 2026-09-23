@@ -25,7 +25,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 
 # --------------------------------------------------------------------------- #
 # licensing

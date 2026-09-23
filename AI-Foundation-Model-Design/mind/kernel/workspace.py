@@ -20,7 +20,6 @@ Design notes:
 from __future__ import annotations
 
 import itertools
-import time
 from dataclasses import dataclass, field
 
 

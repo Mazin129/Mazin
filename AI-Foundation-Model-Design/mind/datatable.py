@@ -196,7 +196,7 @@ class DataTable:
                     return (f"Total revenue = {_fmt(sum(vals))}"
                             + (f"  (sum of {price} × {qty} over {len(vals):,} rows)." if qty
                                else f"  (sum of {price})."))
-                return self._reduce(agg, vals, f"revenue")
+                return self._reduce(agg, vals, "revenue")
 
         col = self._find_col(ql, numeric_only=(agg not in (None, "count")))
         if agg == "count":

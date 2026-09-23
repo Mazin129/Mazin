@@ -142,7 +142,7 @@ def main(argv=None):
     if not text:
         print("No training text found. Add datasets, teach Vio, or pass --extra <folder>.")
         return 1
-    mb = report(text, sources)
+    report(text, sources)
     if a.scan:
         return 0
 

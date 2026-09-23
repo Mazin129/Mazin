@@ -486,6 +486,9 @@ class Library:
         self._lock = threading.RLock()
         self.docs = []
         self.sem = None
+        # bumped on every write. The parsed-configuration cache keys off it, so one
+        # question re-parses the config at most once instead of once per consumer.
+        self.version = 0
         if os.path.exists(KB_FILE):
             self.docs = json.load(open(KB_FILE, encoding="utf-8"))
         else:
@@ -554,6 +557,7 @@ class Library:
 
     def add_many(self, texts):
         with self._lock:
+            self.version += 1                       # invalidates the parsed-config cache
             self.docs = self.docs + list(texts)     # rebind, don't mutate in place
             json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
@@ -562,6 +566,7 @@ class Library:
     def replace(self, texts):
         """Swap the whole corpus (used by library cleaning) and rebuild the index."""
         with self._lock:
+            self.version += 1
             self.docs = list(texts)
             json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
@@ -1284,7 +1289,12 @@ class Mind:
                 skipped.append((name, str(e)[:60])); continue
             if len((text or "").strip()) < 20:
                 skipped.append((name, "empty / too short")); continue
-            all_chunks.extend(self._smart_chunks(text))
+            # NOTE: this used to reference an undefined `chunks`, so learn_folder raised
+            # NameError on the first file it managed to read — folder ingest never worked.
+            chunks, _dropped = self._drop_stubs(self._smart_chunks(text))
+            if not chunks:
+                skipped.append((name, "no usable passages (headings only)")); continue
+            all_chunks.extend(chunks)
             self.graph.learn_text(text)
             per.append((name, f"{len(chunks)} passages")); learned += 1
         if all_chunks:
@@ -1348,9 +1358,9 @@ class Mind:
     def config_status(self):
         """What device configuration does Vio actually hold? Answers the question the
         user cannot otherwise check: 'I uploaded my config — did it arrive?'"""
-        import configparse
+        import brain
         docs = self.lib.docs
-        objs = configparse.parse_many(docs)
+        objs = brain.survey(self).config_objects      # cached parse, not a second one
         cfgish = [d for d in docs if self._is_configish_snippet(d)]
         lines = [f"**Library:** {len(docs)} passage(s) · "
                  f"{len(cfgish)} config-shaped · {len(objs)} parsed config object(s)"]
@@ -2019,8 +2029,13 @@ class Mind:
             self._evidence_survey = brain.survey(self)
             self._intents = brain.read(q, self._evidence_survey.vocabulary)
             self._plan = brain.decide(self._intents[0], self._evidence_survey)
-        except Exception:
+            self._brain_error = ""
+        except Exception as ex:
+            # Degrading silently here is how a broken reader turns into "Vio gives bad
+            # answers" with no way to tell why. Keep the failure and surface it in the
+            # trace of whatever answer comes out of the fallback path.
             self._intents, self._plan, self._evidence_survey = [], None, None
+            self._brain_error = f"{type(ex).__name__}: {ex}"
 
         # A REVIEW of the configuration is its own strategy: "audit my config", "review
         # the firewall", "any problems with my policies", "is this secure". The brain
@@ -2034,6 +2049,7 @@ class Mind:
                                  r"issues?|misconfig\w*|shadow\w*|harden|posture)\b", low)):
                 r = self.audit_config()
                 self._last_q = q
+                r["cortex"] = "skipped"        # every finding is deterministic
                 r["understood"] = _u0.summary()
                 r["intent"] = _u0.as_dict()
                 self._remember_episode(q, r)
@@ -2068,6 +2084,7 @@ class Mind:
                          "trace": [f"answered {len(answers)} question(s) separately"]}
                 self._last_q = q
                 r.setdefault("trace", [])
+                r["cortex"] = "skipped"        # answered from the config, no model used
                 r["understood"] = self._intents[0].summary()
                 r["intent"] = self._intents[0].as_dict()
                 r["trace"] = list(r["trace"]) + [
@@ -2096,6 +2113,9 @@ class Mind:
                     "understood": self._intents[0].summary(),
                     "intent": self._intents[0].as_dict(),
                     "plan": self._plan.as_dict(),
+                    # the model is deliberately not consulted here — say so, so the UI
+                    # badge reads "model not used" rather than showing nothing at all
+                    "cortex": "skipped",
                     "trace": [f"understood: {self._intents[0].summary()}",
                               f"plan: {self._plan.strategy} — {self._plan.reason}",
                               f"held: {len(self._evidence_survey.config_objects)} config "
@@ -2131,6 +2151,10 @@ class Mind:
             r["intent"] = self._intents[0].as_dict()
             r["trace"].insert(0, "understood: " + "; ".join(
                 i.summary() for i in self._intents[:4]))
+        elif getattr(self, "_brain_error", ""):
+            r["trace"].insert(0, f"understanding FAILED ({self._brain_error}) — answered "
+                                 "by the fallback router, which cannot check whether the "
+                                 "right kind of evidence was used")
 
         # Curiosity (§12): a miss becomes a tracked knowledge gap + a teachable follow-up;
         # a confident answer closes any gap on that topic.

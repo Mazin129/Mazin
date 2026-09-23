@@ -198,7 +198,7 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
 
 Quality is enforced centrally, so it holds no matter which agent answered:
 
-- **Never verify weak/empty** — `quality.finalize()` runs on **every** response after the
+- **Never verify weak/empty** — `brain.verify()` runs on **every** response after the
   critic: an empty, too-short, or hedging answer can never wear a ✓; a factual/security
   claim with **no local evidence and no web source** is shown but tagged *"unverified (no
   local evidence)."*

@@ -102,8 +102,7 @@ class SolveAgent:
         # BEFORE searching, and say so plainly instead of serving manual prose.
         if _need == "config":
             try:
-                import configparse
-                _objs = configparse.parse_many(self.mind.lib.docs)
+                _objs = brain.survey(self.mind).config_objects   # cached, not re-parsed
             except Exception:
                 _objs = []
             emit(f"📂 That needs your device configuration — I have "

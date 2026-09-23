@@ -101,14 +101,22 @@ class Executive:
 
         # Answer-quality gate (applies to EVERY path): never verify an empty/weak answer,
         # never verify a factual/security claim with no evidence, and cite the grounding.
+        # If this gate ever fails, an unverified answer would sail through wearing a ✓.
+        # Swallowing that silently is worse than the crash: FAIL CLOSED instead — drop
+        # the verified flag and say so in the trace, so a broken gate is visible.
         try:
             import brain as quality
             result = quality.verify(result, evidence, q)
             if not result.get("verified") and conf > 0.6 \
                     and (result.get("how") or "").endswith("unverified (no local evidence)"):
                 conf = 0.5                    # keep confidence honest when we drop 'verified'
-        except Exception:
-            pass
+        except Exception as ex:
+            result = dict(result)
+            result["verified"] = False
+            result["trace"] = list(result.get("trace") or []) + [
+                f"quality gate FAILED to run ({type(ex).__name__}: {ex}) — this answer "
+                "is unverified by default"]
+            conf = min(conf, 0.3)
 
         # Phase-6: apply the calibration correction learned from feedback (§10), so the
         # stated confidence self-tunes toward how often Vio is actually right.

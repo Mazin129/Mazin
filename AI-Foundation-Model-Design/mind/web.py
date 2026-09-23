@@ -1179,7 +1179,6 @@ class H(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    import sys
     import threading
     url = f"http://localhost:{PORT}"
     # --service (or VIO_NO_BROWSER) runs Vio quietly in the background — no browser

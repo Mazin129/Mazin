@@ -108,17 +108,6 @@ def where(objs, **field_contains):
     return res
 
 
-# object kinds users refer to by short words → the FortiGate kind substring
-KIND_WORDS = {
-    "policy": "policy", "policies": "policy", "rule": "policy", "rules": "policy",
-    "address": "address", "addresses": "address", "object": "address",
-    "interface": "interface", "interfaces": "interface",
-    "service": "service", "services": "service",
-    "vip": "vip", "route": "router", "routes": "router", "vpn": "vpn",
-    "user": "user", "users": "user", "zone": "zone",
-}
-
-
 def summary(o: ConfigObject) -> str:
     """Compact, structured one-line view for an LLM prompt (no wall of text)."""
     keys = ("name", "srcintf", "dstintf", "srcaddr", "dstaddr", "service", "action",

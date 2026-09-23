@@ -188,18 +188,25 @@ def _form_of(low):
     return "explain"
 
 
-def _subject_of(text, low):
+def _subject_of(text, low, host=None):
     """The most distinctive content word — what the question is ABOUT.
 
     An ACRONYM written in capitals (BGP, TLS, VLAN, OSPF) is almost always the topic,
     however short; otherwise the longest non-stopword is. Both are properties of how
     people write, so this needs no topic list and keeps working for subjects nobody
-    anticipated — "why would BGP sessions flap" is about BGP, not about sessions."""
+    anticipated — "why would BGP sessions flap" is about BGP, not about sessions.
+
+    The DEVICE NAME is excluded: "show static route on SA-OCC firewall" is about routes,
+    not about "SA". A hostname is capitalised like an acronym, so without this the
+    machine's name is mistaken for the topic."""
+    hostlow = (host or "").lower()
+    hostparts = {p for p in re.split(r"[-_]", hostlow) if p} | {hostlow}
     acronyms = [w for w in re.findall(r"\b[A-Z][A-Z0-9]{1,7}\b", text or "")
-                if w.lower() not in _STOP]
+                if w.lower() not in _STOP and w.lower() not in hostparts]
     if acronyms:
         return acronyms[0].lower()
-    words = [w for w in re.findall(r"[a-z0-9_.-]{3,}", low) if w not in _STOP]
+    words = [w for w in re.findall(r"[a-z0-9_.-]{3,}", low)
+             if w not in _STOP and w not in hostparts]
     return max(words, key=len) if words else None
 
 
@@ -227,7 +234,6 @@ def understand(q, vocabulary=None):
         return u
 
     u.form = _form_of(low)
-    u.subject = _subject_of(u.text, low)
     u.qualified = bool(re.search(
         r"\b(that|which|with|without|pointing|matching|using|where|containing|"
         r"having|via|through)\b", low))
@@ -239,6 +245,8 @@ def understand(q, vocabulary=None):
         if not _VENDOR.fullmatch(cand):
             u.host = cand
             break
+    # host first, so the device's name is not mistaken for the topic
+    u.subject = _subject_of(u.text, low, u.host)
 
     u.kind = _kind_of(low, vocabulary or {})
 
@@ -417,8 +425,26 @@ def config_vocabulary(objects):
     return vocab
 
 
-def survey(mind):
-    """Take stock of everything that could answer a question."""
+def survey(mind, cache=True):
+    """Take stock of everything that could answer a question.
+
+    Parsing a large configuration costs real time (tens of milliseconds for thousands
+    of objects), and several consumers want the same answer during one question. The
+    result is cached against the library's version counter, so a write invalidates it
+    and nothing can read a stale inventory."""
+    lib = getattr(mind, "lib", None)
+    ver = getattr(lib, "version", None)
+    if cache and ver is not None:
+        hit = getattr(mind, "_survey_cache", None)
+        if hit is not None and hit[0] == ver:
+            return hit[1]
+    ev = _survey_uncached(mind)
+    if cache and ver is not None:
+        mind._survey_cache = (ver, ev)
+    return ev
+
+
+def _survey_uncached(mind):
     ev = Evidence()
     docs = getattr(getattr(mind, "lib", None), "docs", []) or []
     ev.passages = len(docs)
