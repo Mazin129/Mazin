@@ -20,7 +20,14 @@ rem    winget install --id Cloudflare.cloudflared
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-rem ── Named tunnel (optional). Leave both blank for a quick tunnel. ─────────────
+rem ── Which mode? ──────────────────────────────────────────────────────────────
+rem  Quick tunnel ........ leave both blank.
+rem  Dashboard tunnel .... set CF_HOSTNAME only. For a tunnel created in the
+rem                        Cloudflare Zero Trust dashboard and installed as a Windows
+rem                        service ("cloudflared service install <token>", run once as
+rem                        Administrator). The service already carries the traffic, so
+rem                        this script only starts Vio with the right settings.
+rem  Config-file tunnel .. set CF_TUNNEL and CF_HOSTNAME (setup at the bottom).
 set "CF_TUNNEL="
 set "CF_HOSTNAME="
 
@@ -66,6 +73,31 @@ if "!CF_HOSTNAME!"=="" (
 rem ── model: leave unset so Vio picks the best INSTALLED model. (Naming one that
 rem  isn't installed makes Vio silently pick another — see `python doctor.py`.)
 set "VIO_ALLOW_NET=1"
+
+rem ── Dashboard tunnel: the Windows service does the tunnelling; just run Vio ───
+if not "!CF_HOSTNAME!"=="" if "!CF_TUNNEL!"=="" (
+  sc query cloudflared >nul 2>nul
+  if errorlevel 1 (
+    echo.
+    echo CF_HOSTNAME is set but no "cloudflared" Windows service is installed.
+    echo Install it ONCE from an Administrator terminal ^(right-click Terminal,
+    echo "Run as administrator"^) using the command the Cloudflare dashboard gives you:
+    echo     cloudflared.exe service install ^<your-tunnel-token^>
+    echo.
+    pause
+    exit /b 1
+  )
+  echo.
+  echo Dashboard tunnel: the cloudflared service carries the traffic.
+  echo Open https://!CF_HOSTNAME!/ and sign in with your token.
+  echo In the dashboard, the public hostname must point to  http://localhost:8100
+  echo.
+  echo Close this window to stop Vio.
+  echo.
+  python web.py --service
+  pause
+  exit /b 0
+)
 
 echo.
 echo Starting Vio in a second window...
