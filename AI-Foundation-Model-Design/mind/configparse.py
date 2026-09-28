@@ -56,6 +56,13 @@ def parse(text: str):
             cur = ConfigObject(kind=kinds[-1], name=m.group(1).strip().strip('"'), raw=raw)
             continue
         m = _SET.match(line)
+        if m and cur is None and kinds:
+            # A SETTINGS block — `config system global`, `config log setting`,
+            # `config system password-policy` — has `set` lines and no `edit`. Those
+            # lines used to be dropped, which made every device-wide security setting
+            # (admin TLS versions, strong-crypto, password policy) invisible. Represent
+            # the block as one object with an empty name.
+            cur = ConfigObject(kind=kinds[-1], name="", raw=raw)
         if m and cur is not None:
             cur.fields[m.group(1).lower()] = m.group(2).strip()
             cur.raw += "\n" + raw

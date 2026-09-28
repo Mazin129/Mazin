@@ -60,7 +60,7 @@ in `docker-compose.yml`. For **C**, drop the `ollama` service and set `VIO_LLM_U
 
 **Load your knowledge** (once):
 ```
-docker compose exec vio python teach_datasets.py       # bundled datasets
+docker compose exec vio python teach_datasets.py       # = 'learn everything' (all levels)
 # your own docs: put them in a folder, mount it, then:  python ingest.py /docs
 ```
 

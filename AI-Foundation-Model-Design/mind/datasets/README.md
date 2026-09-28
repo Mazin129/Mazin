@@ -16,6 +16,14 @@ knowledge graph. Each file is one domain:
 
 ## Teach it all to Vio (one command)
 
+In the Vio chat, type:
+
+```
+learn everything
+```
+
+or from a terminal:
+
 ```bash
 cd AI-Foundation-Model-Design/mind
 python teach_datasets.py

@@ -130,7 +130,7 @@ def _signature(o):
 # ---------------------------------------------------------------------------- #
 # the checks
 # ---------------------------------------------------------------------------- #
-def _check_policies(policies):
+def _check_policies(policies, wan=frozenset()):
     out = []
     if not policies:
         return out
@@ -159,8 +159,16 @@ def _check_policies(policies):
                 "that was never narrowed. Restrict at least the destination and service, "
                 "or move it below the specific rules and log it.", [p.name]))
         elif _action(p) == "accept":
-            loose = [f for f, v in (("source", src), ("destination", dst),
-                                    ("service", svc)) if _is_any(v)]
+            # "all" on the INTERNET side of a rule is the normal case, not a finding:
+            # outbound browsing has destination all, a published server has source all.
+            # Only an unrestricted axis on the inside is worth a reviewer's time.
+            src_if, dst_if = _vals(p, "srcintf"), _vals(p, "dstintf")
+            src_wan = any(_is_wan(i, wan) for i in src_if)
+            dst_wan = any(_is_wan(i, wan) for i in dst_if)
+            loose = [f for f, v, inet in (("source", src, src_wan),
+                                          ("destination", dst, dst_wan),
+                                          ("service", svc, False))
+                     if _is_any(v) and not inet]
             if len(loose) >= 2:
                 out.append(Finding(
                     "overly-permissive", MEDIUM,
@@ -351,6 +359,230 @@ def _check_interfaces(objects, policies, routes):
 
 
 # ---------------------------------------------------------------------------- #
+# DEVICE HARDENING
+#
+# The rule-base checks above find logic errors between policies. These find the device
+# itself exposed: management reachable from the internet, cleartext admin protocols,
+# weak VPN cryptography, default SNMP communities. They cover the ground of the public
+# FortiGate hardening guides (the CIS FortiGate Benchmark and the audit tools built on
+# it) — written here from the practices themselves, not copied from any benchmark text.
+#
+# Same discipline as everything else in this file: a setting that is ABSENT from the
+# export is never assumed to be bad. Where FortiOS's default is the insecure value
+# (admin trusted hosts, which default to "anywhere") absence is reported, because in
+# that case absence genuinely is the insecure state.
+# ---------------------------------------------------------------------------- #
+import re as _re
+
+_WAN_NAME = _re.compile(r"(^|[^a-z])(wan\d*|internet|outside|external|isp\d*|untrust\w*)"
+                        r"($|[^a-z])", _re.I)
+_MGMT = {"https", "ssh", "http", "telnet", "snmp"}
+_CLEARTEXT = {"http", "telnet"}
+
+
+def _kind(objects, name):
+    return [o for o in objects if (o.kind or "").strip().lower() == name]
+
+
+def _one(objects, name):
+    found = _kind(objects, name)
+    return found[0] if found else None
+
+
+def _val(o, key):
+    return (o.get(key) or "").strip().strip('"').lower()
+
+
+def _wan_interfaces(objects):
+    """Names of internet-facing interfaces: those the config gives role 'wan', plus
+    names that say so (wan1, internet, outside, isp2 …)."""
+    names = set()
+    for o in _kind(objects, "system interface"):
+        if _val(o, "role") == "wan" or _WAN_NAME.search(str(o.name)):
+            names.add(str(o.name).lower())
+    return names
+
+
+def _is_wan(name, wan):
+    return name in wan or bool(_WAN_NAME.search(name))
+
+
+def _check_hardening(objects, policies):
+    out = []
+    wan = _wan_interfaces(objects)
+
+    # -- management access on interfaces --------------------------------------- #
+    for o in _kind(objects, "system interface"):
+        name = str(o.name)
+        access = _vals(o, "allowaccess")
+        if not access:
+            continue
+        exposed = sorted(access & _MGMT)
+        if exposed and _is_wan(name.lower(), wan):
+            out.append(Finding(
+                "wan-management", HIGH,
+                f"interface {name} (internet-facing) accepts {', '.join(exposed)} "
+                "management access",
+                "The firewall's own admin interface is reachable from the internet — the "
+                "single most attacked surface on any FortiGate. Remove these from "
+                f"allowaccess on {name} and manage it from an internal interface or VPN.",
+                [name]))
+        elif access & _CLEARTEXT:
+            clear = sorted(access & _CLEARTEXT)
+            out.append(Finding(
+                "cleartext-admin", MEDIUM,
+                f"interface {name} allows {' and '.join(clear)} (unencrypted) admin access",
+                "Admin credentials cross the network in cleartext. Use https and ssh "
+                "only.", [name]))
+
+    # -- administrator accounts ------------------------------------------------ #
+    for o in _kind(objects, "system admin"):
+        name = str(o.name)
+        hosts = [v for k, v in o.fields.items()
+                 if k.startswith("trusthost") or k.startswith("ip6-trusthost")]
+        restricted = [h for h in hosts
+                      if h.strip().strip('"') not in ("0.0.0.0 0.0.0.0", "::/0", "")]
+        if not restricted:
+            out.append(Finding(
+                "admin-no-trusthost", MEDIUM,
+                f"admin account '{name}' can log in from any address",
+                "No trusted hosts are set, which in FortiOS means anywhere. Set "
+                "trusthost1 to your management subnet so a stolen password alone is not "
+                "enough.", [name]))
+        if name.lower() == "admin":
+            out.append(Finding(
+                "default-admin-name", LOW, "the default 'admin' account is still in use",
+                "Every password-spraying attempt targets 'admin' first. Create a named "
+                "super-admin account and remove or rename this one.", [name]))
+
+    # -- device-wide settings ---------------------------------------------------- #
+    g = _one(objects, "system global")
+    if g is not None:
+        tls = _vals(g, "admin-https-ssl-versions")
+        weak = sorted(v for v in tls if v in ("tlsv1-0", "tlsv1-1", "sslv3"))
+        if weak:
+            out.append(Finding(
+                "weak-admin-tls", MEDIUM,
+                f"admin HTTPS still accepts {', '.join(weak)}",
+                "These protocol versions are deprecated and broken. Allow tlsv1-2 and "
+                "tlsv1-3 only.", ["system global"]))
+        if _val(g, "strong-crypto") == "disable":
+            out.append(Finding(
+                "strong-crypto-off", MEDIUM, "strong-crypto is disabled",
+                "The device will negotiate weak ciphers for HTTPS, SSH and VPN. "
+                "Set strong-crypto enable.", ["system global"]))
+        t = _val(g, "admintimeout")
+        if t.isdigit() and int(t) > 15:
+            out.append(Finding(
+                "long-admin-timeout", LOW, f"admin sessions stay open for {t} minutes idle",
+                "An unattended logged-in browser stays an open door that long. 5–15 "
+                "minutes is usual.", ["system global"]))
+
+    pp = _one(objects, "system password-policy")
+    if pp is not None:
+        if _val(pp, "status") == "disable":
+            out.append(Finding(
+                "password-policy-off", MEDIUM, "the admin password policy is disabled",
+                "Nothing stops a short or trivial admin password. Enable it with a "
+                "minimum length of at least 12.", ["system password-policy"]))
+        else:
+            n = _val(pp, "minimum-length")
+            if n.isdigit() and int(n) < 8:
+                out.append(Finding(
+                    "short-passwords", LOW, f"admin passwords may be as short as {n}",
+                    "Raise minimum-length to at least 12.", ["system password-policy"]))
+
+    # -- SNMP --------------------------------------------------------------------- #
+    for o in _kind(objects, "system snmp community"):
+        cname = _val(o, "name")
+        if cname in ("public", "private"):
+            out.append(Finding(
+                "snmp-default-community", HIGH,
+                f"SNMP community '{cname}' is configured",
+                "The first community string every scanner tries. It exposes the device's "
+                "configuration and interfaces to anyone who can reach SNMP. Remove it, "
+                "and prefer SNMPv3.", [o.name]))
+        elif _val(o, "status") != "disable":
+            out.append(Finding(
+                "snmp-v2c", LOW, f"SNMPv1/v2c community '{cname or o.name}' is in use",
+                "v1/v2c send the community string in cleartext. SNMPv3 with auth and "
+                "privacy is the replacement.", [o.name]))
+
+    # -- VPN cryptography ------------------------------------------------------- #
+    for kindname in ("vpn ipsec phase1-interface", "vpn ipsec phase1",
+                     "vpn ipsec phase2-interface", "vpn ipsec phase2"):
+        for o in _kind(objects, kindname):
+            name = str(o.name)
+            props = _vals(o, "proposal")
+            broken = sorted(p for p in props
+                            if p.startswith(("des-", "3des-", "null-")) or p.endswith("-md5"))
+            if broken:
+                out.append(Finding(
+                    "weak-ipsec-crypto", HIGH,
+                    f"VPN {name} offers broken crypto: {', '.join(broken)}",
+                    "DES, 3DES and MD5 can be broken or downgraded to. Offer only AES-GCM "
+                    "or AES with SHA-256 or better.", [name]))
+            elif any(p.endswith("-sha1") for p in props):
+                out.append(Finding(
+                    "sha1-ipsec", LOW, f"VPN {name} still offers SHA-1",
+                    "SHA-1 is deprecated for new deployments. Prefer SHA-256 or better.",
+                    [name]))
+            weak_dh = sorted(d for d in _vals(o, "dhgrp") if d in ("1", "2", "5"))
+            if weak_dh:
+                out.append(Finding(
+                    "weak-dh-group", MEDIUM,
+                    f"VPN {name} allows weak Diffie-Hellman group(s) {', '.join(weak_dh)}",
+                    "Groups 1, 2 and 5 are too small for today. Use 14 or higher, "
+                    "ideally 19/20/21.", [name]))
+            if "phase1" in kindname and _val(o, "mode") == "aggressive":
+                out.append(Finding(
+                    "ike-aggressive-mode", MEDIUM, f"VPN {name} uses IKEv1 aggressive mode",
+                    "Aggressive mode exposes a hash of the pre-shared key to anyone who "
+                    "initiates a connection, which can then be cracked offline. Use main "
+                    "mode or IKEv2.", [name]))
+            if "phase2" in kindname and _val(o, "pfs") == "disable":
+                out.append(Finding(
+                    "no-pfs", LOW, f"VPN {name} has perfect forward secrecy disabled",
+                    "Without PFS, one leaked key decrypts past sessions too.", [name]))
+
+    ssl = _one(objects, "vpn ssl settings")
+    if ssl is not None and _val(ssl, "ssl-min-proto-ver") in ("tls1-0", "tls1-1"):
+        out.append(Finding(
+            "weak-sslvpn-tls", MEDIUM,
+            f"SSL-VPN accepts {_val(ssl, 'ssl-min-proto-ver')}",
+            "Set ssl-min-proto-ver tls1-2.", ["vpn ssl settings"]))
+
+    # -- policies in the internet's direction ------------------------------------ #
+    for p in policies:
+        if not _enabled(p) or _action(p) != "accept":
+            continue
+        src_if, dst_if = _vals(p, "srcintf"), _vals(p, "dstintf")
+        label = f"policy {p.name}"
+        if any(_is_wan(i, wan) for i in src_if) and not any(_is_wan(i, wan) for i in dst_if) \
+                and _is_any(_vals(p, "dstaddr")):
+            out.append(Finding(
+                "inbound-to-any", HIGH,
+                f"{label} lets the internet reach ANY internal address",
+                "An inbound accept should name the exact servers it publishes (usually a "
+                "VIP). With dstaddr all, every internal host is one open port away.",
+                [p.name]))
+        if any(_is_wan(i, wan) for i in dst_if) and not any(_is_wan(i, wan) for i in src_if):
+            inspected = (_val(p, "utm-status") == "enable"
+                         or any(_val(p, k) for k in ("av-profile", "ips-sensor",
+                                                     "webfilter-profile",
+                                                     "application-list",
+                                                     "profile-group")))
+            if not inspected:
+                out.append(Finding(
+                    "no-inspection", LOW,
+                    f"{label} sends traffic to the internet without security profiles",
+                    "No AV, IPS, web filter or application control on this path, so "
+                    "malware downloads and command-and-control traffic go unexamined.",
+                    [p.name]))
+    return out
+
+
+# ---------------------------------------------------------------------------- #
 # public API
 # ---------------------------------------------------------------------------- #
 def audit(objects):
@@ -362,10 +594,11 @@ def audit(objects):
               and "router" in (o.kind or "").lower()]
 
     findings = []
-    findings += _check_policies(policies)
+    findings += _check_policies(policies, _wan_interfaces(objects))
     findings += _check_routes(routes)
     findings += _check_unused(objects, policies)
     findings += _check_interfaces(objects, policies, routes)
+    findings += _check_hardening(objects, policies)
     findings.sort(key=lambda f: (_ORDER.get(f.severity, 9), f.rule))
     return findings
 
@@ -397,6 +630,16 @@ _GROUPED = {
                            "Either the export is partial, or these rules point at "
                            "interfaces that no longer exist. Examples: {names}."),
     "duplicate-route": ("{n} duplicate route destinations", "Examples: {names}."),
+    "admin-no-trusthost": ("{n} admin accounts can log in from any address",
+                           "No trusted hosts are set on them. Examples: {names}."),
+    "no-inspection": ("{n} of {total} policies send traffic to the internet without "
+                      "security profiles",
+                      "No AV, IPS, web filter or app control on these paths. "
+                      "Examples: {names}."),
+    "weak-ipsec-crypto": ("{n} VPNs offer broken crypto (DES/3DES/MD5)",
+                          "Offer only AES-GCM or AES with SHA-256+. Examples: {names}."),
+    "snmp-v2c": ("{n} SNMPv1/v2c communities are in use",
+                 "Cleartext community strings; move to SNMPv3. Examples: {names}."),
     "conflicting-route": ("{n} destinations have routes with different gateways",
                           "Deliberate failover is fine; otherwise one of each pair is "
                           "wrong. Examples: {names}."),
@@ -410,6 +653,7 @@ _POPULATION = {
     "duplicate-policy": "policies", "shadowed-policy": "policies",
     "conflicting-policy": "policies", "dangling-interface": "interfaces",
     "duplicate-route": "routes", "conflicting-route": "routes",
+    "no-inspection": "policies",
 }
 
 # Below this many occurrences, list them individually — the detail is still readable.
@@ -439,12 +683,15 @@ def group(findings, population=None):
             for o in f.objects:
                 if str(o) not in names:
                     names.append(str(o))
-        total = population.get(_POPULATION.get(rule, "policies")) or len(group_)
+        popkey = _POPULATION.get(rule)
+        total = (population.get(popkey) if popkey else None) or len(group_)
         ctx = {"n": len(group_), "total": total,
                "names": ", ".join(names[:6]) + (" …" if len(names) > 6 else "")}
-        # A pattern present on essentially everything is a design choice, not a defect.
+        # A pattern present on essentially everything is a design choice, not a defect —
+        # but only judge that where the population is actually known. Otherwise four
+        # SNMP communities would be measured against the number of POLICIES.
         sev = group_[0].severity
-        if len(group_) >= max(4, int(total * 0.9)) and sev == LOW:
+        if popkey and len(group_) >= max(4, int(total * 0.9)) and sev == LOW:
             sev = INFO
         # objects=[] on purpose: the detail already names examples, and Finding.line()
         # would otherwise print the same ids twice on one finding.

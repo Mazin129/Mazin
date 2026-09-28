@@ -146,6 +146,162 @@ end
 """
 
 
+WEAK_DEVICE = """config system global
+    set hostname "SA-OCC-FW01"
+    set admin-https-ssl-versions tlsv1-0 tlsv1-1 tlsv1-2
+    set strong-crypto disable
+    set admintimeout 480
+end
+config system password-policy
+    set status disable
+end
+config system interface
+    edit "wan1"
+        set ip 203.0.113.2 255.255.255.0
+        set allowaccess ping https ssh http
+        set role wan
+    next
+    edit "internal"
+        set ip 192.168.1.1 255.255.255.0
+        set allowaccess ping https ssh telnet
+    next
+end
+config system admin
+    edit "admin"
+        set accprofile "super_admin"
+    next
+end
+config system snmp community
+    edit 1
+        set name "public"
+    next
+end
+config vpn ipsec phase1-interface
+    edit "branch-vpn"
+        set interface "wan1"
+        set mode aggressive
+        set proposal 3des-md5 aes128-sha1
+        set dhgrp 2 5
+    next
+end
+config vpn ipsec phase2-interface
+    edit "branch-p2"
+        set phase1name "branch-vpn"
+        set proposal aes128-sha1
+        set pfs disable
+    next
+end
+config vpn ssl settings
+    set ssl-min-proto-ver tls1-0
+end
+config firewall address
+    edit "WEB-SRV"
+        set subnet 192.168.1.10 255.255.255.255
+    next
+end
+config firewall policy
+    edit 1
+        set name "inbound-any"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action accept
+    next
+    edit 2
+        set name "lan-out"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action accept
+    next
+end
+"""
+
+HARDENED_DEVICE = """config system global
+    set hostname "FW-GOOD"
+    set admin-https-ssl-versions tlsv1-2 tlsv1-3
+    set strong-crypto enable
+    set admintimeout 10
+end
+config system password-policy
+    set status enable
+    set minimum-length 14
+end
+config system interface
+    edit "wan1"
+        set ip 203.0.113.2 255.255.255.0
+        set allowaccess ping
+        set role wan
+    next
+    edit "internal"
+        set ip 192.168.1.1 255.255.255.0
+        set allowaccess ping https ssh
+    next
+end
+config system admin
+    edit "netops"
+        set trusthost1 192.168.1.0 255.255.255.0
+    next
+end
+config vpn ipsec phase1-interface
+    edit "branch-vpn"
+        set interface "wan1"
+        set ike-version 2
+        set proposal aes256gcm-prfsha384
+        set dhgrp 20 21
+    next
+end
+config vpn ipsec phase2-interface
+    edit "branch-p2"
+        set phase1name "branch-vpn"
+        set proposal aes256gcm
+        set pfs enable
+    next
+end
+config vpn ssl settings
+    set ssl-min-proto-ver tls1-2
+end
+config firewall address
+    edit "WEB-SRV"
+        set subnet 192.168.1.10 255.255.255.255
+    next
+    edit "LAN"
+        set subnet 192.168.1.0 255.255.255.0
+    next
+end
+config firewall policy
+    edit 1
+        set name "publish-web"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set srcaddr "all"
+        set dstaddr "WEB-SRV"
+        set service "HTTPS"
+        set action accept
+        set utm-status enable
+        set ips-sensor "default"
+        set logtraffic all
+    next
+    edit 2
+        set name "lan-out"
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "LAN"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action accept
+        set utm-status enable
+        set av-profile "default"
+        set logtraffic all
+    next
+end
+"""
+
+
 def rules(findings):
     return [f.rule for f in findings]
 
@@ -231,6 +387,37 @@ def main():
           "worth acting on" in faulty_report)
     check("few occurrences are still listed individually",
           faulty_report.count("is shadowed by") >= 1)
+
+    print("\n-- device hardening: every planted weakness is found --")
+    wobjs = configparse.parse(WEAK_DEVICE)
+    wrules = set(rules(configaudit.audit(wobjs)))
+    for rule in ("wan-management", "cleartext-admin", "admin-no-trusthost",
+                 "default-admin-name", "weak-admin-tls", "strong-crypto-off",
+                 "long-admin-timeout", "password-policy-off", "snmp-default-community",
+                 "weak-ipsec-crypto", "weak-dh-group", "ike-aggressive-mode",
+                 "sha1-ipsec", "no-pfs", "weak-sslvpn-tls", "inbound-to-any",
+                 "no-inspection"):
+        check(f"finds {rule}", rule in wrules)
+    wf = configaudit.audit(wobjs)
+    check("internet-reachable management is ranked high",
+          any(x.rule == "wan-management" and x.severity == configaudit.HIGH for x in wf))
+    check("SNMP 'public' is ranked high",
+          any(x.rule == "snmp-default-community" and x.severity == configaudit.HIGH
+              for x in wf))
+
+    print("\n-- device hardening: a hardened device produces NO findings --")
+    hobjs = configparse.parse(HARDENED_DEVICE)
+    hf = [x for x in configaudit.audit(hobjs) if x.severity != configaudit.INFO]
+    for x in hf:
+        print(f"      unexpected: [{x.severity}] {x.rule} — {x.title}")
+    check("hardened device yields no findings", not hf)
+    check("outbound browsing (destination all to the WAN) is not flagged",
+          "permissive" not in rules(configaudit.audit(hobjs)))
+
+    print("\n-- settings blocks (no edit line) are parsed --")
+    g = [o for o in wobjs if o.kind == "system global"]
+    check("config system global becomes an object", len(g) == 1)
+    check("its settings are kept", g and g[0].get("strong-crypto") == "disable")
 
     print("\n-- the report states its own limits --")
     rep = configaudit.report(f, objs)

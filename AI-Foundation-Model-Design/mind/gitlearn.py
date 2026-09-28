@@ -79,6 +79,109 @@ def _clone(owner, repo, dest):
                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+# --------------------------------------------------------------------------- #
+# LICENCE GATE
+#
+# "Learn from a repo" used to mean "learn whatever is in it" — licence ignored. Vio's
+# own data policy says nothing is learned without permission, so a repository is now
+# read only when its LICENSE grants that permission. The licence is read from the
+# repo itself; the decision is made BEFORE any document is ingested.
+# --------------------------------------------------------------------------- #
+
+class LicenseRefused(RuntimeError):
+    """The repository's licence does not permit Vio to learn from it."""
+
+
+# Permissive: reuse permitted, attribution at most. These are allowed.
+_PERMISSIVE = [
+    ("Apache-2.0", r"apache license\s*,?\s*version 2\.0|apache-2\.0"),
+    ("MIT", r"\bmit license\b|permission is hereby granted, free of charge"),
+    ("BSD-3-Clause", r"neither the name of .{0,120} nor the names of its contributors"),
+    ("BSD-2-Clause", r"redistribution and use in source and binary forms"),
+    ("ISC", r"\bisc license\b|permission to use, copy, modify, and(/or)? distribute"),
+    ("CC0-1.0", r"\bcc0\b|creative commons zero|creativecommons\.org/publicdomain/zero"),
+    ("Unlicense", r"this is free and unencumbered software released into the public domain"),
+    ("CC-BY-4.0", r"creative commons attribution 4\.0(?! .{0,40}(noncommercial|non-commercial))|"
+                  r"creativecommons\.org/licenses/by/4\.0"),
+    ("CC-BY-SA-4.0", r"attribution-sharealike 4\.0|creativecommons\.org/licenses/by-sa/4\.0"),
+    ("MPL-2.0", r"mozilla public license,?\s*v(ersion)?\.?\s*2\.0"),
+]
+# Refused: Creative Commons licences that forbid commercial use or derivatives, which
+# is exactly what training is. Matched on the licence's own NAME, never on a bare word:
+# GPL-3.0 says "noncommercially" and BSD says "All rights reserved", and both permit
+# reuse. Checked before the permissive rules because a CC-NC text also matches CC-BY.
+_RESTRICTIVE = [
+    ("CC-BY-NC", r"attribution-noncommercial|attribution-non-commercial|"
+                 r"creativecommons\.org/licenses/by-nc|\bcc by-nc\b"),
+    ("CC-BY-ND", r"attribution-noderivatives|attribution-noderivs|"
+                 r"creativecommons\.org/licenses/by-nd|\bcc by-nd\b"),
+]
+# Only after every permissive/copyleft grant has failed to match does "all rights
+# reserved" mean what it says. (BSD texts contain it too, followed by a grant.)
+_PROPRIETARY = r"all rights reserved"
+# Copyleft: allowed to read, but flagged — learned passages must not be redistributed
+# as part of a closed product. Vio is local and personal, so these are permitted.
+_COPYLEFT = [
+    ("GPL-3.0", r"gnu general public license.{0,40}version 3|gpl-3\.0"),
+    ("GPL-2.0", r"gnu general public license.{0,40}version 2|gpl-2\.0"),
+    ("AGPL-3.0", r"gnu affero general public license"),
+    ("LGPL", r"gnu lesser general public license"),
+]
+
+LICENSE_FILES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "LICENCE", "LICENCE.md",
+                 "COPYING", "COPYING.md", "LICENSE-APACHE", "LICENSE-MIT")
+
+
+def detect_license(repo_dir):
+    """Identify a repository's licence from its own licence file.
+
+    Returns (spdx_id, verdict, note):
+        verdict "allow"   — permissive or copyleft: Vio may learn from it
+                "refuse"  — non-commercial / no-derivatives / all-rights-reserved
+                "none"    — no licence file: copyright applies by default, so no
+                            permission has been granted
+    """
+    text = ""
+    for name in LICENSE_FILES:
+        p = os.path.join(repo_dir, name)
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8", errors="ignore") as f:
+                    text = f.read(20000)
+                break
+            except OSError:
+                continue
+    if not text:
+        return (None, "none",
+                "the repository has no licence file, so by default all rights are "
+                "reserved and no permission to reuse its content has been granted")
+    low = " ".join(text.lower().split())
+    for spdx, pat in _RESTRICTIVE:
+        if re.search(pat, low):
+            return (spdx, "refuse",
+                    f"its licence ({spdx}) forbids commercial use or derivative works")
+    for spdx, pat in _PERMISSIVE:
+        if re.search(pat, low):
+            return spdx, "allow", f"permissive licence ({spdx})"
+    for spdx, pat in _COPYLEFT:
+        if re.search(pat, low):
+            return (spdx, "allow",
+                    f"copyleft licence ({spdx}) — fine for personal, local use; don't "
+                    "redistribute what Vio learned from it inside a closed product")
+    if re.search(_PROPRIETARY, low):
+        return ("Proprietary", "refuse",
+                "its licence reserves all rights and grants no permission to reuse")
+    return ("unrecognised", "refuse",
+            "it has a licence file I couldn't identify, so I can't confirm that reuse "
+            "is permitted")
+
+
+def _allow_unlicensed():
+    """Explicit operator override — for your OWN private repos, which often have no
+    licence file simply because you never added one."""
+    return os.environ.get("VIO_LEARN_UNLICENSED", "").strip() in ("1", "true", "yes")
+
+
 def _read_doc(path, ext):
     if ext == ".pdf":
         from pdftext import extract_text, looks_readable
@@ -93,8 +196,12 @@ def _read_doc(path, ext):
 
 
 def fetch_repo_docs(spec):
-    """Clone the repo and return (owner, repo, [(source, text), …], skipped_count).
-    Raises ValueError for a bad spec and RuntimeError if git/clone fails."""
+    """Clone the repo and return (owner, repo, [(source, text), …], skipped_count,
+    licence) where licence = {"spdx", "verdict", "note"}.
+
+    Raises ValueError for a bad spec, RuntimeError if git/clone fails, and
+    LicenseRefused (a RuntimeError) when the repository's licence does not permit
+    reuse — checked BEFORE any document is read."""
     parsed = parse_spec(spec)
     if not parsed:
         raise ValueError("That doesn't look like a GitHub repo. Use owner/repo, e.g. "
@@ -114,6 +221,15 @@ def fetch_repo_docs(spec):
                                f"right? ({err.strip()})")
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"Cloning {owner}/{repo} timed out — the repo may be very large.")
+
+        spdx, verdict, note = detect_license(dest)
+        licence = {"spdx": spdx, "verdict": verdict, "note": note}
+        if verdict != "allow" and not _allow_unlicensed():
+            raise LicenseRefused(
+                f"I didn't learn from {owner}/{repo}: {note}. Nothing from it was stored."
+                + ("\n\nIf this is YOUR OWN repository, start Vio with "
+                   "VIO_LEARN_UNLICENSED=1 to learn it anyway."
+                   if verdict == "none" else ""))
 
         docs, skipped, total = [], 0, 0
         for root, dirs, files in os.walk(dest):
@@ -139,7 +255,7 @@ def fetch_repo_docs(spec):
                 docs.append((f"{owner}/{repo}:{rel}", text))
                 total += len(text)
                 if len(docs) >= MAX_FILES or total >= MAX_TOTAL_BYTES:
-                    return owner, repo, docs, skipped
-        return owner, repo, docs, skipped
+                    return owner, repo, docs, skipped, licence
+        return owner, repo, docs, skipped, licence
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

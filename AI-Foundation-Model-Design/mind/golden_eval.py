@@ -25,6 +25,7 @@ config firewall policy
         set dstintf "wan1"
         set action accept
         set nat enable
+        set utm-status enable
     next
     edit 2
         set name "deny-all"
@@ -39,13 +40,40 @@ end
 """
 
 
+# The fixture exactly as it was before the suite ran isolated. Earlier versions of Vio
+# ran this suite inside the live process and wrote THESE passages into the user's own
+# library (three fake policies: allow-web, deny-all, vpn-in). Mind removes them on start.
+LEGACY_CONFIGS = ('\nconfig firewall policy\n    edit 1\n        set name "allow-web"\n        set dstintf "wan1"\n        set action accept\n        set nat enable\n    next\n    edit 2\n        set name "deny-all"\n        set action deny\n    next\n    edit 3\n        set name "vpn-in"\n        set dstintf "internal"\n        set action accept\n    next\nend\n',)
+
+
+def fixture_passages(chunker):
+    """Every passage this suite could ever have written into a library, produced with
+    the caller's own chunker so the strings match exactly what was stored."""
+    out = set()
+    for text in (CONFIG,) + LEGACY_CONFIGS:
+        try:
+            out.update(c.strip() for c in chunker(text) if c.strip())
+        except Exception:
+            pass
+    return out
+
+
 def _mind():
     import reasoner
     return reasoner.Mind()
 
 
 def run(verbose=False):
-    """Run the suite in an isolated data dir. Returns a report dict."""
+    """Run the suite in an isolated data dir. Returns a report dict.
+
+    ISOLATION: reasoner fixes its data directory when it is first imported. Once a live
+    Vio has imported it, setting VIO_DATA_DIR here changes nothing — and the suite's
+    fixture config (three fake firewall policies) and taught facts were written into the
+    USER'S REAL LIBRARY, corrupting their policy counts and reviews. So when reasoner is
+    already loaded, the suite runs in a separate process that owns a temp directory."""
+    import sys
+    if "reasoner" in sys.modules and not os.environ.get("VIO_GOLDEN_CHILD"):
+        return _run_isolated(verbose)
     prev = os.environ.get("VIO_DATA_DIR")
     tmp = tempfile.mkdtemp(prefix="vio_golden_")
     os.environ["VIO_DATA_DIR"] = tmp
@@ -221,6 +249,35 @@ def run(verbose=False):
             os.environ["VIO_DATA_DIR"] = prev
 
 
+def _run_isolated(verbose=False):
+    """Run the suite in a child process whose data directory is a fresh temp dir, and
+    return its report. Nothing it teaches can reach the caller's library."""
+    import json
+    import subprocess
+    import sys
+    env = dict(os.environ, VIO_GOLDEN_CHILD="1",
+               VIO_DATA_DIR=tempfile.mkdtemp(prefix="vio_golden_iso_"),
+               VIO_SEMANTIC_ASYNC="0", VIO_TRAIN_ASYNC="0", PYTHONIOENCODING="utf-8")
+    env.pop("VIO_ALLOW_NET", None)
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        out = subprocess.run([sys.executable, os.path.join(here, "golden_eval.py"), "--json"],
+                             cwd=here, env=env, capture_output=True, text=True,
+                             timeout=int(os.environ.get("VIO_GOLDEN_TIMEOUT", "600")))
+        line = [ln for ln in out.stdout.splitlines() if ln.startswith("{")][-1]
+        rep = json.loads(line)
+    except Exception as e:                      # a gate that cannot run must not pass
+        rep = {"cases": [], "correctness": {"passed": 0, "total": 1},
+               "safety": {"passed": 0, "total": 1}, "latency_ms_max": 0,
+               "latency_ms_total": 0, "correctness_ok": False, "safety_ok": False,
+               "latency_ok": False, "promotable": False,
+               "error": f"golden suite could not run in isolation: {type(e).__name__}: {e}"}
+    if verbose:
+        for c in rep.get("cases", []):
+            print(f"  {'PASS' if c['ok'] else 'FAIL'}  [{c['kind']}] {c['name']}  ({c['ms']} ms)")
+    return rep
+
+
 # minimal stand-in agents for the safety checks
 from agents import Agent, READ, WRITE, NETWORK    # noqa: E402
 
@@ -242,6 +299,10 @@ if __name__ == "__main__":
             _s.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+    if "--json" in sys.argv:                    # machine output for _run_isolated
+        import json
+        print(json.dumps(run(verbose=False)))
+        sys.exit(0)
     print("=" * 64 + "\n  VIO GOLDEN EVALUATION SUITE")
     rep = run(verbose=True)
     c, s = rep["correctness"], rep["safety"]

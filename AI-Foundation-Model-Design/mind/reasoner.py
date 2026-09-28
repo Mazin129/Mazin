@@ -556,12 +556,25 @@ class Library:
         self.add_many([text])
 
     def add_many(self, texts):
+        """Add passages, skipping any already in the library. Returns how many were
+        actually new. Without the check, re-running a learning pass (or re-uploading a
+        file) stacked identical copies that crowded out everything else in retrieval."""
         with self._lock:
+            seen = {d.strip() for d in self.docs}
+            fresh = []
+            for t in texts:
+                k = (t or "").strip()
+                if k and k not in seen:
+                    seen.add(k)
+                    fresh.append(t)
+            if not fresh:
+                return 0
             self.version += 1                       # invalidates the parsed-config cache
-            self.docs = self.docs + list(texts)     # rebind, don't mutate in place
+            self.docs = self.docs + fresh           # rebind, don't mutate in place
             json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
             self._fit()
+            return len(fresh)
 
     def replace(self, texts):
         """Swap the whole corpus (used by library cleaning) and rebuild the index."""
@@ -623,6 +636,7 @@ class Mind:
         # Confidence Engine and Self-Critic behind it.
         self.ws = Workspace()
         self.executive = Executive(self)
+        self._purge_test_fixtures()            # undo the golden-suite leak, if any
         # CORTEX-OS Phase 3 — structured reasoning (§7), knowledge graph (§4), planning (§8).
         # Graph edges are extracted at teach-time; the modes trigger only on their specific
         # phrasing, so the fast path for ordinary questions is untouched.
@@ -1333,6 +1347,139 @@ class Mind:
         self.tables = self.tables[-5:]              # keep the last few tables
         return t.describe()
 
+    def learn_everything(self):
+        """Run every self-learning level in one pass, and report each honestly.
+
+          1  built-in network & security knowledge           offline
+          2  the bundled datasets (datasets/*.md)             offline
+          3  trusted sources + GitHub skill collections       web; licence-gated
+          4  knowledge gaps from questions I couldn't answer  web
+          5  consolidation: merge duplicates, mine relations  offline
+          6  behaviour: curate traces, run the golden gate    offline; never trains
+
+        Idempotent — the library skips passages it already holds, so re-running only
+        adds what's new. Nothing here trains or promotes a model; that stays behind
+        human approval."""
+        import glob
+        import time as _t
+        import websearch
+        t0 = _t.time()
+        start_docs = len(self.lib.docs)
+        net = websearch.net_enabled()
+        levels = []
+
+        def level(n, title, fn):
+            before = len(self.lib.docs)
+            try:
+                note = fn()
+                status = "✅"
+            except Exception as e:
+                note, status = f"failed — {type(e).__name__}: {str(e)[:120]}", "❌"
+            gained = len(self.lib.docs) - before
+            levels.append(f"{status} **{n}. {title}** — "
+                          + (f"+{gained} passage(s). " if gained else "")
+                          + (note or ""))
+
+        # 1 ─ built-in knowledge
+        def _builtin():
+            r = self.load_builtin()
+            return "" if "already loaded" not in r["answer"] else "already loaded."
+        level(1, "Built-in network & security knowledge", _builtin)
+
+        # 2 ─ bundled datasets: one add + one retrain, not 23 of each
+        def _datasets():
+            files = [f for f in sorted(glob.glob(os.path.join(HERE, "datasets", "*.md")))
+                     if os.path.basename(f).lower() != "readme.md"]
+            chunks = []
+            for f in files:
+                with open(f, encoding="utf-8", errors="ignore") as fh:
+                    text = fh.read()
+                chunks.extend(self._drop_stubs(self._smart_chunks(text))[0])
+                try:
+                    self.graph.learn_text(text)
+                except Exception:
+                    pass
+            added = self.lib.add_many(chunks) or 0
+            if added:
+                self._retrain()
+            return (f"{len(files)} file(s) read"
+                    + ("" if added else " — nothing new, already learned") + ".")
+        level(2, "Bundled datasets", _datasets)
+
+        # 3 ─ trusted sources incl. GitHub skill collections (licence gate applies)
+        def _sources():
+            if not net:
+                return "skipped — needs VIO_ALLOW_NET=1."
+            r = self.learn_sources()
+            lines = [ln for ln in r["answer"].splitlines()
+                     if ln.strip() and not ln.startswith("✓") and "Ask me" not in ln]
+            return "\n      " + "\n      ".join(lines[:24])
+        level(3, "Trusted sources & GitHub skill collections", _sources)
+
+        # 4 ─ gaps: research what I previously couldn't answer
+        def _gaps():
+            if not net:
+                open_gaps = len(getattr(self.curiosity, "gaps", {}) or {})
+                return f"skipped — needs VIO_ALLOW_NET=1 ({open_gaps} open gap(s) waiting)."
+            return self.cover_gaps()["answer"].splitlines()[0]
+        level(4, "Knowledge gaps", _gaps)
+
+        # 5 ─ consolidation
+        def _consolidate():
+            rep = self.consolidate()
+            return (f"merged {rep.get('merged', 0)} duplicate(s), mined "
+                    f"{rep.get('edges', 0)} relation(s), promoted "
+                    f"{rep.get('promoted', 0)} repeated answer(s) to reflexes.")
+        level(5, "Consolidation", _consolidate)
+
+        # 6 ─ behaviour: curate + evaluate + golden gate; never trains or promotes
+        def _behaviour():
+            if getattr(self, "si", None) is None:
+                return "self-improvement is not available in this build."
+            r = self.si.propose()
+            g = r.get("golden") or {}
+            c, s = g.get("correctness") or {}, g.get("safety") or {}
+            return (f"{r['curated'].get('written', 0)} clean example(s) curated; golden "
+                    f"gate correctness {c.get('passed', '?')}/{c.get('total', '?')}, safety "
+                    f"{s.get('passed', '?')}/{s.get('total', '?')} → "
+                    + ("PROMOTABLE" if r.get("promotable") else "not promotable")
+                    + ". Nothing was trained or promoted.")
+        level(6, "Behaviour (traces → curated examples → golden gate)", _behaviour)
+
+        self._save()
+        head = (f"**Self-learning run complete** in {_t.time() - t0:.0f}s — library "
+                f"{start_docs} → {len(self.lib.docs)} passage(s).")
+        tail = ("" if net else
+                "\n\nLevels 3–4 need internet access. Restart Vio with VIO_ALLOW_NET=1 "
+                "(start_vio_cloudflare.bat sets it) and run  learn everything  again to "
+                "pull in the trusted sources and the GitHub skill collections.")
+        return {"answer": head + "\n\n" + "\n".join(levels) + tail,
+                "how": "self-learning (all levels)", "verified": True, "confidence": 0.9,
+                "cortex": "skipped", "trace": [f"{len(levels)} level(s) run"]}
+
+    def _purge_test_fixtures(self):
+        """Remove passages the golden test suite leaked into this library.
+
+        Until it was isolated, running self-improvement from a live Vio executed the
+        golden suite in-process, and its fixture config — three fake firewall policies —
+        landed in the user's real library, where they inflated policy counts and showed
+        up in reviews. Matching is on the fixture's EXACT chunk text only, so nothing the
+        user taught or uploaded can be removed by this."""
+        if os.environ.get("VIO_GOLDEN_CHILD"):
+            return 0                       # the suite itself legitimately loads them
+        try:
+            import golden_eval
+            leaked = golden_eval.fixture_passages(self._smart_chunks)
+        except Exception:
+            return 0
+        keep = [d for d in self.lib.docs if d.strip() not in leaked]
+        removed = len(self.lib.docs) - len(keep)
+        if removed:
+            self.lib.replace(keep)
+            print(f"   🧹 removed {removed} test-fixture passage(s) that an earlier "
+                  "self-improvement run had written into your library")
+        return removed
+
     @staticmethod
     def _drop_stubs(chunks):
         """Filter ingest noise out of BULK learning (files, URLs, repos): lone config
@@ -1441,7 +1588,7 @@ class Mind:
                               "VIO_ALLOW_NET=1, then retry "
                               "`learn from github owner/repo`."}
         from gitlearn import fetch_repo_docs
-        owner, repo, docs, skipped = fetch_repo_docs(spec)
+        owner, repo, docs, skipped, licence = fetch_repo_docs(spec)
         if not docs:
             return {"ok": False,
                     "answer": f"I cloned {owner}/{repo} but found no readable docs "
@@ -1452,13 +1599,20 @@ class Mind:
             all_chunks.extend(self._smart_chunks(text))
         self.lib.add_many(all_chunks)                  # one add + one retrain (efficient)
         self._retrain()
+        # provenance: where it came from and under what licence, so any passage in the
+        # library can be traced back and its terms honoured
+        self.mem.setdefault("sources_learned", []).append(
+            {"source": f"github:{owner}/{repo}", "licence": licence.get("spdx"),
+             "passages": len(all_chunks), "at": __import__("time").time()})
         self.mem["last_learned"] = {"source": f"github:{owner}/{repo}",
-                                    "count": len(all_chunks)}
+                                    "count": len(all_chunks),
+                                    "licence": licence.get("spdx")}
         self._save()
         return {"ok": True, "owner": owner, "repo": repo, "files": len(docs),
-                "passages": len(all_chunks), "skipped": skipped,
+                "passages": len(all_chunks), "skipped": skipped, "licence": licence,
                 "answer": f"✓ Learned {len(all_chunks)} passages from {len(docs)} document(s) "
-                          f"in {owner}/{repo}. You can now ask me about it. "
+                          f"in {owner}/{repo} — licence: {licence.get('spdx') or 'none'} "
+                          f"({licence.get('note')}). You can now ask me about it. "
                           f"(Skipped {skipped} non-text file(s) like images/code.)"}
 
     # research-request intent: "research: X", "search the web for X", "look up X",
@@ -1751,13 +1905,23 @@ class Mind:
         if not rows:
             return {"ok": False, "how": "learn sources", "verified": False,
                     "answer": sources.summary(topic)}
-        learned, failed, total_chunks, url_chunks = [], [], 0, []
+        learned, failed, refused, total_chunks, url_chunks = [], [], [], 0, []
         for name, kind, ref, _tp in rows:
             try:
                 if kind == "github":
-                    r = self.learn_github(ref)
+                    try:
+                        r = self.learn_github(ref)
+                    except Exception as e:
+                        from gitlearn import LicenseRefused
+                        if isinstance(e, LicenseRefused):
+                            # say WHY in full — a truncated "I didn't learn from…" hides
+                            # the one thing the user needs to know
+                            refused.append(f"{name}: {str(e).split(': ', 1)[-1]}")
+                            continue
+                        raise
                     if r.get("ok"):
-                        learned.append(f"📦 {name} (+{r.get('passages', 0)})")
+                        lic = (r.get("licence") or {}).get("spdx") or "?"
+                        learned.append(f"📦 {name} (+{r.get('passages', 0)}, {lic})")
                         total_chunks += int(r.get("passages", 0))
                     else:
                         failed.append(f"{name}: {r.get('answer', 'no docs')[:60]}")
@@ -1789,6 +1953,9 @@ class Mind:
         parts = [f"✓ Learned {total_chunks} passages from {len(learned)} trusted source(s)."]
         if learned:
             parts.append("Learned:\n  " + "\n  ".join(learned))
+        if refused:
+            parts.append(f"Refused {len(refused)} on licence grounds (nothing stored):"
+                         "\n  " + "\n  ".join(refused))
         if failed:
             parts.append(f"Skipped {len(failed)}:\n  " + "\n  ".join(failed))
         parts.append("Ask me anything about them now.")
@@ -2009,6 +2176,13 @@ class Mind:
             return {"answer": brain.explain(um.group(1).strip(), brain.survey(self)),
                     "how": "understanding", "verified": True, "confidence": 0.9,
                     "trace": []}
+        # "learn everything" / "self learn" / "run self learning" / "improve yourself" —
+        # every learning level in one pass (see learn_everything).
+        if re.match(r"^\s*(?:learn\s+(?:everything|it\s+all|all(?:\s+levels)?)|"
+                    r"(?:run\s+)?self[-\s]?learn(?:ing)?(?:\s+(?:for\s+)?all(?:\s+levels)?)?|"
+                    r"improve\s+yourself|train\s+yourself|upgrade\s+(?:your\s+)?(?:brain|mind|knowledge))"
+                    r"\s*[.!]*\s*$", low):
+            return self.learn_everything()
         if re.match(r"^\s*(?:config\s+status|configuration\s+status|"
                     r"what\s+config(?:uration)?\s+(?:do\s+you\s+have|is\s+loaded)|"
                     r"do\s+you\s+have\s+(?:my\s+)?config(?:uration)?|"

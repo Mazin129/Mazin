@@ -47,6 +47,18 @@ SECURITY_SOURCES = [
     ("Awesome Security (list)", "github", "sbilly/awesome-security", "reference"),
     ("The Book of Secret Knowledge", "github",
      "trimstray/the-book-of-secret-knowledge", "reference"),
+
+    # ── Agent skill collections for network & security work ──────────────────
+    # SKILL.md files: structured procedures, checklists and decision guides written for
+    # AI agents. Vio learns them as grounded knowledge. Each repo's licence is checked
+    # AT LEARN TIME by gitlearn's licence gate — a repo whose licence forbids reuse, or
+    # that has none, is refused and nothing from it is stored, whatever this list says.
+    ("Cybersecurity skills (817, ATT&CK/NIST-mapped)", "github",
+     "mukul975/Anthropic-Cybersecurity-Skills", "skills"),
+    ("Firewall & network security skills (Fortinet/PAN/Cisco/SRX)", "github",
+     "jgrizzuti/fwskillsshare", "skills"),
+    ("Cybersecurity skills (defensive ops, threat hunting, GRC)", "github",
+     "Masriyan/Claude-Code-CyberSecurity-Skill", "skills"),
 ]
 
 TOPICS = sorted({t for _, _, _, t in SECURITY_SOURCES})

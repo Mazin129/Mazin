@@ -352,8 +352,8 @@ brain — back them up.** All git-ignored (per-machine).
 - **Cognition modules:** `cognition/` — `confidence`, `critic`, `calibration`,
   `curiosity`, `consolidation`, `learning`, `planning`, `reasoning`, `world_model`.
 - **Knowledge/IO:** `semantic.py`, `think.py`, `ingest.py`, `pdftext.py`, `pdfcheck.py`,
-  `diagrams.py`, `datatable.py`, `gitlearn.py`, `packs.py`, `seed_knowledge.py`,
-  `teach_datasets.py`.
+  `diagrams.py`, `datatable.py`, `gitlearn.py` (licence-gated), `packs.py`,
+  `seed_knowledge.py`, `teach_datasets.py` (CLI for `learn everything`).
 - **Web research:** `websearch.py`, `sources.py`.
 - **Diagrams:** `diagramdet.py` (deterministic SVG — default, never blank), `diagramgen.py` + `vendor/diagram-design/` (skill engine, Cathryn Lavery MIT — `VIO_DIAGRAM_ENGINE=skill`).
 - **Answer quality:** `quality.py` (verification gate + citations), `configparse.py`
