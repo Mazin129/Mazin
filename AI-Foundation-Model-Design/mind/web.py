@@ -716,7 +716,7 @@ LOGIN_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <form onsubmit="return login(event)">
  <div class="b">🧠</div><h1>Vio</h1>
  <p>Private assistant · enter your access code</p>
- <input id="t" type="password" placeholder="Access code" autocomplete="current-password" autofocus>
+ <input id="t" type="password" placeholder="Access code" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" autofocus>
  <button>Unlock</button>
  <div id="err"></div>
  <div class="lock">🔒 End-to-end over your private network</div>
@@ -875,7 +875,9 @@ class H(BaseHTTPRequestHandler):
         if _LOGIN_FAILS["until"] > now:
             self._s(429, json.dumps({"ok": False, "error": "Too many attempts. Wait a minute."}))
             return
-        given = (body or {}).get("token", "")
+        # Trim what was typed exactly as TOKEN itself is trimmed at load. A trailing
+        # space from a phone keyboard or password manager made a correct code fail.
+        given = str((body or {}).get("token", "")).strip()
         if TOKEN and hmac.compare_digest(str(given), TOKEN):
             _LOGIN_FAILS["n"] = 0
             sid = secrets.token_urlsafe(32)
