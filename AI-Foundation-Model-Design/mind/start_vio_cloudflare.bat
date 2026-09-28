@@ -47,7 +47,7 @@ rem ── login token: read from vio_token.txt, or create it on first run ─�
 rem  Same file as start_vio_remote.bat, so one token works for both.
 if not exist "vio_token.txt" (
   echo No login token yet. Type a LONG code to protect Vio, then press Enter.
-  echo This is what stands between the internet and your configs — make it long.
+  echo This is what stands between the internet and your configs - make it long.
   set /p "NEWTOK=Token: "
   <nul set /p "=!NEWTOK!" > "vio_token.txt"
   echo Saved to vio_token.txt  ^(keep it secret; it is not committed to git^).
