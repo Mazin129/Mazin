@@ -1324,6 +1324,14 @@ class Mind:
         gets denoised and sentence-chunked. Decide BEFORE denoising — denoise mangles a
         config. This is what keeps a firewall policy's settings in one passage instead of
         scattering each `set …` line into its own fragment."""
+        try:
+            import configparse
+            v = configparse.vendor(text)
+            if v in ("panos", "asa"):
+                import vendorparse
+                return vendorparse.chunk(text, v)        # one passage per rule/object
+        except Exception:
+            pass
         if self._looks_like_config(text):
             return self._chunk_config(text)
         return self._chunk(self._denoise(text))

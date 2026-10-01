@@ -416,6 +416,13 @@ def config_vocabulary(objects):
             weight = 1 if w in _DEVICE_NOUNS else 2
             for f in _forms_of(w):
                 put(f, kind, weight)
+        # Palo Alto says "security rules", Cisco says "ACL"/"access list" — the same
+        # objects as a FortiGate "firewall policy" once translated
+        if kind == "firewall policy":
+            for alias in ("rule", "security rule", "acl", "access list", "access-list",
+                          "ace", "firewall rule"):
+                for f in _forms_of(alias.split()[-1]):
+                    put(" ".join(alias.split()[:-1] + [f]).strip(), kind, 2)
         # "config router static" is the routing table; users say "route"/"routes"
         if "static" in words and "router" in words:
             for f in _forms_of("route"):

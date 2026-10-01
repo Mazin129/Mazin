@@ -330,6 +330,10 @@ def _check_interfaces(objects, policies, routes):
     """Policies/routes naming an interface the config never defines."""
     ifaces = {str(o.name).lower() for o in objects
               if "system interface" in (o.kind or "").lower()}
+    # a ZONE (FortiGate `system zone`, Palo Alto security zones) is a valid policy
+    # interface reference too — without this every PAN-OS rule looked dangling
+    ifaces |= {str(o.name).lower() for o in objects
+               if (o.kind or "").strip().lower() == "system zone"}
     if not ifaces:
         return [Finding("interfaces-not-checked", INFO,
                         "interface references not checked",

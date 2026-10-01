@@ -504,6 +504,85 @@ end
 """
 
 
+PANOS_DEVICE = """set deviceconfig system hostname PA-EDGE-01
+set mgt-config users admin permissions role-based superuser yes
+set network interface-management-profile allow-mgmt https yes
+set network interface-management-profile allow-mgmt ssh yes
+set network interface-management-profile allow-mgmt ping yes
+set network interface ethernet ethernet1/1 layer3 interface-management-profile allow-mgmt
+set network interface ethernet ethernet1/2 layer3 ip 192.168.1.1/24
+set zone untrust network layer3 ethernet1/1
+set zone trust network layer3 ethernet1/2
+set address WEB-SRV ip-netmask 192.168.1.10/32
+set address OLD-SRV ip-netmask 192.168.1.99/32
+set address-group SERVERS static [ WEB-SRV ]
+set network virtual-router default routing-table ip static-route default destination 0.0.0.0/0
+set network virtual-router default routing-table ip static-route default nexthop ip-address 203.0.113.1
+set network virtual-router default routing-table ip static-route default interface ethernet1/1
+set rulebase security rules "Allow-All" from trust
+set rulebase security rules "Allow-All" to untrust
+set rulebase security rules "Allow-All" source any
+set rulebase security rules "Allow-All" destination any
+set rulebase security rules "Allow-All" application any
+set rulebase security rules "Allow-All" service any
+set rulebase security rules "Allow-All" action allow
+set rulebase security rules "Allow-Web-Out" from trust
+set rulebase security rules "Allow-Web-Out" to untrust
+set rulebase security rules "Allow-Web-Out" source any
+set rulebase security rules "Allow-Web-Out" destination any
+set rulebase security rules "Allow-Web-Out" application [ web-browsing ssl ]
+set rulebase security rules "Allow-Web-Out" service application-default
+set rulebase security rules "Allow-Web-Out" action allow
+set rulebase security rules "Inbound-Any" from untrust
+set rulebase security rules "Inbound-Any" to trust
+set rulebase security rules "Inbound-Any" source any
+set rulebase security rules "Inbound-Any" destination any
+set rulebase security rules "Inbound-Any" application ssl
+set rulebase security rules "Inbound-Any" service application-default
+set rulebase security rules "Inbound-Any" action allow
+set rulebase security rules "Inbound-Any" log-end no
+"""
+
+ASA_DEVICE = """ASA Version 9.16(4)
+!
+hostname ASA-DMZ-01
+!
+interface GigabitEthernet0/0
+ nameif outside
+ security-level 0
+ ip address 203.0.113.2 255.255.255.0
+!
+interface GigabitEthernet0/1
+ nameif inside
+ security-level 100
+ ip address 192.168.1.1 255.255.255.0
+!
+object network WEB-SRV
+ host 192.168.1.10
+object network UNUSED-OBJ
+ host 192.168.1.77
+!
+access-list OUTSIDE_IN extended permit tcp any object WEB-SRV eq https
+access-list OUTSIDE_IN extended permit ip any any
+access-list OUTSIDE_IN extended deny ip any any log
+access-group OUTSIDE_IN in interface outside
+!
+route outside 0.0.0.0 0.0.0.0 203.0.113.1 1
+http 0.0.0.0 0.0.0.0 outside
+ssh 0.0.0.0 0.0.0.0 outside
+telnet 192.168.1.0 255.255.255.0 inside
+snmp-server community public
+username admin password xxxx privilege 15
+!
+crypto ikev1 policy 10
+ authentication pre-share
+ encryption 3des
+ hash md5
+ group 2
+crypto ipsec ikev1 transform-set WEAK-TS esp-3des esp-md5-hmac
+"""
+
+
 def rules(findings):
     return [f.rule for f in findings]
 
@@ -721,6 +800,53 @@ def main():
           [str(o.name) for o in fobjs if configaudit.is_firewall_policy(o)] == ["1", "2", "3", "4"])
     check("a missing policy is reported, not crashed on",
           "no policy 99" in configdiff.whatif_report(fobjs, "delete", "99"))
+
+    print("\n-- Palo Alto (PAN-OS set format) --")
+    import vendorparse
+    check("PAN-OS is detected", configparse.vendor(PANOS_DEVICE) == "panos")
+    pobjs = configparse.parse(PANOS_DEVICE)
+    ppol = [o for o in pobjs if configaudit.is_firewall_policy(o)]
+    check("security rules become firewall policies, in order",
+          [str(o.name) for o in ppol] == ["Allow-All", "Allow-Web-Out", "Inbound-Any"])
+    check("allow → accept", all(o.get("action") == "accept" for o in ppol))
+    check("service any with application any is unrestricted",
+          ppol[0].get("service") == '"ALL"')
+    check("application-default with named apps is NOT unrestricted",
+          ppol[1].get("service") == '"application-default"')
+    pr = set(rules(configaudit.audit(pobjs)))
+    for rule in ("any-any-accept", "shadowed-policy", "inbound-to-any", "no-logging",
+                 "wan-management", "unused-object"):
+        check(f"PAN: finds {rule}", rule in pr)
+    check("PAN: zones are valid interface references (no false dangling)",
+          "dangling-interface" not in pr)
+    check("PAN: one-line objects survive chunking",
+          all("\n" in c for c in vendorparse.chunk(PANOS_DEVICE)))
+
+    print("\n-- Cisco ASA --")
+    check("ASA is detected", configparse.vendor(ASA_DEVICE) == "asa")
+    aobjs = configparse.parse(ASA_DEVICE)
+    apol = [o for o in aobjs if configaudit.is_firewall_policy(o)]
+    check("ACL entries become policies, bound to their interface",
+          len(apol) == 3 and all(o.get("srcintf") == '"outside"' for o in apol))
+    check("interfaces are named by nameif", any(str(o.name) == "outside" for o in aobjs))
+    ar = set(rules(configaudit.audit(aobjs)))
+    for rule in ("any-any-accept", "inbound-to-any", "conflicting-policy", "wan-management",
+                 "cleartext-admin", "snmp-default-community", "weak-ipsec-crypto",
+                 "weak-dh-group", "unused-object"):
+        check(f"ASA: finds {rule}", rule in ar)
+    check("ASA: object referenced by an ACL is not 'unused'",
+          not any("WEB-SRV" in f.detail for f in configaudit.audit(aobjs)
+                  if f.rule == "unused-object"))
+
+    print("\n-- vendor detection never mistakes prose for config --")
+    for prose in ("interface naming on Cisco devices follows the slot and port number.",
+                  "Set the rulebase carefully; security rules are evaluated top down.",
+                  "An access-list filters traffic. Apply it with access-group."):
+        check(f"prose is not config: {prose[:34]}…", configparse.vendor(prose) is None)
+        check(f"…nor a fragment of one: {prose[:30]}…",
+              not vendorparse.belongs_to(prose, "asa")
+              and not vendorparse.belongs_to(prose, "panos"))
+    check("FortiGate is still FortiGate", configparse.vendor(HARDENED_DEVICE) == "fortigate")
 
     print("\n-- the report states its own limits --")
     rep = configaudit.report(f, objs)

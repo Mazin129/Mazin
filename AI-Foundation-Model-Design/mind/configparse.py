@@ -33,11 +33,30 @@ class ConfigObject:
         return f"<{self.kind} {self.name} {list(self.fields)}>"
 
 
+def vendor(text: str):
+    """'fortigate', 'panos', 'asa', or None."""
+    if re.search(r"(?im)^\s*config\s+\S", text or ""):
+        return "fortigate"
+    import vendorparse
+    return vendorparse.detect(text)
+
+
 def looks_like_config(text: str) -> bool:
-    return bool(re.search(r"(?im)^\s*config\s+\S", text or ""))
+    return vendor(text) is not None
 
 
 def parse(text: str):
+    """Parse any supported vendor's configuration into ConfigObjects. Palo Alto and
+    Cisco ASA are translated into the same object shapes as FortiGate (vendorparse),
+    so every analysis works on all three."""
+    v = vendor(text)
+    if v in ("panos", "asa"):
+        import vendorparse
+        return vendorparse.parse(text, v)
+    return _parse_fortigate(text)
+
+
+def _parse_fortigate(text: str):
     """Parse FortiGate stanza config into a flat list of ConfigObjects (nested configs
     keep the innermost kind). Returns [] when the text isn't stanza config."""
     objs, kinds, cur = [], [], None
@@ -85,14 +104,33 @@ def parse(text: str):
 
 
 def parse_many(docs):
-    """Parse a list of passages/documents into one combined object list."""
-    out = []
-    for d in docs or ():
-        if looks_like_config(d):
-            out.append(d)
-    combined = []
-    for d in out:
-        combined.extend(parse(d))
+    """Parse a list of passages/documents into one combined object list.
+
+    FortiGate stanzas are self-contained, so each passage parses alone. A Palo Alto
+    rule or a Cisco ACL binding is spread over lines that land in different passages,
+    so those vendors' passages are re-joined (in library order) and parsed once."""
+    combined, joined = [], {"panos": [], "asa": []}
+    docs = list(docs or ())
+    tags = [vendor(d) for d in docs]
+    present = {v for v in tags if v in joined}
+    for d, v in zip(docs, tags):
+        if v == "fortigate":
+            combined.extend(_parse_fortigate(d))
+        elif v in joined:
+            joined[v].append(d)
+        elif v is None and present:
+            # a small block of a vendor config that is already loaded (e.g. one ASA
+            # object), too short to identify on its own — see vendorparse.belongs_to
+            import vendorparse
+            for pv in present:
+                if vendorparse.belongs_to(d, pv):
+                    joined[pv].append(d)
+                    break
+    if joined["panos"] or joined["asa"]:
+        import vendorparse
+        for v, parts in joined.items():
+            if parts:
+                combined.extend(vendorparse.parse("\n".join(parts), v))
     return combined
 
 
