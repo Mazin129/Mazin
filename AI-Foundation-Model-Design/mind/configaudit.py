@@ -585,6 +585,228 @@ def _check_hardening(objects, policies):
 # ---------------------------------------------------------------------------- #
 # public API
 # ---------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------- #
+# PUBLISHED SERVICES (VIP / destination NAT)
+#
+# A VIP is how a FortiGate puts an internal server on the internet. These checks
+# answer the questions an exposure review starts with: what is published, is anything
+# published that never should be, and is each publication actually narrowed by a
+# policy. Matching is by object NAME (a policy's dstaddr naming the VIP or a group
+# containing it) — exact, with no address arithmetic.
+# ---------------------------------------------------------------------------- #
+
+# services that should essentially never face the internet directly
+_ADMIN_SERVICES = {"rdp", "ssh", "telnet", "smb", "samba", "cifs", "mssql", "mysql",
+                   "postgres", "postgresql", "oracle", "vnc", "winrm", "ldap", "snmp",
+                   "netbios", "ms-sql", "redis", "mongodb", "elasticsearch"}
+# well-known admin ports, for VIPs that forward by number
+_ADMIN_PORTS = {"22": "ssh", "23": "telnet", "445": "smb", "139": "netbios",
+                "1433": "mssql", "3306": "mysql", "3389": "rdp", "5432": "postgres",
+                "5900": "vnc", "5985": "winrm", "5986": "winrm", "389": "ldap",
+                "161": "snmp", "6379": "redis", "27017": "mongodb", "9200": "elasticsearch"}
+
+
+def _group_members(objects):
+    """address/VIP group name → set of member names (one level; groups of groups are
+    followed by _reaches)."""
+    out = {}
+    for o in objects:
+        k = (o.kind or "").lower()
+        if "grp" in k or "group" in k:
+            out[str(o.name).lower()] = _vals(o, "member")
+    return out
+
+
+def _reaches(name, target, groups, seen=None):
+    """Does address name `name` refer to `target`, directly or through groups?"""
+    name = name.lower()
+    if name == target:
+        return True
+    seen = seen or set()
+    if name in seen:
+        return False
+    seen.add(name)
+    return any(_reaches(m, target, groups, seen) for m in groups.get(name, ()))
+
+
+def vip_exposure(objects):
+    """[(vip, external, internal, ports, policies)] — every published service."""
+    groups = _group_members(objects)
+    policies = [p for p in objects if is_firewall_policy(p) and _enabled(p)
+                and _action(p) == "accept"]
+    rows = []
+    for v in _kind(objects, "firewall vip"):
+        name = str(v.name).lower()
+        ext = (v.get("extip") or "").strip('"') or "?"
+        mapped = " ".join(_vals(v, "mappedip")) or "?"
+        if _val(v, "portforward") == "enable":
+            ports = f"{_val(v, 'protocol') or 'tcp'} {(v.get('extport') or '?').strip()}"
+            if v.get("mappedport"):
+                ports += f" → {v.get('mappedport').strip()}"
+        else:
+            ports = "ALL PORTS"
+        users = [p for p in policies
+                 if any(_reaches(d, name, groups) for d in _vals(p, "dstaddr"))]
+        rows.append((v, ext, mapped, ports, users))
+    return rows
+
+
+def _check_vips(objects):
+    out = []
+    for v, ext, mapped, ports, users in vip_exposure(objects):
+        name = str(v.name)
+        if _val(v, "portforward") != "enable":
+            out.append(Finding(
+                "vip-all-ports", HIGH,
+                f"VIP {name} forwards EVERY port on {ext} to {mapped}",
+                "Without port forwarding, the whole internal host is published — every "
+                "service it runs, including ones nobody meant to expose. Enable "
+                "portforward and publish only the ports the service needs.", [name]))
+        else:
+            port = (v.get("extport") or "").strip().split("-")[0]
+            svc = _ADMIN_PORTS.get(port)
+            if svc:
+                out.append(Finding(
+                    "vip-admin-port", HIGH,
+                    f"VIP {name} publishes {svc.upper()} (port {port}) on {ext}",
+                    f"{svc.upper()} on the internet is one of the most attacked "
+                    "exposures there is. Put it behind the VPN instead.", [name]))
+        if not users:
+            out.append(Finding(
+                "vip-unused", LOW, f"VIP {name} is not used by any accept policy",
+                "Defined but not published — harmless now, but it is a ready-made "
+                "exposure the moment someone references it. Remove it if unneeded.",
+                [name]))
+            continue
+        for p in users:
+            svcs = {s.lower() for s in _vals(p, "service")}
+            if svcs & {"all", "any"}:
+                out.append(Finding(
+                    "vip-any-service", HIGH,
+                    f"policy {p.name} allows ANY service to published server {name}",
+                    "The VIP may narrow ports, but this policy does not — whatever the "
+                    "VIP forwards is reachable. Name the exact services.", [p.name, name]))
+            risky = sorted(svcs & _ADMIN_SERVICES)
+            if risky:
+                out.append(Finding(
+                    "vip-admin-service", HIGH,
+                    f"policy {p.name} publishes {', '.join(s.upper() for s in risky)} "
+                    f"on server {name}",
+                    "Administrative and database services should not face the internet. "
+                    "Reach them over the VPN.", [p.name, name]))
+    return out
+
+
+def exposure_report(objects):
+    """What this device publishes to the internet, then the findings about it."""
+    rows = vip_exposure(objects)
+    if not rows:
+        return ("**Published services** — no VIPs (destination NAT) are configured, so "
+                "this device publishes no internal servers to the internet.")
+    lines = [f"**Published services** — {len(rows)} VIP(s):", ""]
+    for v, ext, mapped, ports, users in rows:
+        via = ", ".join(f"policy {p.name}" for p in users) or "no accept policy"
+        lines.append(f"  • **{v.name}** — {ext} → {mapped}  [{ports}]  via {via}")
+    findings = group(_check_vips(objects))
+    if findings:
+        lines += ["", "**Findings:**"] + [f.line() for f in findings]
+    else:
+        lines += ["", "No exposure findings: every publication is port-limited, used by "
+                  "a policy, and narrowed to named services."]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------- #
+# RULE-BASE CLEANUP PLAN
+#
+# Turns the review into a work list, sorted by how safe each action is:
+#   SAFE TO DELETE   can never match or does nothing (shadowed by a rule with the same
+#                    action, duplicate, disabled, unreachable, unused object)
+#   DECIDE FIRST     the config contradicts itself; someone must say which intent wins
+#   MERGE            accept rules identical except for one field
+# ---------------------------------------------------------------------------- #
+_MERGE_AXES = ("service", "srcaddr", "dstaddr")
+
+
+def merge_candidates(policies):
+    """Groups of enabled accept policies identical in every match field but one."""
+    fields = ("srcintf", "dstintf", "srcaddr", "dstaddr", "service", "schedule")
+    out = []
+    live = [p for p in policies if _enabled(p) and _action(p) == "accept"]
+    for axis in _MERGE_AXES:
+        buckets = {}
+        for p in live:
+            key = tuple(frozenset(_vals(p, f)) for f in fields if f != axis) + \
+                  (bool(_vals(p, "utm-status")), frozenset(_vals(p, "nat")))
+            if all(_vals(p, f) for f in ("srcintf", "dstintf")):
+                buckets.setdefault(key, []).append(p)
+        for group_ in buckets.values():
+            if len(group_) >= 2 and len({frozenset(_vals(p, axis)) for p in group_}) > 1:
+                out.append((axis, group_))
+    return out
+
+
+def cleanup_plan(objects):
+    """A prioritised rule-base cleanup list."""
+    objects = list(objects or [])
+    findings = audit(objects)
+    policies = [o for o in objects if is_firewall_policy(o)]
+    delete, decide = [], []
+    for f in findings:
+        if f.rule == "shadowed-policy" and "disagree" not in f.detail:
+            delete.append(f"policy {f.objects[-1]} — never matches; shadowed by policy "
+                          f"{f.objects[0]} with the same action")
+        elif f.rule == "duplicate-policy":
+            delete.append(f"policy {f.objects[-1]} — duplicate of policy {f.objects[0]}")
+        elif f.rule == "disabled-policy":
+            delete.append(f"policy {f.objects[0]} — disabled")
+        elif f.rule == "unused-object":
+            delete.append(f"{f.title} ({f.detail.split('.')[0].replace('Examples: ', '')})")
+        elif f.rule == "vip-unused":
+            delete.append(f"VIP {f.objects[0]} — not used by any policy")
+        elif f.rule == "unreachable-after-any":
+            decide.append(f"{f.title} — move the broad rule {f.objects[0]} down or "
+                          "narrow it, then re-run the review")
+        elif f.rule == "conflicting-policy" or (f.rule == "shadowed-policy"
+                                                and "disagree" in f.detail):
+            decide.append(f"{f.title} — the two rules disagree; decide which action is "
+                          "intended, then delete the other")
+    # a rule already slated for deletion, or caught in a contradiction, is not a merge
+    # candidate — merging it would carry a dead or disputed rule into the new one
+    settled = set()
+    for f in findings:
+        if f.rule in ("duplicate-policy", "disabled-policy", "conflicting-policy") or \
+                (f.rule == "shadowed-policy"):
+            settled.add(str(f.objects[-1]))
+    merges = [(axis, grp) for axis, grp in
+              merge_candidates([p for p in policies if str(p.name) not in settled])]
+
+    lines = [f"**Rule-base cleanup plan** — {len(policies)} policies reviewed.", ""]
+    if not (delete or decide or merges):
+        lines.append("Nothing to clean up: no dead, duplicate, contradictory or mergeable "
+                     "rules.")
+        return "\n".join(lines)
+    lines.append(f"Safe to delete: **{len(delete)}** · decide first: **{len(decide)}** · "
+                 f"merge groups: **{len(merges)}**")
+    if decide:
+        lines += ["", "**1. Decide first** (the config contradicts itself):"]
+        lines += [f"  ⚠️ {d}" for d in decide]
+    if delete:
+        lines += ["", "**2. Safe to delete** (these never take effect):"]
+        lines += [f"  🗑️ {d}" for d in delete]
+    if merges:
+        lines += ["", "**3. Merge candidates** (identical except one field):"]
+        for axis, grp in merges:
+            ids = ", ".join(str(p.name) for p in grp)
+            vals = sorted({v for p in grp for v in _vals(p, axis)})
+            lines.append(f"  🔗 policies {ids} differ only in {axis} — one rule with "
+                         f"{axis} {' '.join(vals)} would replace them")
+    lines += ["", "*Order matters: resolve 1 before deleting anything in 2, because a "
+              "contradiction decides which rule is the dead one. Back up the config "
+              "first, then ask  what changed  after re-uploading to confirm the effect.*"]
+    return "\n".join(lines)
+
+
 def is_firewall_policy(o):
     """A FIREWALL policy (firewall policy / policy6 / proxy-policy …) — not every object
     whose kind merely contains the word. `config system password-policy` is a settings
@@ -606,6 +828,7 @@ def audit(objects):
     findings += _check_unused(objects, policies)
     findings += _check_interfaces(objects, policies, routes)
     findings += _check_hardening(objects, policies)
+    findings += _check_vips(objects)
     findings.sort(key=lambda f: (_ORDER.get(f.severity, 9), f.rule))
     return findings
 
@@ -735,6 +958,10 @@ CONTROLS = {
     "permissive": _TOO_OPEN, "inbound-to-any": _TOO_OPEN,
     "no-logging": {PCI: ["10.2.1"], ISO: ["A.8.15"], NIST: ["AU-2", "AU-12"]},
     "no-inspection": {ISO: ["A.8.7"], NIST: ["SI-3", "SI-4"]},
+    # published services (VIP / destination NAT)
+    "vip-all-ports": _TOO_OPEN, "vip-any-service": _TOO_OPEN,
+    "vip-admin-port": _TOO_OPEN, "vip-admin-service": _TOO_OPEN,
+    "vip-unused": _RULE_HYGIENE,
     # routing
     "conflicting-route": {ISO: ["A.8.9"], NIST: ["CM-6"]},
     "duplicate-route": {ISO: ["A.8.9"], NIST: ["CM-6"]},

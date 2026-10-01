@@ -64,6 +64,92 @@ def risk_delta(old_objects, new_objects):
     return introduced, resolved
 
 
+# ---------------------------------------------------------------------------- #
+# WHAT-IF — the effect of a proposed edit, before anyone makes it
+# ---------------------------------------------------------------------------- #
+import copy
+import re
+
+_WHATIF = re.compile(
+    r"\bwhat\s+(?:if|happens\s+if|would\s+happen\s+if)\s+(?:i|we)?\s*"
+    r"(delete|remove|disable|enable|move)\s+(?:firewall\s+)?polic(?:y|ies)\s+(\S+)"
+    r"(?:\s+(?:to\s+(?:the\s+)?(top|bottom|first|last)|(before|after|above|below)\s+"
+    r"(?:policy\s+)?(\S+)))?", re.I)
+
+
+def parse_whatif(q):
+    """('delete'|'disable'|'enable'|'move', policy, where, anchor) or None."""
+    m = _WHATIF.search(q or "")
+    if not m:
+        return None
+    op, pid, end, rel, anchor = (g.lower().strip("?.,") if g else g for g in m.groups())
+    op = {"remove": "delete"}.get(op, op)
+    if op == "move" and not (end or rel):
+        return None
+    where = {"first": "top", "last": "bottom", "above": "before",
+             "below": "after"}.get(end or rel, end or rel)
+    return op, pid, where, anchor
+
+
+def apply_whatif(objects, op, pid, where=None, anchor=None):
+    """A modified COPY of the config with the edit applied. Raises KeyError when the
+    policy (or the anchor policy) does not exist."""
+    objs = copy.deepcopy(list(objects))
+    pol_idx = [i for i, o in enumerate(objs) if configaudit.is_firewall_policy(o)]
+    target = next((i for i in pol_idx if str(objs[i].name) == pid), None)
+    if target is None:
+        raise KeyError(f"policy {pid}")
+    if op == "delete":
+        del objs[target]
+    elif op == "disable":
+        objs[target].fields["status"] = "disable"
+    elif op == "enable":
+        objs[target].fields["status"] = "enable"
+    elif op == "move":
+        moving = objs.pop(target)
+        pol_idx = [i for i, o in enumerate(objs) if configaudit.is_firewall_policy(o)]
+        if where == "top":
+            at = pol_idx[0] if pol_idx else len(objs)
+        elif where == "bottom":
+            at = pol_idx[-1] + 1 if pol_idx else len(objs)
+        else:
+            a = next((i for i in pol_idx if str(objs[i].name) == anchor), None)
+            if a is None:
+                raise KeyError(f"policy {anchor}")
+            at = a if where == "before" else a + 1
+        objs.insert(at, moving)
+    return objs
+
+
+def whatif_report(objects, op, pid, where=None, anchor=None):
+    """Findings the proposed edit would introduce and resolve."""
+    try:
+        changed = apply_whatif(objects, op, pid, where, anchor)
+    except KeyError as e:
+        return f"There is no {e.args[0]} in the loaded configuration."
+    edit = {"delete": f"deleting policy {pid}", "disable": f"disabling policy {pid}",
+            "enable": f"enabling policy {pid}",
+            "move": f"moving policy {pid} "
+                    + (f"to the {where}" if where in ("top", "bottom")
+                       else f"{where} policy {anchor}")}[op]
+    introduced, resolved = risk_delta(objects, changed)
+    lines = [f"**What-if: {edit}**", ""]
+    if not introduced and not resolved:
+        lines.append("No change in findings: the review sees nothing better or worse "
+                     "after this edit.")
+    if introduced:
+        lines += [f"**Would introduce {len(introduced)} finding(s):**"]
+        lines += [f.line() for f in configaudit.group(introduced)]
+    if resolved:
+        lines += ([""] if introduced else []) + [f"**Would resolve {len(resolved)} finding(s):**"]
+        lines += [f"✔️ {f.title}" for f in resolved]
+    lines += ["", "---", "*Applied to a copy of your configuration and reviewed both "
+              "ways. Your config is unchanged. This judges the edit by review findings "
+              "(shadowing, exposure, hygiene) — it does not trace individual traffic "
+              "flows.*"]
+    return "\n".join(lines)
+
+
 def report(old_objects, new_objects, old_name="previous", new_name="current", limit=60):
     """A change review a human can act on: verdict first, then risk, then the edits."""
     d = diff(old_objects, new_objects)

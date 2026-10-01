@@ -302,6 +302,208 @@ end
 """
 
 
+VIP_DEVICE = """config firewall vip
+    edit "WEB-VIP"
+        set extip 203.0.113.10
+        set mappedip "192.168.1.10"
+        set extintf "wan1"
+        set portforward enable
+        set extport 443
+        set mappedport 443
+    next
+    edit "RDP-VIP"
+        set extip 203.0.113.11
+        set mappedip "192.168.1.20"
+        set extintf "wan1"
+        set portforward enable
+        set extport 3389
+        set mappedport 3389
+    next
+    edit "WHOLE-HOST"
+        set extip 203.0.113.12
+        set mappedip "192.168.1.30"
+        set extintf "wan1"
+    next
+    edit "OLD-VIP"
+        set extip 203.0.113.13
+        set mappedip "192.168.1.40"
+        set portforward enable
+        set extport 8080
+    next
+end
+config firewall vipgrp
+    edit "PUBLIC-SERVERS"
+        set member "WEB-VIP"
+    next
+end
+config firewall policy
+    edit 10
+        set name "publish-web"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set srcaddr "all"
+        set dstaddr "PUBLIC-SERVERS"
+        set service "HTTPS"
+        set action accept
+    next
+    edit 11
+        set name "publish-rdp"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set srcaddr "all"
+        set dstaddr "RDP-VIP"
+        set service "RDP"
+        set action accept
+    next
+    edit 12
+        set name "publish-host"
+        set srcintf "wan1"
+        set dstintf "internal"
+        set srcaddr "all"
+        set dstaddr "WHOLE-HOST"
+        set service "ALL"
+        set action accept
+    next
+end
+"""
+
+MESSY_DEVICE = """config firewall address
+    edit "LAN"
+        set subnet 192.168.1.0 255.255.255.0
+    next
+    edit "STALE-OBJ"
+        set subnet 10.99.0.0 255.255.0.0
+    next
+end
+config firewall policy
+    edit 1
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "LAN"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action accept
+        set utm-status enable
+    next
+    edit 2
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "LAN"
+        set dstaddr "all"
+        set service "DNS"
+        set action accept
+        set utm-status enable
+    next
+    edit 3
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "LAN"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action accept
+        set utm-status enable
+    next
+    edit 4
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "LAN"
+        set dstaddr "all"
+        set service "DNS"
+        set action deny
+    next
+    edit 5
+        set srcintf "internal"
+        set dstintf "wan1"
+        set srcaddr "LAN"
+        set dstaddr "all"
+        set service "NTP"
+        set action accept
+        set status disable
+    next
+end
+"""
+
+FAULTY_ORDER = """config system interface
+    edit "port1"
+        set ip 10.10.0.2 255.255.255.0
+    next
+    edit "port2"
+        set ip 192.168.1.1 255.255.255.0
+    next
+end
+config firewall address
+    edit "LAN_SUBNET"
+        set subnet 192.168.1.0 255.255.255.0
+    next
+    edit "OLD_DMZ"
+        set subnet 172.16.9.0 255.255.255.0
+    next
+end
+config firewall policy
+    edit 1
+        set name "broad-allow"
+        set srcintf "port2"
+        set dstintf "port1"
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "ALL"
+        set action accept
+        set logtraffic disable
+    next
+    edit 2
+        set name "web-only"
+        set srcintf "port2"
+        set dstintf "port1"
+        set srcaddr "LAN_SUBNET"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action accept
+    next
+    edit 3
+        set name "block-dmz"
+        set srcintf "port2"
+        set dstintf "port1"
+        set srcaddr "LAN_SUBNET"
+        set dstaddr "all"
+        set service "HTTPS"
+        set action deny
+    next
+    edit 4
+        set name "old-rule"
+        set srcintf "port9"
+        set dstintf "port1"
+        set srcaddr "all"
+        set dstaddr "all"
+        set service "ALL"
+        set action accept
+        set status disable
+    next
+end
+config router static
+    edit 1
+        set dst 0.0.0.0 0.0.0.0
+        set gateway 10.10.0.1
+        set device "port1"
+    next
+    edit 2
+        set dst 0.0.0.0 0.0.0.0
+        set gateway 10.10.0.9
+        set device "port1"
+    next
+    edit 3
+        set dst 172.20.0.0 255.255.0.0
+        set gateway 10.10.0.5
+        set device "port7"
+    next
+    edit 4
+        set dst 172.20.0.0 255.255.0.0
+        set gateway 10.10.0.6
+        set device "port1"
+    next
+end
+"""
+
+
 def rules(findings):
     return [f.rule for f in findings]
 
@@ -470,6 +672,55 @@ def main():
     noisy = HARDENED_DEVICE.replace('edit "wan1"\n', 'edit "wan1"\n        set uuid 1234\n')
     check("per-save noise (uuid) is not reported as a change",
           not configdiff.diff(hobjs, configparse.parse(noisy))["changed"])
+
+    print("\n-- published services (VIP) --")
+    vobjs = configparse.parse(VIP_DEVICE)
+    vr = set(rules(configaudit.audit(vobjs)))
+    for rule in ("vip-admin-port", "vip-admin-service", "vip-all-ports",
+                 "vip-any-service", "vip-unused"):
+        check(f"finds {rule}", rule in vr)
+    rows = {str(v.name): users for v, _e, _m, _p, users in configaudit.vip_exposure(vobjs)}
+    check("a VIP published through a VIP group is traced to its policy",
+          [str(p.name) for p in rows["WEB-VIP"]] == ["10"])
+    check("the properly published web server raises nothing of its own",
+          not any("WEB-VIP" in x.objects for x in configaudit.audit(vobjs)))
+    check("no VIPs → says nothing is published",
+          "publishes no internal servers" in configaudit.exposure_report(hobjs))
+
+    print("\n-- cleanup plan --")
+    mobjs = configparse.parse(MESSY_DEVICE)
+    plan = configaudit.cleanup_plan(mobjs)
+    check("plan counts what is safe to delete", "Safe to delete: **3**" in plan)
+    check("the contradiction is put first, to decide", "contradicts policy 2" in plan)
+    check("duplicate listed for deletion", "policy 3 — duplicate of policy 1" in plan)
+    check("disabled rule listed for deletion", "policy 5 — disabled" in plan)
+    check("unused object listed for deletion", "STALE-OBJ" in plan)
+    check("rules differing only in service are offered as a merge",
+          "policies 1, 2 differ only in service" in plan)
+    check("a rule already marked dead is not offered for merging",
+          "policies 1, 2, 3" not in plan)
+    check("a clean config needs no cleanup",
+          "Nothing to clean up" in configaudit.cleanup_plan(hobjs))
+
+    print("\n-- what-if --")
+    import configdiff
+    fobjs = configparse.parse(FAULTY_ORDER)
+    check("parses 'what if I delete policy 1'",
+          configdiff.parse_whatif("what if I delete policy 1") == ("delete", "1", None, None))
+    check("parses 'move … before …'",
+          configdiff.parse_whatif("what if we move policy 3 above policy 2")
+          == ("move", "3", "before", "2"))
+    check("ignores unrelated what-ifs", configdiff.parse_whatif("what if it rains") is None)
+    wi = configdiff.whatif_report(fobjs, "delete", "1")
+    check("deleting the any/any accept resolves it and the shadowing",
+          "Would resolve" in wi and "shadowed by policy 1" in wi)
+    mv = configdiff.whatif_report(fobjs, "move", "3", "before", "2")
+    check("reordering a contradiction reports the winner flipping",
+          "policy 2 contradicts policy 3" in mv and "policy 3 contradicts policy 2" in mv)
+    check("the original config is not modified",
+          [str(o.name) for o in fobjs if configaudit.is_firewall_policy(o)] == ["1", "2", "3", "4"])
+    check("a missing policy is reported, not crashed on",
+          "no policy 99" in configdiff.whatif_report(fobjs, "delete", "99"))
 
     print("\n-- the report states its own limits --")
     rep = configaudit.report(f, objs)

@@ -1627,6 +1627,18 @@ class Mind:
                 pass
         return note
 
+    def _config_tool(self, fn, label):
+        """Run one deterministic analysis over the loaded configuration."""
+        import brain
+        objs = brain.survey(self).config_objects
+        if not objs:
+            return {"answer": "That needs a device configuration — upload the .conf (📄) "
+                    "and ask again.", "how": "no-source (need-config)", "verified": False,
+                    "confidence": 0.1, "cortex": "skipped", "trace": []}
+        return {"answer": fn(objs), "how": f"analysis over your config ({label})",
+                "verified": True, "confidence": 0.95, "cortex": "skipped",
+                "trace": [f"{label} over {len(objs)} parsed object(s)"]}
+
     def compliance_view(self, framework=None):
         """Audit findings grouped under PCI DSS / ISO 27001 / NIST 800-53 controls."""
         import brain
@@ -2301,6 +2313,24 @@ class Mind:
                     r"improve\s+yourself|train\s+yourself|upgrade\s+(?:your\s+)?(?:brain|mind|knowledge))"
                     r"\s*[.!]*\s*$", low):
             return self.learn_everything()
+        # what-if on a policy edit, cleanup plan, published-service exposure
+        if re.search(r"\bwhat\s+(?:if|happens\s+if|would\s+happen\s+if)\b", low) and \
+                re.search(r"\bpolic(?:y|ies)\b", low):
+            import configdiff
+            w = configdiff.parse_whatif(q)
+            if w:
+                return self._config_tool(lambda objs: configdiff.whatif_report(objs, *w),
+                                         "what-if")
+        if re.match(r"^\s*(?:clean\s*up|cleanup|optimi[sz]e|tidy)\s+(?:my\s+|the\s+)?"
+                    r"(?:rules?|rule\s*base|policies|firewall|config)\b|^\s*cleanup\s+plan\b",
+                    low):
+            import configaudit
+            return self._config_tool(configaudit.cleanup_plan, "cleanup plan")
+        if re.search(r"\b(?:exposure|published\s+services?|what\s+(?:do\s+we|is)\s+"
+                     r"(?:publish(?:ed)?|exposed)|vip\s+review|nat\s+review|"
+                     r"internet[-\s]facing\s+servers?)\b", low):
+            import configaudit
+            return self._config_tool(configaudit.exposure_report, "exposure")
         # compliance view: "compliance report", "pci report", "audit for iso 27001",
         # "nist 800-53 view" — findings grouped under the controls they bear on
         if re.search(r"\b(compliance|pci|iso\s*27001|nist|800-53)\b", low) and \
