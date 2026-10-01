@@ -419,6 +419,58 @@ def main():
     check("config system global becomes an object", len(g) == 1)
     check("its settings are kept", g and g[0].get("strong-crypto") == "disable")
 
+    print("\n-- only FIREWALL policies are counted as policies --")
+    check("a password-policy settings block is not a firewall policy",
+          not any(x.rule == "disabled-policy" for x in configaudit.audit(wobjs)))
+    check("the review counts 2 policies on the weak device, not 3",
+          "(2 policies," in configaudit.report(configaudit.audit(wobjs), wobjs))
+
+    print("\n-- compliance mapping --")
+    import re as _re
+    src = open(configaudit.__file__, encoding="utf-8").read()
+    emitted = set(_re.findall(r'Finding\(\s*"([a-z0-9-]+)"', src))
+    info_only = {"no-default-route", "interfaces-not-checked"}
+    check("every non-info finding the review can raise is mapped",
+          not (emitted - set(configaudit.CONTROLS) - info_only))
+    ids = {c for m in configaudit.CONTROLS.values() for cs in m.values() for c in cs}
+    check("every referenced control has a description",
+          not (ids - set(configaudit.CONTROL_TITLES)))
+    check("management on the WAN maps to PCI 1.4.2",
+          "1.4.2" in configaudit.controls_for("wan-management")[configaudit.PCI])
+    check("weak VPN crypto maps to PCI 4.2.1",
+          "4.2.1" in configaudit.controls_for("weak-ipsec-crypto")[configaudit.PCI])
+    check("password policy maps to PCI 8.3.6 (12-character minimum)",
+          "8.3.6" in configaudit.controls_for("password-policy-off")[configaudit.PCI])
+    cr = configaudit.compliance_report(configaudit.audit(wobjs), wobjs, configaudit.PCI)
+    check("the PCI view groups findings under controls", "**4.2.1**" in cr)
+    check("the view says it is indicative, not an assessment", "not an assessment" in cr)
+    check("a hardened device has nothing to report",
+          "No findings" in configaudit.compliance_report(configaudit.audit(hobjs), hobjs))
+
+    print("\n-- config diff --")
+    import configdiff
+    opened = HARDENED_DEVICE.replace('set allowaccess ping\n        set role wan',
+                                     'set allowaccess ping https ssh\n        set role wan')
+    check("the edit under test really changes the config", opened != HARDENED_DEVICE)
+    oobjs = configparse.parse(opened)
+    d = configdiff.diff(hobjs, oobjs)
+    check("exactly one object changed", len(d["changed"]) == 1 and not d["added"]
+          and not d["removed"])
+    check("the changed field is reported with old and new values",
+          any(f == "allowaccess" for _k, _n, ds in d["changed"] for f, _a, _b in ds))
+    intro, res = configdiff.risk_delta(hobjs, oobjs)
+    check("opening WAN management is reported as an introduced risk",
+          any(x.rule == "wan-management" for x in intro))
+    check("the reverse change reports it as resolved",
+          any(x.rule == "wan-management" for x in configdiff.risk_delta(oobjs, hobjs)[1]))
+    check("identical configs report no differences",
+          "No differences" in configdiff.report(hobjs, hobjs))
+    rep = configdiff.report(hobjs, oobjs)
+    check("the diff leads with the verdict", "introduced 1 serious risk" in rep)
+    noisy = HARDENED_DEVICE.replace('edit "wan1"\n', 'edit "wan1"\n        set uuid 1234\n')
+    check("per-save noise (uuid) is not reported as a change",
+          not configdiff.diff(hobjs, configparse.parse(noisy))["changed"])
+
     print("\n-- the report states its own limits --")
     rep = configaudit.report(f, objs)
     check("report says no model was involved", "No model was involved" in rep

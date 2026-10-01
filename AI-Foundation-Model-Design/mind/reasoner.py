@@ -1565,9 +1565,126 @@ class Mind:
                 "how": "library-write", "verified": True, "confidence": 0.95,
                 "trace": [f"pruned {removed} stub passage(s)"]}
 
+    # ── configuration snapshots ─────────────────────────────────────────────
+    # Every uploaded device config is kept as a dated snapshot. That makes "what
+    # changed?" answerable, and it fixes re-uploads: an edited config used to leave the
+    # OLD version of every changed object in the library (only identical passages were
+    # de-duplicated), so a changed policy was counted, listed and reviewed twice.
+    _SNAP_KEEP = 10
+
+    def _config_dir(self):
+        d = os.path.join(DATA_DIR, "configs")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    @staticmethod
+    def _snap_name(source):
+        base = os.path.basename(source or "config")
+        base = re.sub(r"\.(conf|cfg|txt|log)$", "", base, flags=re.I)
+        return re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("._") or "config"
+
+    def config_snapshots(self, name=None):
+        """[(name, timestamp, path)] oldest first, optionally for one config name."""
+        out = []
+        d = self._config_dir()
+        for fn in sorted(os.listdir(d)):
+            m = re.match(r"^(.+)__(\d{8}-\d{6}(?:-\d+)?)\.conf$", fn)
+            if m and (name is None or m.group(1) == name):
+                out.append((m.group(1), m.group(2), os.path.join(d, fn)))
+        return sorted(out, key=lambda s: s[1])
+
+    def _snapshot_config(self, text, source, new_chunks):
+        """Save a snapshot; drop the previous version's stale passages. Returns a note."""
+        import time as _t
+        name = self._snap_name(source)
+        previous = self.config_snapshots(name)
+        note = ""
+        if previous:
+            with open(previous[-1][2], encoding="utf-8", errors="ignore") as f:
+                old_text = f.read()
+            if old_text == text:
+                return " (same as the version already loaded)"
+            keep_new = {c.strip() for c in new_chunks}
+            stale = {c.strip() for c in self._drop_stubs(self._smart_chunks(old_text))[0]}
+            stale -= keep_new
+            if stale:
+                self.lib.replace([d for d in self.lib.docs if d.strip() not in stale])
+            note = (f" Replaced the previous version of {name}"
+                    + (f" ({len(stale)} outdated passage(s) removed)" if stale else "")
+                    + " — ask  what changed  to compare them.")
+        stamp = _t.strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(self._config_dir(), f"{name}__{stamp}.conf")
+        n = 1
+        while os.path.exists(path):                  # two uploads in the same second
+            path = os.path.join(self._config_dir(), f"{name}__{stamp}-{n}.conf")
+            n += 1
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        for _n, _ts, old in self.config_snapshots(name)[:-self._SNAP_KEEP]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+        return note
+
+    def compliance_view(self, framework=None):
+        """Audit findings grouped under PCI DSS / ISO 27001 / NIST 800-53 controls."""
+        import brain
+        import configaudit
+        ev = brain.survey(self)
+        if not ev.config_objects:
+            return {"answer": "A compliance view needs a device configuration — upload "
+                    "the .conf (📄) and ask again.", "how": "no-source (need-config)",
+                    "verified": False, "confidence": 0.1, "cortex": "skipped", "trace": []}
+        findings = configaudit.audit(ev.config_objects)
+        return {"answer": configaudit.compliance_report(findings, ev.config_objects,
+                                                        framework),
+                "how": "analysis over your config (compliance)", "verified": True,
+                "confidence": 0.9, "cortex": "skipped",
+                "trace": [f"{len(findings)} finding(s) mapped"
+                          + (f" to {framework}" if framework else "")]}
+
+    def compare_configs(self, a=None, b=None):
+        """Diff two configuration snapshots: by name, or the two most recent."""
+        import configdiff
+        import configparse
+        snaps = self.config_snapshots()
+        if a and b:
+            pick = [s for s in snaps if s[0] == self._snap_name(a)][-1:] + \
+                   [s for s in snaps if s[0] == self._snap_name(b)][-1:]
+        else:
+            latest = snaps[-1][0] if snaps else None
+            same = [s for s in snaps if s[0] == latest]
+            pick = same[-2:] if len(same) >= 2 else snaps[-2:]
+        if len(pick) < 2:
+            have = ", ".join(sorted({s[0] for s in snaps})) or "none yet"
+            return {"answer": "I need two versions of a configuration to compare. Upload "
+                    "the config now (📄), make your change, then upload it again — or "
+                    f"upload two different devices' configs.\n\nSnapshots I hold: {have}.",
+                    "how": "config diff", "verified": False, "confidence": 0.3,
+                    "cortex": "skipped", "trace": []}
+        (n1, t1, p1), (n2, t2, p2) = pick[0], pick[1]
+        with open(p1, encoding="utf-8", errors="ignore") as f:
+            old = configparse.parse(f.read())
+        with open(p2, encoding="utf-8", errors="ignore") as f:
+            new = configparse.parse(f.read())
+        when = lambda t: f"{t[0:4]}-{t[4:6]}-{t[6:8]} {t[9:11]}:{t[11:13]}"  # noqa: E731
+        return {"answer": configdiff.report(old, new, f"{n1} ({when(t1)})",
+                                            f"{n2} ({when(t2)})"),
+                "how": "analysis over your config (diff)", "verified": True,
+                "confidence": 0.95, "cortex": "skipped",
+                "trace": [f"compared {len(old)} → {len(new)} parsed object(s)"]}
+
     def learn_text(self, text, source=""):
         chunks = self._smart_chunks(text)           # config-aware: keeps stanzas whole
         chunks, _dropped = self._drop_stubs(chunks)
+        snap_note = ""
+        try:
+            import configparse
+            if configparse.looks_like_config(text) and configparse.parse(text):
+                snap_note = self._snapshot_config(text, source, chunks)
+        except Exception as e:                      # a snapshot must never block learning
+            snap_note = f" (config snapshot not saved: {type(e).__name__})"
         self.lib.add_many(chunks)
         self.graph.learn_text(text)                 # relational edges (cheap, teach-time)
         self._retrain()
@@ -1575,7 +1692,8 @@ class Mind:
             self.mem["last_learned"] = {"source": source, "count": len(chunks)}
             self._save()
         where = f" from {source}" if source else ""
-        return f"Learned {len(chunks)} passages{where}. You can now ask me about it."
+        return (f"Learned {len(chunks)} passages{where}. You can now ask me about it."
+                + snap_note)
 
     def learn_github(self, spec):
         """Clone a public GitHub repo and learn its docs (Markdown/txt/PDF). Reads
@@ -2183,6 +2301,31 @@ class Mind:
                     r"improve\s+yourself|train\s+yourself|upgrade\s+(?:your\s+)?(?:brain|mind|knowledge))"
                     r"\s*[.!]*\s*$", low):
             return self.learn_everything()
+        # compliance view: "compliance report", "pci report", "audit for iso 27001",
+        # "nist 800-53 view" — findings grouped under the controls they bear on
+        if re.search(r"\b(compliance|pci|iso\s*27001|nist|800-53)\b", low) and \
+                re.search(r"\b(report|view|map\w*|audit|check|review|gaps?|evidence|"
+                          r"status)\b", low):
+            import configaudit
+            fw = (configaudit.PCI if "pci" in low else
+                  configaudit.ISO if re.search(r"iso\s*27001", low) else
+                  configaudit.NIST if re.search(r"nist|800-53", low) else None)
+            return self.compliance_view(fw)
+        # "what changed" / "compare configs" / "diff config" / "config history"
+        if re.match(r"^\s*(?:what\s+changed|what\s+has\s+changed|compare\s+(?:my\s+|the\s+)?"
+                    r"configs?|diff\s+(?:my\s+|the\s+)?configs?|config(?:uration)?\s+diff|"
+                    r"show\s+(?:the\s+)?changes)\b", low):
+            mm = re.search(r"\bconfigs?\s+(\S+)\s+(?:and|vs\.?|with|to)\s+(\S+)", q, re.I)
+            return self.compare_configs(*(mm.groups() if mm else ()))
+        if re.match(r"^\s*(?:config(?:uration)?\s+history|config\s+snapshots|"
+                    r"list\s+(?:config\s+)?snapshots)\s*\??\s*$", low):
+            snaps = self.config_snapshots()
+            body = ("\n".join(f"  • {n} — {t[0:4]}-{t[4:6]}-{t[6:8]} {t[9:11]}:{t[11:13]}"
+                               for n, t, _ in snaps) or "  (none yet — upload a config)")
+            return {"answer": f"Configuration snapshots I hold ({len(snaps)}):\n" + body
+                    + "\n\nAsk  what changed  to compare the two most recent.",
+                    "how": "config history", "verified": True, "confidence": 0.95,
+                    "cortex": "skipped", "trace": []}
         if re.match(r"^\s*(?:config\s+status|configuration\s+status|"
                     r"what\s+config(?:uration)?\s+(?:do\s+you\s+have|is\s+loaded)|"
                     r"do\s+you\s+have\s+(?:my\s+)?config(?:uration)?|"

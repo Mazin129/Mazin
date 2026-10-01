@@ -172,6 +172,27 @@ def main():
           m2.lib.add_many(["A unique passage about BGP route reflectors."]) == 0)
     check("library grew by exactly one", len(m2.lib.docs) == n + 1)
 
+    cfg_v1 = ("config firewall policy\n    edit 1\n        set name \"web\"\n"
+              "        set service \"HTTPS\"\n        set action accept\n    next\n"
+              "    edit 2\n        set name \"dns\"\n        set service \"DNS\"\n"
+              "        set action accept\n    next\nend\n")
+    cfg_v2 = cfg_v1.replace('set service \"HTTPS\"', 'set service \"ALL\"')
+    m2.learn_text(cfg_v1, "edge-fw.conf")
+    note = m2.learn_text(cfg_v2, "edge-fw.conf")
+    import brain as _b
+    pols = [o for o in _b.survey(m2).config_objects if o.kind == "firewall policy"
+            and o.name in ("1", "2")]
+    check("re-uploading an edited config replaces the old version",
+          "Replaced the previous version" in note)
+    check("…so the edited policy is not counted twice", len(pols) == 2)
+    check("…and only the new version of it remains",
+          [o.get("service") for o in pols if o.name == "1"] == ['"ALL"'])
+    check("an identical re-upload is recognised",
+          "same as the version already loaded" in m2.learn_text(cfg_v2, "edge-fw.conf"))
+    diff_ans = m2.ask("what changed")["answer"]
+    check("'what changed' compares the two versions",
+          "firewall policy 1" in diff_ans and '"HTTPS"  →  "ALL"' in diff_ans)
+
     r1 = m2.ask("learn everything")
     size1 = len(m2.lib.docs)
     r2 = m2.ask("learn everything")

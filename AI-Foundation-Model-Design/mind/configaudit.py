@@ -585,11 +585,18 @@ def _check_hardening(objects, policies):
 # ---------------------------------------------------------------------------- #
 # public API
 # ---------------------------------------------------------------------------- #
+def is_firewall_policy(o):
+    """A FIREWALL policy (firewall policy / policy6 / proxy-policy …) — not every object
+    whose kind merely contains the word. `config system password-policy` is a settings
+    block, and counting it made the review report 'policy  is disabled' with no name."""
+    k = (o.kind or "").strip().lower()
+    return k.startswith("firewall") and "policy" in k and "shaping" not in k
+
+
 def audit(objects):
     """Run every check over parsed ConfigObjects. Returns findings, worst first."""
     objects = list(objects or [])
-    policies = [o for o in objects if "policy" in (o.kind or "").lower()
-                and "shaping" not in (o.kind or "").lower()]
+    policies = [o for o in objects if is_firewall_policy(o)]
     routes = [o for o in objects if "static" in (o.kind or "").lower()
               and "router" in (o.kind or "").lower()]
 
@@ -700,6 +707,147 @@ def group(findings, population=None):
     return out
 
 
+# ---------------------------------------------------------------------------- #
+# COMPLIANCE MAPPING
+#
+# Each finding tagged to the controls it bears on, for evidence and audit reports.
+# Deliberately conservative: a check is only mapped to a control it clearly relates
+# to. Where no control fits cleanly the entry is left out rather than guessed — a wrong
+# control number in an audit pack does more harm than a missing one.
+#
+# PCI DSS v4.0 · ISO/IEC 27001:2022 Annex A · NIST SP 800-53 Rev. 5
+# ---------------------------------------------------------------------------- #
+PCI, ISO, NIST = "PCI DSS 4.0", "ISO 27001:2022", "NIST 800-53"
+FRAMEWORKS = (PCI, ISO, NIST)
+
+_RULE_HYGIENE = {PCI: ["1.2.7"], ISO: ["A.8.9"], NIST: ["CM-6"]}
+_TOO_OPEN = {PCI: ["1.2.5", "1.4.2"], ISO: ["A.8.20", "A.8.22"], NIST: ["SC-7", "CM-7"]}
+_VPN_CRYPTO = {PCI: ["4.2.1"], ISO: ["A.8.24"], NIST: ["SC-8", "SC-13"]}
+_ADMIN_CRYPTO = {PCI: ["2.2.7"], ISO: ["A.8.24", "A.8.5"], NIST: ["SC-8", "SC-13"]}
+
+CONTROLS = {
+    # rule-base logic
+    "shadowed-policy": _RULE_HYGIENE, "conflicting-policy": _RULE_HYGIENE,
+    "duplicate-policy": _RULE_HYGIENE, "unreachable-after-any": _RULE_HYGIENE,
+    "disabled-policy": _RULE_HYGIENE, "unused-object": _RULE_HYGIENE,
+    "dangling-interface": {ISO: ["A.8.9"], NIST: ["CM-6"]},
+    "any-any-accept": _TOO_OPEN, "overly-permissive": _TOO_OPEN,
+    "permissive": _TOO_OPEN, "inbound-to-any": _TOO_OPEN,
+    "no-logging": {PCI: ["10.2.1"], ISO: ["A.8.15"], NIST: ["AU-2", "AU-12"]},
+    "no-inspection": {ISO: ["A.8.7"], NIST: ["SI-3", "SI-4"]},
+    # routing
+    "conflicting-route": {ISO: ["A.8.9"], NIST: ["CM-6"]},
+    "duplicate-route": {ISO: ["A.8.9"], NIST: ["CM-6"]},
+    "multiple-defaults": {ISO: ["A.8.9"], NIST: ["CM-6"]},
+    # administrative access
+    "wan-management": {PCI: ["1.4.2"], ISO: ["A.8.2", "A.8.20"], NIST: ["SC-7", "AC-17"]},
+    "admin-no-trusthost": {ISO: ["A.8.2", "A.8.20"], NIST: ["AC-17"]},
+    "cleartext-admin": _ADMIN_CRYPTO, "weak-admin-tls": _ADMIN_CRYPTO,
+    "strong-crypto-off": _ADMIN_CRYPTO,
+    "default-admin-name": {PCI: ["2.2.2"], ISO: ["A.8.2"], NIST: ["CM-6"]},
+    "password-policy-off": {PCI: ["8.3.6"], ISO: ["A.5.17", "A.8.5"], NIST: ["IA-5"]},
+    "short-passwords": {PCI: ["8.3.6"], ISO: ["A.5.17", "A.8.5"], NIST: ["IA-5"]},
+    "long-admin-timeout": {PCI: ["8.2.8"], ISO: ["A.8.5"], NIST: ["AC-12"]},
+    # SNMP
+    "snmp-default-community": {PCI: ["2.2.2"], ISO: ["A.8.21", "A.8.9"],
+                               NIST: ["CM-6", "CM-7"]},
+    "snmp-v2c": {PCI: ["1.2.6"], ISO: ["A.8.21"], NIST: ["SC-8", "CM-7"]},
+    # VPN
+    "weak-ipsec-crypto": _VPN_CRYPTO, "sha1-ipsec": _VPN_CRYPTO,
+    "weak-dh-group": _VPN_CRYPTO, "no-pfs": _VPN_CRYPTO,
+    "ike-aggressive-mode": _VPN_CRYPTO, "weak-sslvpn-tls": _VPN_CRYPTO,
+}
+
+# What each referenced control is, so the report is readable without the standards
+CONTROL_TITLES = {
+    "1.2.5": "allowed services, protocols and ports are identified and approved",
+    "1.2.6": "security features defined for insecure services and protocols",
+    "1.2.7": "network security control configurations reviewed every six months",
+    "1.4.2": "inbound traffic from untrusted networks is restricted",
+    "2.2.2": "vendor default accounts are managed",
+    "2.2.7": "non-console administrative access is encrypted",
+    "4.2.1": "strong cryptography protects data over open, public networks",
+    "8.2.8": "idle sessions over 15 minutes require re-authentication",
+    "8.3.6": "passwords are at least 12 characters",
+    "10.2.1": "audit logs are enabled and active",
+    "A.5.17": "authentication information",
+    "A.8.2": "privileged access rights",
+    "A.8.5": "secure authentication",
+    "A.8.7": "protection against malware",
+    "A.8.9": "configuration management",
+    "A.8.15": "logging",
+    "A.8.20": "networks security",
+    "A.8.21": "security of network services",
+    "A.8.22": "segregation of networks",
+    "A.8.24": "use of cryptography",
+    "AC-12": "session termination",
+    "AC-17": "remote access",
+    "AU-2": "event logging",
+    "AU-12": "audit record generation",
+    "CM-6": "configuration settings",
+    "CM-7": "least functionality",
+    "IA-5": "authenticator management",
+    "SC-7": "boundary protection",
+    "SC-8": "transmission confidentiality and integrity",
+    "SC-13": "cryptographic protection",
+    "SI-3": "malicious code protection",
+    "SI-4": "system monitoring",
+}
+
+
+def controls_for(rule):
+    """{framework: [control ids]} for one finding rule; {} when unmapped."""
+    return CONTROLS.get(rule, {})
+
+
+def _control_sort(c):
+    """Order controls naturally: 1.2.5 < 1.2.7 < 10.2.1, A.5.17 < A.8.2 < A.8.20."""
+    import re as _r
+    return [int(p) if p.isdigit() else p for p in _r.split(r"[.\-]", c)]
+
+
+def compliance_report(findings, objects, framework=None):
+    """Findings grouped under the controls they bear on, per framework."""
+    fws = [f for f in FRAMEWORKS if framework is None or framework == f]
+    real = [f for f in findings if f.severity != INFO]
+    lines = [f"**Compliance view** — {len(list(objects))} object(s) reviewed, "
+             f"{len(real)} finding(s) mapped to {', '.join(fws)}."]
+    if not real:
+        lines.append("\nNo findings — nothing to report against these controls.")
+    unmapped = sorted({f.rule for f in real if not controls_for(f.rule)})
+    for fw in fws:
+        by_control = {}
+        for f in real:
+            for c in controls_for(f.rule).get(fw, []):
+                by_control.setdefault(c, []).append(f)
+        if not by_control:
+            continue
+        lines += ["", f"### {fw}"]
+        for c in sorted(by_control, key=_control_sort):
+            fs = by_control[c]
+            worst = min(fs, key=lambda x: _ORDER.get(x.severity, 9)).severity
+            title = CONTROL_TITLES.get(c, "")
+            lines.append(f"{_MARK.get(worst, '•')} **{c}** — {title}  ({len(fs)} finding(s))")
+            seen = set()
+            for f in sorted(fs, key=lambda x: _ORDER.get(x.severity, 9)):
+                if f.title not in seen:
+                    seen.add(f.title)
+                    lines.append(f"     · {f.title}")
+                if len(seen) >= 5:
+                    more = len({x.title for x in fs}) - 5
+                    if more > 0:
+                        lines.append(f"     · … and {more} more")
+                    break
+    if unmapped:
+        lines += ["", "Findings with no clean control mapping (reported, not mapped): "
+                  + ", ".join(unmapped)]
+    lines += ["", "---", "*An indicative mapping to help gather evidence — it is not an "
+              "assessment. Your QSA or auditor's interpretation of each control "
+              "decides. Each finding comes from the deterministic review; no model was "
+              "involved.*"]
+    return "\n".join(lines)
+
+
 def counts(findings):
     c = {HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0}
     for f in findings:
@@ -710,7 +858,7 @@ def counts(findings):
 def report(findings, objects, limit=40):
     """A review a human can act on: what was checked, what was found, what it means."""
     objects = list(objects or [])
-    policies = sum(1 for o in objects if "policy" in (o.kind or "").lower())
+    policies = sum(1 for o in objects if is_firewall_policy(o))
     routes = sum(1 for o in objects if "static" in (o.kind or "").lower())
     # Say each thing ONCE. 120 copies of the same sentence is a linter dump: the reader
     # learns nothing after the first, and the findings that matter get buried under the
