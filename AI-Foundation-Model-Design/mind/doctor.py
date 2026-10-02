@@ -103,7 +103,8 @@ def stage_generate(llm):
     print("  asking it: 'In one sentence, what is a VLAN?'")
     print(f"  timeout   : {llm.gen_timeout}s   (VIO_LLM_TIMEOUT)")
     t0 = time.time()
-    out = llm.generate("In one sentence, what is a VLAN?", temperature=0.2, max_tokens=120)
+    out = llm.generate("In one sentence, what is a VLAN?", temperature=0.2, max_tokens=120,
+                       personal=False)
     dt = time.time() - t0
     if not out:
         _line(False, f"The model produced nothing after {dt:.0f}s.", llm.last_error)

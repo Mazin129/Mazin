@@ -680,8 +680,10 @@ class Mind:
         try:
             from llm import LLM
             self.llm = LLM()
+            self.llm.context = self._llm_context
         except Exception:
             self.llm = None
+        self._dialog = self._load_dialog()
         # Stage 1 agentic layer: a master + registry wrapping the engines above. This does
         # NOT change ask()/_ask_core — it powers the parallel ask_agentic() path, which
         # falls back to _ask_core for anything not yet migrated. Optional/never fatal.
@@ -2606,7 +2608,78 @@ class Mind:
         else:
             self._turns_since_skill = getattr(self, "_turns_since_skill", 9) + 1
         self._prev_msg = raw
+        self._remember_turn(raw, r)
         return r
+
+    # ---- conversation memory & the model's sense of who it is talking to ----------
+    # Every model call used to be a stranger reading one message: no idea who the user
+    # is, what their network looks like, or what was said a minute ago. That is what
+    # made the answers feel shallow. Now each call carries that context.
+    _DIALOG_KEEP = 8
+
+    def _dialog_path(self):
+        return os.path.join(DATA_DIR, "dialog.json")
+
+    def _load_dialog(self):
+        try:
+            with open(self._dialog_path(), encoding="utf-8") as f:
+                d = json.load(f)
+            return [t for t in d if isinstance(t, dict)][-self._DIALOG_KEEP:]
+        except Exception:
+            return []
+
+    def _remember_turn(self, q, r):
+        if not q or (r.get("how") or "") in ("feedback", "welcome", "reset"):
+            return
+        body = re.split(r"\n\s*(?:Grounded on:|Sources?:|📚|🤝)", r.get("answer") or "")[0]
+        a = re.sub(r"\s+", " ", body).strip()
+        self._dialog = (getattr(self, "_dialog", []) + [
+            {"q": q[:500], "a": a[:600] + ("…" if len(a) > 600 else "")}
+        ])[-self._DIALOG_KEEP:]
+        try:
+            with open(self._dialog_path(), "w", encoding="utf-8") as f:
+                json.dump(self._dialog, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _llm_context(self):
+        """Who Vio is, who the user is, their environment, and the recent conversation —
+        prepended to every model call so it answers THIS person, not a stranger."""
+        parts = [
+            "You are Vio — the user's own senior network and security engineer, running "
+            "privately on their machine. Talk to them as a trusted colleague: direct, "
+            "specific, practical, no filler and no lecturing. Understand what they "
+            "actually mean, including short or misspelled messages (English is not "
+            "always their first language) — infer intent from the conversation. Give "
+            "the real answer first, then the reasoning; when something is uncertain, "
+            "say what you would check. Never invent facts about their network."]
+        facts = list((self.mem or {}).get("facts") or [])[:15]
+        if facts:
+            parts.append("What you know about the user:\n" +
+                         "\n".join(f"- {f}" for f in facts))
+        try:
+            import brain
+            ev = brain.survey(self)
+            if ev.config_kinds:
+                top = sorted(ev.config_kinds.items(), key=lambda kv: -kv[1])[:8]
+                parts.append(
+                    f"Their environment: a loaded device configuration with "
+                    f"{sum(ev.config_kinds.values())} objects (" +
+                    ", ".join(f"{n} {k}" for k, n in top) + ").")
+        except Exception:
+            pass
+        try:
+            taught = list(getattr(self.skillreg, "skills", {}) or {})[:10]
+            if taught:
+                parts.append("Processes the user taught you: " + ", ".join(taught) + ".")
+        except Exception:
+            pass
+        turns = getattr(self, "_dialog", [])[-6:]
+        if turns:
+            parts.append("Recent conversation (oldest first) — use it to resolve "
+                         "'it', 'that', follow-ups and corrections:\n" + "\n".join(
+                             f"User: {t['q']}\nVio: {t['a'][:300]}" for t in turns))
+        return "\n\n".join(parts)
 
     def _do_it_yourself(self):
         """'Do it yourself': take the last question I could not answer, learn what it

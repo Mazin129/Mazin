@@ -256,7 +256,7 @@ def from_description(request, llm=None, max_tokens=700):
         try:
             spec_text = llm.generate("Request: " + (request or "").strip(),
                                      system=SPEC_SYSTEM, temperature=0.2,
-                                     max_tokens=max_tokens) or ""
+                                     max_tokens=max_tokens, personal=False) or ""
         except Exception:
             spec_text = ""
     spec = parse_spec(spec_text) if spec_text.strip() else {"kind": "", "nodes": [],

@@ -116,7 +116,8 @@ def generate(request: str, llm, max_tokens=None) -> dict:
     slug = pick_type(request)
     prompt = build_prompt(request, slug)
     budget = int(max_tokens or os.environ.get("VIO_DIAGRAM_MAX_TOKENS", "6000"))
-    out = llm.generate(prompt, system=SYSTEM, temperature=0.4, max_tokens=budget)
+    out = llm.generate(prompt, system=SYSTEM, temperature=0.4, max_tokens=budget,
+                       personal=False)
     html = extract_html(out)
     if not html or "<" not in html:
         return {"ok": False, "type": slug, "error": "the model did not return HTML"}

@@ -79,6 +79,9 @@ class LLM:
         self.last_error = ""
         self.reason = ""          # why .available is False (empty when it is True)
         self.note = ""            # a warning even when available (e.g. model not installed)
+        # who Vio is, who the user is and what we were just talking about — a callable
+        # set by the Mind. Without it every call was a stranger reading one message.
+        self.context = None
         self.last_thinking = ""   # the model's reasoning for the last call (not the answer)
         self.last_thought = False # did the last call think?
         self._detect()
@@ -138,11 +141,13 @@ class LLM:
             return True
         return bool(think)
 
-    def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024, think=None):
+    def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024, think=None,
+                 personal=True):
         """One-shot completion. Returns the text, or None if the server/model fails.
 
         think=True asks a thinking model to reason step by step first (hard tasks);
         the reasoning gets its own token budget so it cannot crowd out the answer.
+        personal=False leaves out the conversation context (machine-format tasks).
 
         Every call is counted and timed, and every failure keeps its reason in
         .last_error — silent `except: return None` is exactly how Vio ended up
@@ -156,6 +161,13 @@ class LLM:
             "stream": False,
             "options": {"temperature": temperature, "num_predict": max_tokens},
         }
+        if personal and callable(self.context):
+            try:
+                ctx = self.context() or ""
+            except Exception:
+                ctx = ""
+            if ctx:
+                system = ctx + ("\n\n" + system if system else "")
         if system:
             body["system"] = system
         thinking = self.wants_thinking(think)

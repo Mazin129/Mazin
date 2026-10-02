@@ -94,6 +94,33 @@ def main():
     f = Fake(["qwen3.5:9b"], model="qwen3.5:9b")
     check("an explicit VIO_LLM_MODEL is honoured", f.model == "qwen3.5:9b" and not f.note)
 
+    print("\n-- every model call knows who it is talking to --")
+    import os
+    import tempfile
+    os.environ["VIO_DATA_DIR"] = tempfile.mkdtemp(prefix="vio_llmctx_")
+    os.environ.setdefault("VIO_SEMANTIC_ASYNC", "0")
+    os.environ.setdefault("VIO_TRAIN_ASYNC", "0")
+    import importlib
+    import reasoner
+    importlib.reload(reasoner)
+    m = reasoner.Mind()
+    m.llm = Fake(["qwen3.5:4b"], reply="Check MTU on the tunnel.")
+    m.llm.context = m._llm_context
+    m.ask("remember: I run the SA-OCC FortiGate firewalls")
+    m.ask("troubleshoot IPsec tunnel to branch dropping large packets")
+    m.ask("why would that happen only at night")
+    sysmsg = (m.llm.bodies or [{}])[-1].get("system", "")
+    check("the model is told who Vio is", "senior network and security engineer" in sysmsg)
+    check("…what it knows about the user", "SA-OCC FortiGate" in sysmsg)
+    check("…and the recent conversation, so 'that' means something",
+          "dropping large packets" in sysmsg)
+    check("the conversation survives a restart", len(reasoner.Mind()._dialog) == 3)
+    f = Fake(["qwen3.5:4b"])
+    f.context = lambda: "PERSONAL"
+    f.generate("{json please}", system="JSON only", personal=False)
+    check("machine-format calls get no conversation context",
+          "PERSONAL" not in f.bodies[-1].get("system", ""))
+
     print("=" * 72)
     print(f"  {len(PASS)} passed, {len(FAIL)} failed")
     print("\nALL PASS" if not FAIL else "\nFAILURES")

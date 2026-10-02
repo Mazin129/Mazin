@@ -152,7 +152,8 @@ def draft_from_research(topic, answer_text, sources=None, llm=None):
             f"Evidence excerpt:\n{body[:1200]}\n"
         )
         try:
-            raw = llm.generate(prompt, system="You output only valid JSON.", max_tokens=400)
+            raw = llm.generate(prompt, system="You output only valid JSON.", max_tokens=400,
+                               personal=False)
             m = re.search(r"\{[\s\S]*\}", raw or "")
             if m:
                 data = json.loads(m.group(0))
