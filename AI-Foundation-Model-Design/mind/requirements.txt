@@ -1,0 +1,8 @@
+# Vio — everything it needs to run on your PC (install:  pip install -r requirements.txt)
+sympy>=1.12
+numpy>=1.24
+scikit-learn>=1.3
+# reading files you teach it
+pymupdf>=1.24              # PDFs: decodes Word-exported fonts, reads tables
+pypdf>=4.0                 # PDFs: second reader
+rapidocr-onnxruntime>=1.3  # OCR: scanned PDFs and images (runs locally, no upload)

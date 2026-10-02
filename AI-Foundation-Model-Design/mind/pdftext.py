@@ -45,8 +45,16 @@ def _load(name, importer):
     return _backend[name]
 
 
+def _import_pymupdf():
+    """PyMuPDF's module is `pymupdf` (new) or `fitz` (old name, now deprecated)."""
+    try:
+        return __import__("pymupdf")
+    except ImportError:
+        return __import__("fitz")
+
+
 def _extract_pymupdf(data: bytes):
-    fitz = _load("fitz", lambda: __import__("fitz"))
+    fitz = _load("fitz", _import_pymupdf)
     if not fitz:
         return None
     try:

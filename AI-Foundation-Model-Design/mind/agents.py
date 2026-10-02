@@ -112,6 +112,28 @@ class MathAgent(Agent):
                       confidence=0.95 if ok else 0.5, trace=list(trace or []))
 
 
+class DataAgent(Agent):
+    """Uploaded tables (CSV, Excel sheets, tables inside Word/PDF documents) answer
+    counts, totals, filters and top-N EXACTLY — before any model guesses at them."""
+    name, domains = "data", ("data",)
+
+    def _answer(self, q):
+        try:
+            return self.mind._table_answer(q)
+        except Exception:
+            return None, None
+
+    def score(self, q, ctx):
+        return 0.9 if self._answer(q)[1] else 0.0
+
+    def run(self, q, ctx):
+        tbl, da = self._answer(q)
+        if not da:
+            return None
+        return Result(da, how=f"data analysis ({tbl.name})", verified=True,
+                      confidence=0.95, trace=[f"computed over {len(tbl.rows)} rows"])
+
+
 class PlannerAgent(Agent):
     name, domains = "planner", ("planning",)
 
@@ -633,7 +655,7 @@ class NetworkEngineeringAgent(ExpertAgent):
 # NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
 # (teach:/math/tools/research/draw/agents/…); folding it in would break those.
 DEFAULT_AGENTS = (LearningAgent, SelfImprovementAgent, WebResearchAgent, SkillGrowAgent,
-                  DiagramAgent, SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
+                  DiagramAgent, SkillAgent, MathAgent, DataAgent, PlannerAgent, WorldModelAgent,
                   ReasoningAgent, NetworkEngineeringAgent, MemoryAgent, CoreRouterAgent,
                   KnowledgeAgent)
 

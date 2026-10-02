@@ -1295,10 +1295,8 @@ class Mind:
         retrain). Configs are chunked by stanza; prose is chunked normally; CSVs load
         as tables. Reads only; never executes anything. Returns a summary dict."""
         import glob
-        from diagrams import file_to_text, DRAWIO_EXTS, VISIO_EXTS, IMAGE_EXTS
-        diagram_exts = DRAWIO_EXTS + VISIO_EXTS + IMAGE_EXTS
-        exts = (".pdf", ".txt", ".md", ".markdown", ".text", ".rst", ".cfg", ".conf",
-                ".config", ".log", ".ini", ".yaml", ".yml", ".csv", ".tsv") + diagram_exts
+        import readers
+        exts = readers.ALL_EXTS
         if not os.path.isdir(path):
             return {"ok": False, "answer": f"Not a folder: {path}", "files": 0,
                     "passages": 0, "skipped": [], "per": []}
@@ -1310,28 +1308,16 @@ class Mind:
             name = os.path.basename(fp)
             ext = os.path.splitext(fp)[1].lower()
             try:
-                if ext == ".pdf":
-                    from pdftext import extract_text, looks_readable
-                    with open(fp, "rb") as fh:
-                        text = extract_text(fh.read())
-                    if not looks_readable(text):
-                        skipped.append((name, "unreadable PDF (scanned/encoded)")); continue
-                elif ext in (".csv", ".tsv"):
-                    with open(fp, encoding="utf-8", errors="ignore") as fh:
-                        self.load_csv(fh.read(), name)
+                with open(fp, "rb") as fh:
+                    rr = readers.read_file(name, fh.read())
+                if not rr.ok:
+                    skipped.append((name, rr.error or "no readable text")); continue
+                for tname, csv_text in rr.tables:      # tables → the data engine too
+                    self.load_csv(csv_text, tname if ext in (".csv", ".tsv")
+                                  else f"{name} – {tname}")
+                if ext in (".csv", ".tsv"):            # a CSV is data, not prose
                     per.append((name, "loaded as table")); learned += 1; continue
-                elif ext in diagram_exts:
-                    with open(fp, "rb") as fh:
-                        raw = fh.read()
-                    text, kind = file_to_text(name, raw)          # diagram → sentences, image → OCR
-                    if not text:
-                        if ext == ".xml":                          # a non-drawio .xml: use as text
-                            text = raw.decode("utf-8", "ignore")
-                        else:
-                            skipped.append((name, kind)); continue
-                else:
-                    with open(fp, encoding="utf-8", errors="ignore") as fh:
-                        text = fh.read()
+                text = rr.text
             except Exception as e:
                 skipped.append((name, str(e)[:60])); continue
             if len((text or "").strip()) < 20:
@@ -1393,7 +1379,7 @@ class Mind:
         if not t:
             return None
         self.tables.append(t)
-        self.tables = self.tables[-5:]              # keep the last few tables
+        self.tables = self.tables[-40:]             # keep the recent tables (a workbook has many)
         return t.describe()
 
     def learn_everything(self):
@@ -1793,6 +1779,34 @@ class Mind:
         return (f"Learned {len(chunks)} passages{where}. You can now ask me about it."
                 + snap_note)
 
+    def learn_file(self, name, data):
+        """Teach ANY file: read it with the right reader (readers.py), load its tables
+        into the data engine, then learn, self-test and study the text."""
+        import readers
+        rr = readers.read_file(name, data)
+        if not rr.ok:
+            return f"📄 **{name}** — I couldn't read it: {rr.error}."
+        head = (f"📖 Read as {rr.kind} with {rr.method}"
+                + (f" · {rr.pages} {'slide' if rr.kind == 'slides' else 'sheet' if rr.kind == 'sheet' else 'page'}(s)"
+                   if rr.pages else "")
+                + (" · " + "; ".join(rr.notes) if rr.notes else ""))
+        tables = []
+        for tname, csv_text in rr.tables:
+            label = tname if rr.method == "csv" else f"{name} – {tname}"
+            summ = self.load_csv(csv_text, label)
+            if summ:
+                tables.append(label)
+        if rr.method == "csv":                        # a CSV is DATA, not prose
+            return (self.load_csv(rr.text, rr.tables[0][0]) or
+                    f"I couldn't read {name} as a table.")
+        msg = self.learn_document(rr.text, name)
+        if tables:
+            msg += ("\n• 📊 Also loaded " + str(len(tables)) + " table(s) as data you can "
+                    "query (counts, filters, sums): " + ", ".join(tables[:6])
+                    + ("…" if len(tables) > 6 else "") + ".")
+        lines = msg.split("\n", 1)
+        return lines[0] + "\n" + head + ("\n" + lines[1] if len(lines) > 1 else "")
+
     def learn_document(self, text, source="a file", background=None):
         """Teach a document and PROVE it: what was read, what was new, a retrieval
         self-test, the structure found, and a study pass by the local model (in the
@@ -1810,6 +1824,7 @@ class Mind:
         found = [f"{len(v)} {n}" for n, v in (("rule(s)", k["rules"]),
                  ("step(s)", k["steps"]), ("definition(s)", k["definitions"]),
                  ("exception(s)", k["exceptions"])) if v]
+        self.docstore.put(source, chunk_ids=[docstudy.chunk_id(c) for c in chunks][:5000])
         self.docstore.put(source, learned=time.time(), words=words,
                                 passages=len(chunks), new=new,
                                 selftest=[passed, total], structure=found,
@@ -1831,6 +1846,14 @@ class Mind:
             lines.append("• ⚠️ That is very little text for a document — if it is mostly "
                          "slides, tables or pictures, most of it was not readable.")
         llm_ok = self.llm is not None and getattr(self.llm, "available", False)
+        try:
+            import configparse
+            is_config = configparse.looks_like_config(text)
+        except Exception:
+            is_config = False
+        if is_config:
+            llm_ok = False                 # a config is analysed exactly, not "studied"
+            self.docstore.put(source, status="device configuration (analysed exactly)")
         if llm_ok and chunks:
             run = (os.environ.get("VIO_STUDY_ASYNC", "1") != "0") if background is None \
                 else background
@@ -1843,12 +1866,68 @@ class Mind:
                                  daemon=True).start()
             else:
                 self._study_document(text, source)
-        elif chunks:
+        elif chunks and not is_config:
             self.docstore.put(source, status="not studied (no local model running)")
             lines.append("• I stored it for search, but could not STUDY it: no local "
                          "model is running (start Ollama). Until then I can quote it, "
                          "not explain it.")
         return "\n".join(lines) + snap
+
+    def _table_answer(self, q):
+        """(table, answer) from the uploaded tables, or (None, None). A table holding
+        the exact value asked about wins; then tables whose name or columns the
+        question mentions; then the most recent."""
+        tables = list(reversed(self.tables))
+        for tbl in tables:
+            try:
+                hit = tbl._lookup(q)
+            except Exception:
+                hit = None
+            if hit:
+                return tbl, hit
+        words = set(re.findall(r"[a-z0-9]+", q.lower()))
+
+        def named(t):
+            toks = set(re.findall(r"[a-z0-9]+", (t.name + " " + " ".join(t.headers)).lower()))
+            return len(words & {w for w in toks if len(w) > 2})
+        for tbl in sorted(tables, key=named, reverse=True):
+            try:
+                da = tbl.answer(q)
+            except Exception:
+                da = None
+            if da:
+                return tbl, da
+        return None, None
+
+    def _own_material_for(self, q):
+        """The user's own taught document or table that answers `q`, or None."""
+        tbl, _ = self._table_answer(q)
+        if tbl is not None:
+            return f"your data table “{tbl.name}”"
+        own = self.docstore.chunk_ids()
+        if not own:
+            return None
+        import docstudy
+        try:
+            hits = self.lib.search(q, k=5)
+        except Exception:
+            return None
+        # the passage must carry the QUESTION's own words (host names included), not
+        # just share a topic: "static routes on SA-OCC" is not answered by a design
+        # document that merely mentions routing.
+        stop = {"what", "which", "when", "where", "show", "list", "tell", "give", "does",
+                "configured", "configuration", "there", "have", "many", "much", "with",
+                "from", "about", "this", "that", "your", "mine", "please"}
+        want = {w for w in re.findall(r"[a-z0-9][a-z0-9._/-]{2,}", q.lower())
+                if w not in stop}
+        for d, score in hits:
+            if score < 0.15 or docstudy.chunk_id(d) not in own:
+                continue
+            have = set(re.findall(r"[a-z0-9][a-z0-9._/-]{2,}", d.lower()))
+            hit = {w for w in want if w in have or w.rstrip("s") in have}
+            if want and len(hit) >= max(1, round(len(want) * 0.67)):
+                return f"your document “{own[docstudy.chunk_id(d)]}”"
+        return None
 
     def _study_document(self, text, source):
         import docstudy
@@ -2994,6 +3073,19 @@ class Mind:
                 self._remember_episode(q, r)
                 return r
 
+        # A question about a specific system with no configuration to answer it from —
+        # unless the USER's OWN material answers it: a design document (LLD/HLD), an IP
+        # plan spreadsheet or an e-mail they taught describes THEIR system, unlike a
+        # vendor manual. Then it is answered from that material, not refused.
+        _own = None
+        if self._plan is not None and self._plan.strategy in ("need-config",
+                                                              "need-config-kind"):
+            _own = self._own_material_for(q)
+            if _own:
+                self._plan = None
+                self._intents = [u for u in self._intents if u.requires != brain.CONFIG] \
+                    if self._intents else self._intents
+
         # A REVIEW of the configuration is its own strategy: "audit my config", "review
         # the firewall", "any problems with my policies", "is this secure". The brain
         # already classified these as evaluate-form questions about a specific system;
@@ -3610,11 +3702,10 @@ class Mind:
 
         # 1a1) data-table analysis — COMPUTED answers over an uploaded CSV (counts, totals,
         #      averages, group-by, top-N). The analyzer returns None for non-data questions.
-        for tbl in reversed(self.tables):
-            da = tbl.answer(q)
-            if da:
-                return {"answer": da, "how": f"data analysis ({tbl.name})",
-                        "verified": True, "trace": [f"computed over {len(tbl.rows)} rows"]}
+        tbl, da = self._table_answer(q)
+        if da:
+            return {"answer": da, "how": f"data analysis ({tbl.name})",
+                    "verified": True, "trace": [f"computed over {len(tbl.rows)} rows"]}
         # If a table is loaded and this is clearly a data/analytical question that no
         # table could answer, say so honestly — do NOT fall through to text retrieval
         # (that is what returned networking facts for an airline question).

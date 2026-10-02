@@ -144,6 +144,19 @@ def stage_library(mind):
     return objs
 
 
+def stage_readers():
+    _h("STAGE 0 — can Vio read your files?")
+    try:
+        import readers
+    except Exception as e:
+        _line(False, "readers.py failed to load", str(e))
+        return
+    caps = readers.capabilities()
+    for label, ok in caps.items():
+        _line(ok, label, "" if ok else "pip install -r requirements.txt")
+    _line(True, "Word, Excel, PowerPoint, e-mail, HTML, JSON, zip — built in")
+
+
 def stage_route(mind, questions):
     _h("STAGE 5 — for each question: did the model run, or not?")
     print("  This is the heart of it. 'skipped' means a deterministic path answered")
@@ -205,6 +218,7 @@ def main(argv):
     print("  VIO DOCTOR — is the mind thinking, or just matching keywords?")
     print(BAR)
 
+    stage_readers()
     llm = stage_server()
     stage_models(llm)
     generated = stage_generate(llm)

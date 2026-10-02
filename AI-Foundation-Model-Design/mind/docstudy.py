@@ -41,6 +41,11 @@ def _name_tokens(name):
             if len(w) > 2 and w not in _STOP and w not in ("pdf", "docx", "txt", "file")}
 
 
+def chunk_id(text):
+    import hashlib
+    return hashlib.sha1((text or "").strip().encode("utf-8", "ignore")).hexdigest()[:16]
+
+
 class DocStore:
     """Per-document learning records: stats, self-test result, structure, study notes."""
 
@@ -65,8 +70,17 @@ class DocStore:
             rec = self.docs.setdefault(source, {"source": source})
             rec.update(fields)
             rec["updated"] = time.time()
+            if "chunk_ids" in fields:
+                self._ids = None
             self._save()
             return dict(rec)
+
+    def chunk_ids(self):
+        """{chunk id: document name} for every passage of every taught document."""
+        if getattr(self, "_ids", None) is None:
+            self._ids = {i: r["source"] for r in self.docs.values()
+                         for i in r.get("chunk_ids", [])}
+        return self._ids
 
     def get(self, source):
         return self.docs.get(source)

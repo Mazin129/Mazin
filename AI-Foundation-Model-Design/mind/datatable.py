@@ -87,6 +87,38 @@ class DataTable:
                 best, blen = h, len(hs)
         return best
 
+    def _lookup(self, q):
+        ql = q.lower()
+        qtoks = set(re.findall(r"[a-z0-9][a-z0-9._:/-]*[a-z0-9]", ql))
+        matched, value = [], None
+        for h in self.headers:
+            if h in self.numeric:
+                continue
+            for r in self.rows:
+                v = (r.get(h) or "").strip()
+                vl = v.lower()
+                # a whole cell value, distinctive enough to be a name (not "Allow"/"none")
+                if len(vl) >= 4 and (vl in qtoks or (" " in vl and re.search(
+                        rf"(?<![\w.-]){re.escape(vl)}(?![\w-])", ql))):
+                    matched.append(r)
+                    value = value or v
+        if not matched:
+            return None
+        rows = list({id(r): r for r in matched}.values())
+        if len(rows) > max(5, len(self.rows) // 2):
+            return None                                   # not distinctive: a filter word
+        lowered = ql.replace(value.lower(), " ")
+        col = self._find_col(lowered)
+        if re.search(r"\bhow many\b|\bcount\b|\bnumber of\b", ql):
+            return f"{len(rows)} row(s) in “{self.name}” match {value}."
+        if col and all(col in r for r in rows) and not any(
+                (r.get(col) or "").lower() == value.lower() for r in rows):
+            vals = [f"{value if len(rows) == 1 else r.get(self.headers[0])} → {col}: "
+                    f"{r.get(col, '')}" for r in rows]
+            return "\n".join(vals) + f"\n(from “{self.name}”)"
+        return "\n".join("; ".join(f"{h}: {r.get(h, '')}" for h in self.headers if r.get(h))
+                         for r in rows) + f"\n(from “{self.name}”)"
+
     def _revenue(self):
         """A price*quantity measure if both columns exist (common for sales data)."""
         price = next((h for h in self.numeric if "price" in h.lower() or "amount" in h.lower()
@@ -127,6 +159,13 @@ class DataTable:
         if re.search(r"how many (rows|records|entries|orders|lines)|number of (rows|records)|"
                      r"row count|count.*(rows|records)", ql) and not self._find_col(ql, exclude=()):
             return f"{len(self.rows):,} rows."
+
+        # ROW LOOKUP: the question names a distinctive cell value ("the CIDR of
+        # GatewaySubnet", "which NSG does snet-mgmt use", "show rule allow-dns") →
+        # answer from exactly those rows, with the column asked for when one is named.
+        hit = self._lookup(q)
+        if hit:
+            return hit
 
         # "best-selling / top-selling / most popular <thing>" -> rank that column by units
         # sold (Quantity) if present, else by revenue, else by row count.

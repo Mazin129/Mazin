@@ -708,7 +708,7 @@ _LABEL_STUB = re.compile(r"^[\w ()/-]{1,40}:?$")
 # paths whose short output is exact by construction — never "fragments"
 _EXACT = ("exact listing", "exact count", "library-write", "memory-write",
           "skill-write", "correction-write", "feedback", "calibration",
-          "consolidation", "config status")
+          "consolidation", "config status", "data analysis")
 
 
 def is_factual_or_security(q):
@@ -763,8 +763,10 @@ def _units(ans):
     return out
 
 
-def looks_fragmentary(ans):
-    """True when the 'answer' is a pile of config directives or dangling labels."""
+def looks_fragmentary(ans, written=False):
+    """True when the 'answer' is a pile of config directives or dangling labels.
+    written=True: a model wrote it, so a short but complete answer ("GatewaySubnet is
+    10.10.2.0/27.") is not mistaken for scraps — only a directive pile is."""
     units = _units(ans)
     if len(units) < 2:
         return False
@@ -772,7 +774,7 @@ def looks_fragmentary(ans):
                 if _CFG_STUB.match(u) or (_LABEL_STUB.match(u) and len(u.split()) <= 4))
     if stubs / len(units) >= 0.5:
         return True
-    return all(len(u.split()) < 6 for u in units)
+    return not written and all(len(u.split()) < 6 for u in units)
 
 
 def fragment_reply(ans, q):
@@ -817,7 +819,11 @@ def verify(result, evidence, q):
 
     # 2. a pile of scraps is not an answer, whatever path produced it. Replace it:
     #    leaving the scraps as the body is what made Vio look like it had answered.
-    if ans and not any(k in how.lower() for k in _EXACT) and looks_fragmentary(ans):
+    # judge the answer itself — the "Grounded on:" footer quotes source passages, and a
+    # quoted table row ("Subnet: X; CIDR: Y") is evidence, not the answer being scraps
+    body = re.split(r"\n\s*(?:Grounded on:|Sources:)", ans)[0]
+    if ans and not any(k in how.lower() for k in _EXACT) and looks_fragmentary(
+            body, written="llm" in how.lower()):
         return {**r, "answer": fragment_reply(ans, q), "verified": False,
                 "confidence": min(float(r.get("confidence") or 0.1), 0.1),
                 "how": "fragments (not an answer)",
