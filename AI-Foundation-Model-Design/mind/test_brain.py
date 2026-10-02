@@ -103,6 +103,13 @@ def main():
     u = brain.understand("What are the rules for change request?", V, T)
     check("'rules for change request' is not a config listing",
           u.kind is None and u.requires == brain.KNOWLEDGE)
+    u = brain.understand("What are the rules for change request?", V, T | {"change"})
+    check("…even when one word of it ('change') occurs somewhere in the config",
+          u.kind is None and u.requires == brain.KNOWLEDGE)
+    u = brain.understand("show policies for change request", V,
+                         T | {"change", "request"})
+    check("a qualifier wholly present in the config filters by all of it",
+          u.filter_terms == ["change", "request"])
     u = brain.understand("show firewall policies for port2", V, T)
     check("a qualifier found in the config filters the listing",
           u.kind == "firewall policy" and u.filter_terms == ["port2"])

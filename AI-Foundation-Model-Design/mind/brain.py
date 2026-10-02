@@ -319,11 +319,14 @@ def understand(q, vocabulary=None, terms=None):
                                          and _CONTENTS_RE.search(low))):
         q_terms = _qualifier_terms(u.text, u)
         if q_terms:
-            found = [t for t in q_terms if t in terms]
-            if found:
-                u.filter_terms, u.qualified = found, True
-            elif u.kind and any(_IDENT.search(t) for t in q_terms):
+            # The qualifier is a NAME: it narrows the listing only when the whole of
+            # it occurs in the configuration. One common word of a phrase ("change"
+            # of "change request" in some comment) is not the thing asked about.
+            idents = [t for t in q_terms if _IDENT.search(t)]
+            if all(t in terms for t in q_terms):
                 u.filter_terms, u.qualified = q_terms, True
+            elif u.kind and idents:
+                u.filter_terms, u.qualified = idents, True
             else:
                 u.kind = None
                 u.requires = KNOWLEDGE
