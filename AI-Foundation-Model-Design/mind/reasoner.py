@@ -21,6 +21,7 @@ Everything here is exact and inspectable — the opposite of a black box.
 """
 
 import json
+import time
 import os
 import re
 import sympy as sp
@@ -665,6 +666,8 @@ class Mind:
         # misunderstandings, and the failure log the self-review reads.
         import selflearn
         self.skillreg = selflearn.SkillRegistry(DATA_DIR)
+        import docstudy
+        self.docstore = docstudy.DocStore(DATA_DIR)
         self.intent_rules = selflearn.IntentRules(DATA_DIR)
         self.failures = selflearn.FailureLog(DATA_DIR)
         self._pending_clarify = None          # question the user said I misread
@@ -1790,6 +1793,109 @@ class Mind:
         return (f"Learned {len(chunks)} passages{where}. You can now ask me about it."
                 + snap_note)
 
+    def learn_document(self, text, source="a file", background=None):
+        """Teach a document and PROVE it: what was read, what was new, a retrieval
+        self-test, the structure found, and a study pass by the local model (in the
+        background) whose digest becomes study notes in the library."""
+        import docstudy
+        import selflearn
+        chunks, _dropped = self._drop_stubs(self._smart_chunks(text))
+        before = len(self.lib.docs)
+        msg = self.learn_text(text, source)
+        snap = msg.split("You can now ask me about it.", 1)[-1]
+        new = len(self.lib.docs) - before
+        words = len((text or "").split())
+        passed, total, _misses = docstudy.self_test(self.lib, chunks)
+        k = selflearn.extract(text)
+        found = [f"{len(v)} {n}" for n, v in (("rule(s)", k["rules"]),
+                 ("step(s)", k["steps"]), ("definition(s)", k["definitions"]),
+                 ("exception(s)", k["exceptions"])) if v]
+        self.docstore.put(source, learned=time.time(), words=words,
+                                passages=len(chunks), new=new,
+                                selftest=[passed, total], structure=found,
+                                rules=k["rules"][:20], steps=k["steps"][:20],
+                                status="queued")
+        lines = [f"📄 **{source}**",
+                 f"• Read {words:,} words → {len(chunks)} passage(s)"
+                 + (f", {new} new" if new != len(chunks) else "")
+                 + (" (all already known — nothing new stored)" if chunks and not new else "")
+                 + "."]
+        if total:
+            lines.append(f"• Self-test: asked myself {total} question(s) about it — "
+                         f"found the right part {passed}/{total} time(s)."
+                         + ("" if passed == total else
+                            " The misses are parts that read like other documents I hold."))
+        if found:
+            lines.append("• Structure found: " + ", ".join(found) + ".")
+        if words < 300:
+            lines.append("• ⚠️ That is very little text for a document — if it is mostly "
+                         "slides, tables or pictures, most of it was not readable.")
+        llm_ok = self.llm is not None and getattr(self.llm, "available", False)
+        if llm_ok and chunks:
+            run = (os.environ.get("VIO_STUDY_ASYNC", "1") != "0") if background is None \
+                else background
+            lines.append("• 🧠 Now studying it with my model (summary, key points, "
+                         "trade-offs, recommendations). Ask **“what did you learn from "
+                         f"{source[:40]}”** in a minute or two.")
+            if run:
+                import threading
+                threading.Thread(target=self._study_document, args=(text, source),
+                                 daemon=True).start()
+            else:
+                self._study_document(text, source)
+        elif chunks:
+            self.docstore.put(source, status="not studied (no local model running)")
+            lines.append("• I stored it for search, but could not STUDY it: no local "
+                         "model is running (start Ollama). Until then I can quote it, "
+                         "not explain it.")
+        return "\n".join(lines) + snap
+
+    def _study_document(self, text, source):
+        import docstudy
+        self.docstore.put(source, status="studying")
+        try:
+            digest, note = docstudy.study(self.llm, text, source)
+        except Exception as e:
+            digest, note = None, f"{type(e).__name__}: {e}"
+        if not digest:
+            self.docstore.put(source, status=f"study failed — {note}")
+            return
+        self.docstore.put(source, status="studied", digest=digest, study_note=note)
+        # the understanding itself becomes knowledge: later answers retrieve it
+        notes = [f"Study notes on {source}: {c}" for c in self._smart_chunks(digest)]
+        self.lib.add_many(notes)
+
+    def document_report(self, name=""):
+        """'What did you learn from <file>?' — the learning record, honestly."""
+        rec = self.docstore.find(name)
+        if not rec:
+            known = sorted(self.docstore.docs)
+            return {"answer": (f"No document I was taught matches “{name}”. Documents I "
+                               "hold:\n" + "\n".join(f"• {k}" for k in known[-15:]))
+                    if known else "I haven't been taught any documents yet. Use 📄 to give "
+                    "me one.", "how": "document report", "verified": True,
+                    "cortex": "skipped", "trace": []}
+        st = rec.get("status", "")
+        head = [f"📄 **{rec['source']}** — {rec.get('words', 0):,} words, "
+                f"{rec.get('passages', 0)} passage(s)."]
+        p, t = (rec.get("selftest") or [0, 0])
+        if t:
+            head.append(f"Self-test: found the right part {p}/{t} time(s).")
+        if rec.get("structure"):
+            head.append("Structure: " + ", ".join(rec["structure"]) + ".")
+        if rec.get("digest"):
+            body = "\n\n**What I understood** (" + rec.get("study_note", "") + "):\n\n" \
+                   + rec["digest"]
+        elif st in ("queued", "studying"):
+            body = "\n\n⏳ I'm still studying it — ask again shortly."
+        else:
+            body = f"\n\nNot studied yet: {st}."
+            if rec.get("rules"):
+                body += "\n\nRules I found:\n" + "\n".join(f"• {r}" for r in rec["rules"][:10])
+        return {"answer": " ".join(head) + body, "how": "document report",
+                "verified": bool(rec.get("digest")), "cortex": "skipped",
+                "trace": [f"learning record for {rec['source']}: {st}"]}
+
     def learn_github(self, spec):
         """Clone a public GitHub repo and learn its docs (Markdown/txt/PDF). Reads
         only — never runs repo code. Networked: requires VIO_ALLOW_NET=1 (same gate
@@ -2529,6 +2635,15 @@ class Mind:
         if self.llm is not None:
             self.llm.last_thought, self.llm.last_thinking = False, ""
         purpose = selflearn.purpose(raw)
+        m_doc = re.match(r"^\s*(?:what\s+(?:did|have)\s+you\s+(?:learn(?:ed|t)?|understood?|"
+                         r"get)\s+(?:from|about|out\s+of)\s+(.+?)|(?:summari[sz]e|what\s+is\s+in)"
+                         r"\s+(?:the\s+)?(?:last\s+)?(?:file|document|pdf|doc)\s*(.*?))\s*[?.!]*\s*$",
+                         raw, re.I)
+        if m_doc:
+            name = (m_doc.group(1) or m_doc.group(2) or "").strip()
+            name = re.sub(r"^(?:the\s+)?(?:last\s+|latest\s+)?(?:file|document|pdf|doc)\b",
+                          "", name, flags=re.I).strip()
+            return self._after_ask(raw, self.document_report(name), pre)
         if self._pending_clarify and raw and purpose is None and \
                 not re.match(r"^\s*[\w-]+\s*:", raw):
             prev, self._pending_clarify = self._pending_clarify, None

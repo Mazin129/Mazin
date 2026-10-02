@@ -1085,7 +1085,7 @@ class H(BaseHTTPRequestHandler):
                     # readable, but almost no prose — a diagram/architecture PDF whose
                     # content lives in pictures. Learn the little text, but say so plainly
                     # instead of a cheerful "Learned 1 passages" that hides the truth.
-                    msg = MIND.learn_text(text, name)
+                    msg = MIND.learn_document(text, name)
                     self._s(200, json.dumps({"answer": msg +
                         "  ⚠️ Heads-up: this PDF gave me very little text — it looks like a "
                         "diagram, so most of its content is in pictures I can't read. Export it "
@@ -1112,7 +1112,7 @@ class H(BaseHTTPRequestHandler):
                 dt = drawio_to_text(text.encode("utf-8", "ignore"))
                 if dt:
                     text = dt
-            msg = MIND.learn_text(text, name)
+            msg = MIND.learn_document(text, name)
             self._s(200, json.dumps({"answer": msg}, ensure_ascii=False))
 
         elif self.path == "/api/learn_folder":

@@ -159,7 +159,10 @@ class LLM:
             "model": self.model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": temperature, "num_predict": max_tokens},
+            "options": {"temperature": temperature, "num_predict": max_tokens,
+                        # room for the conversation context and long documents; Ollama's
+                        # small default window silently cut the start of the prompt off
+                        "num_ctx": int(os.environ.get("VIO_LLM_CTX", "8192"))},
         }
         if personal and callable(self.context):
             try:
