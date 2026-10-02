@@ -60,7 +60,7 @@ command, endpoint, env var, and file.
                         └─────────────────────────────┬──────────────────────────────┘
                                                       │ generates with
                                         ┌─────────────▼──────────────┐
-                                        │   llm.py  →  Ollama          │  qwen2.5:3b / 7b (switchable)
+                                        │   llm.py  →  Ollama          │  qwen3.5:4b / 9b (switchable)
                                         └─────────────────────────────┘
 ```
 
@@ -128,10 +128,11 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
 - **`llm.py`** talks to a local **Ollama** server (`VIO_LLM_URL`, default
   `http://localhost:11434`).
 - **Model** picked by `VIO_LLM_MODEL`, else auto-picked in preference order
-  `qwen2.5 → llama3.1 → llama3.2 → qwen2 → mistral → gemma2 → phi3 → …`.
-- **Two brains, switchable live** (hardware: a 2 GB GPU fits ~3B models):
-  - `qwen2.5:3b` — fits the GPU, fast, strong on network/security. **Default.**
-  - `qwen2.5:7b` — smarter, runs on CPU (~20–60 s/answer).
+  `qwen3.5 → qwen3 → llama3.1 → llama3.2 → mistral → gemma2 → phi3 → …`.
+  Qwen3/3.5 are thinking models: Vio sends `think: false` and strips any `<think>` trace.
+- **Two brains, switchable live** (hardware: a 2 GB GPU; larger models spill to CPU):
+  - `qwen3.5:4b` — fast, strong on network/security. **Default.**
+  - `qwen3.5:9b` — smarter, runs mostly on CPU (slower answers).
   - Switch instantly from **/dashboard → Brain dropdown** (or `POST /api/model`), no restart.
 - **Timeouts:** detect within 2 s (`available`); generation ceiling `VIO_LLM_TIMEOUT`
   (default 300 s), answer length `VIO_LLM_MAX_TOKENS` (default 3072).
@@ -376,15 +377,15 @@ brain — back them up.** All git-ignored (per-machine).
 
 ```bat
 :: one-time
-ollama pull qwen2.5:3b
-ollama pull qwen2.5:7b          :: optional, smarter, CPU
+ollama pull qwen3.5:4b
+ollama pull qwen3.5:9b          :: optional, smarter, slower
 
 :: every start — double-click start_vio_remote.bat, or:
 cd C:\Users\mazin\Mazin\AI-Foundation-Model-Design\mind
 set VIO_TOKEN=your-long-code
 set VIO_ALLOWED_HOSTS=<name>.ts.net
 set VIO_HTTPS=1
-set VIO_LLM_MODEL=qwen2.5:3b
+set VIO_LLM_MODEL=qwen3.5:4b
 set VIO_ALLOW_NET=1
 python web.py
 ```

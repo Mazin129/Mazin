@@ -67,7 +67,7 @@ def stage_server():
         _line(False, "No usable local model.", llm.reason)
         print("\n  Nothing below can work until this is green. Fix it with:")
         print("      ollama serve                 (in its own window, leave it open)")
-        print("      ollama pull qwen2.5:3b")
+        print("      ollama pull qwen3.5:4b")
         return llm
     _line(True, f"Ollama is up and Vio will use: {llm.model}")
     if llm.note:
@@ -83,7 +83,7 @@ def stage_models(llm):
     names = llm.list_models()
     if not names:
         _line(False, "Ollama reports zero installed models.",
-              "ollama pull qwen2.5:3b")
+              "ollama pull qwen3.5:4b")
         return
     for n in names:
         _line(True, n + ("     ← Vio is using this one" if n == llm.model else ""))

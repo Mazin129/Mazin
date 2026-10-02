@@ -22,8 +22,8 @@ SETUP (one time)
 ------------------------------------------------------------------------------
 1. Install Ollama:  https://ollama.com/download   (Windows installer)
 2. Pull a small multilingual model good at Arabic (pick by your RAM/GPU):
-       ollama pull qwen2.5:1.5b     # light, ~1 GB, fine on a 2 GB GPU / CPU
-       ollama pull qwen2.5:3b       # better, needs more RAM
+       ollama pull qwen3.5:2b       # light, fine on a 2 GB GPU / CPU
+       ollama pull qwen3.5:4b       # better, needs more RAM
 3. Run this app:  python brain_chat.py
 4. Open the printed URL (http://localhost:8000) in your browser and chat.
 
@@ -39,7 +39,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ------------------------------------------------------------------ config ---
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/chat")
-MODEL = os.environ.get("BRAIN_MODEL", "qwen2.5:1.5b")
+MODEL = os.environ.get("BRAIN_MODEL", "qwen3.5:2b")
 PORT = int(os.environ.get("BRAIN_PORT", "8000"))
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEMORY_FILE = os.path.join(HERE, "brain_memory.json")
@@ -86,7 +86,10 @@ def ask_model(mem, user_msg):
     for turn in mem["history"][-MAX_HISTORY:]:
         messages.append(turn)
     messages.append({"role": "user", "content": user_msg})
-    payload = json.dumps({"model": MODEL, "messages": messages, "stream": False}).encode()
+    body = {"model": MODEL, "messages": messages, "stream": False}
+    if MODEL.lower().startswith("qwen3"):
+        body["think"] = False          # answer directly; no hidden reasoning trace
+    payload = json.dumps(body).encode()
     req = urllib.request.Request(OLLAMA_URL, data=payload,
                                  headers={"Content-Type": "application/json"})
     try:

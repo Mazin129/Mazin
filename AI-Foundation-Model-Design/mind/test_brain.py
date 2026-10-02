@@ -45,8 +45,8 @@ def main():
     FORTI = [Obj("router static", "1"), Obj("router static", "2"),
              Obj("router static", "3"), Obj("firewall policy", "1"),
              Obj("firewall policy", "2"), Obj("firewall address", "LAN")]
-    ev_cfg = evidence(FORTI, passages=80, model="qwen2.5:3b")
-    ev_docs = evidence([], passages=80, model="qwen2.5:3b")
+    ev_cfg = evidence(FORTI, passages=80, model="qwen3.5:4b")
+    ev_docs = evidence([], passages=80, model="qwen3.5:4b")
     ev_bare = evidence([], passages=0)
     V = ev_cfg.vocabulary
 

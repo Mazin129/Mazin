@@ -7,7 +7,7 @@ fact. This module gives Vio a real reasoning engine by talking to a local LLM se
 Ollama (https://ollama.com) on your own machine — no API key, nothing leaves the box.
 
     1.  Install Ollama (one download).
-    2.  Pull a model:   ollama pull llama3.1      (or qwen2.5, mistral, phi3, …)
+    2.  Pull a model:   ollama pull qwen3.5:4b    (or qwen3.5:9b, llama3.1, mistral, …)
     3.  Start Vio. It auto-detects the running server and uses it.
 
 Design contract — reason freely, but stay honest:
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -39,8 +40,19 @@ MODEL = os.environ.get("VIO_LLM_MODEL", "")          # empty → auto-pick from 
 # fine-tune here. A capable base model + retrieval over your data is the reliable path.
 # You can still force any model explicitly with VIO_LLM_MODEL=<name> (e.g. a good
 # fine-tune you've validated).
-_PREFER = ("qwen2.5", "llama3.1", "llama3.2", "qwen2", "mistral", "gemma2", "phi3",
+_PREFER = ("qwen3.5", "qwen3", "llama3.1", "llama3.2", "mistral", "gemma2", "phi3",
            "llama3", "llama2")
+
+# Qwen3 / Qwen3.5 are "thinking" models: left alone they spend most of the token budget
+# on a hidden reasoning trace before answering, which on a local CPU means timeouts.
+# Vio asks them to answer directly (Ollama's `think: false`), and strips any trace that
+# still comes back so it never reaches the user.
+_THINKING = ("qwen3",)
+_THINK_TAG = re.compile(r"<think>.*?</think>\s*", re.S | re.I)
+
+
+def _is_thinking_model(name):
+    return (name or "").lower().startswith(_THINKING)
 
 
 class LLM:
@@ -80,7 +92,7 @@ class LLM:
         if not names:
             self.available = False
             self.reason = ("Ollama is running but has NO models installed. "
-                           "Install one with:  ollama pull qwen2.5:3b")
+                           "Install one with:  ollama pull qwen3.5:4b")
             return
         if self.model and not any(n == self.model or n.startswith(self.model + ":")
                                   for n in names):
@@ -129,10 +141,20 @@ class LLM:
         }
         if system:
             body["system"] = system
+        if _is_thinking_model(self.model):
+            body["think"] = False
         self.attempts += 1
         t0 = time.time()
         try:
-            out = self._post("/api/generate", body, timeout=self.gen_timeout)
+            try:
+                out = self._post("/api/generate", body, timeout=self.gen_timeout)
+            except urllib.error.HTTPError as ex:
+                # an older Ollama that does not know `think` rejects the request;
+                # retry once without it (the trace is stripped below either way).
+                if "think" not in body or ex.code != 400:
+                    raise
+                body.pop("think")
+                out = self._post("/api/generate", body, timeout=self.gen_timeout)
         except Exception as ex:
             self.last_ms = (time.time() - t0) * 1000.0
             self.last_error = (f"{type(ex).__name__}: {ex} "
@@ -142,7 +164,7 @@ class LLM:
             return None
         self.last_ms = (time.time() - t0) * 1000.0
         self.total_ms += self.last_ms
-        text = (out or {}).get("response", "").strip()
+        text = _THINK_TAG.sub("", (out or {}).get("response", "")).strip()
         if not text:
             self.last_error = f"model returned empty text after {self.last_ms/1000:.1f}s"
             return None
@@ -217,4 +239,4 @@ if __name__ == "__main__":
     if llm.available:
         print(llm.generate("In one sentence, what is a firewall?"))
     else:
-        print("No local LLM detected. Install Ollama and `ollama pull llama3.1`.")
+        print("No local LLM detected. Install Ollama and `ollama pull qwen3.5:4b`.")

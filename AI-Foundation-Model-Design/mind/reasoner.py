@@ -3592,8 +3592,8 @@ class Mind:
             return {"answer": f"My local model ({self.llm.model}) didn't finish reasoning on "
                     "this in time — it's likely too large for this PC's GPU, so it ran on the "
                     "CPU and timed out. Switch to a model that fits:\n"
-                    "  ollama pull llama3.2:3b\n"
-                    "then set  VIO_LLM_MODEL=llama3.2:3b  and restart Vio.",
+                    "  ollama pull qwen3.5:4b\n"
+                    "then set  VIO_LLM_MODEL=qwen3.5:4b  and restart Vio.",
                     "how": "llm-timeout", "verified": False, "confidence": 0.2, "trace": []}
 
         if hits or facts:
@@ -3683,7 +3683,7 @@ class Mind:
             # through to lexical retrieval that would return unrelated facts.
             return {"answer": f"My local reasoning model ({self.llm.model}) didn't finish "
                     "in time on this one. Try a shorter prompt, or a smaller/faster model "
-                    "(e.g. `ollama pull llama3.2`) and set VIO_LLM_MODEL=llama3.2.",
+                    "(e.g. `ollama pull qwen3.5:4b`) and set VIO_LLM_MODEL=qwen3.5:4b.",
                     "how": "llm-timeout", "verified": False, "confidence": 0.2, "trace": []}
 
         # 4) honest "I don't know yet" + how to teach it

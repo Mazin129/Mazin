@@ -153,7 +153,7 @@ runs entirely on your machine, no API key, nothing leaves the box:
 
 ```bash
 # 1. install Ollama (one download), then pull a model:
-ollama pull llama3.1        # or: qwen2.5, mistral, gemma2, phi3 …
+ollama pull qwen3.5:4b      # or: qwen3.5:9b (smarter, slower), llama3.1 …
 # 2. just start Vio — it auto-detects the running server.
 ```
 
@@ -166,7 +166,7 @@ How it stays honest once the cortex is on:
 - **Open reasoning is labelled** — logic/planning/decisions are answered as reasoning
   (marked unverified), not as stored facts.
 
-Pick the model with `set VIO_LLM_MODEL=qwen2.5` (or a different `VIO_LLM_URL`). Without
+Pick the model with `set VIO_LLM_MODEL=qwen3.5:4b` (or a different `VIO_LLM_URL`). Without
 Ollama running, Vio falls back to its exact + lexical engine, unchanged.
 
 ## Turn on semantic understanding (retrieval by meaning)

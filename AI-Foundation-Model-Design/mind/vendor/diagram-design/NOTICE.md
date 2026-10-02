@@ -11,5 +11,5 @@ under the MIT License (see `LICENSE`).
 
 Vio loads these Markdown instructions and asks its local LLM to follow them to produce
 a self-contained HTML/SVG diagram (`diagramgen.py`). Quality tracks the model: a small
-local model (qwen2.5:3b) will be rough; point `VIO_LLM_MODEL`/`VIO_LLM_URL` at a larger
+local model (qwen3.5:4b) will be rough; point `VIO_LLM_MODEL`/`VIO_LLM_URL` at a larger
 or hosted model for editorial-quality output.

@@ -21,13 +21,13 @@ on your laptop; this app adds the blueprint's human-like layer on top:
 ```
 1) Install Ollama:            https://ollama.com/download
 2) Pull a small Arabic-capable model:
-       ollama pull qwen2.5:1.5b     (light — good for a 2 GB GPU / CPU)
-       ollama pull qwen2.5:3b       (better, needs more RAM)
+       ollama pull qwen3.5:2b       (light — good for a 2 GB GPU / CPU)
+       ollama pull qwen3.5:4b       (better, needs more RAM)
 3) Run the chat:              python brain_chat.py
 4) Open http://localhost:8000 and talk to it.
 ```
 
-Change the model with `set BRAIN_MODEL=qwen2.5:3b` before running (Windows), or edit
+Change the model with `set BRAIN_MODEL=qwen3.5:4b` before running (Windows), or edit
 `MODEL` in the file. Your memory lives in `brain_memory.json` (git-ignored, private).
 
 ## "Make it train itself" — what's real
