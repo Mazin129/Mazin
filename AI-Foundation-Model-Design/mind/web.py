@@ -809,18 +809,18 @@ class H(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").split(":")[0].lower()
         if host in ("localhost", "127.0.0.1", "") or host in ALLOWED_HOSTS:
             return True
-        # A leading dot allows a whole domain: ".trycloudflare.com" admits the random
-        # hostname a Cloudflare quick tunnel gets on every start, which cannot be known
-        # in advance. Safe only because proxied requests always need the token (below).
+        # A leading dot allows a whole domain (".example.net" admits "vio.example.net"),
+        # for a proxy whose hostname cannot be known in advance. Safe only because
+        # proxied requests always need the token (below).
         return any(h.startswith(".") and host.endswith(h) for h in ALLOWED_HOSTS)
 
     def _proxied(self):
         """Did this request arrive through a tunnel or reverse proxy?
 
-        A Cloudflare tunnel (cloudflared) connects to Vio FROM localhost, so the socket
-        address says "local" while the request actually came from the public internet.
-        Treating it as local is how a tunnel exposes Vio with no login. Cloudflare and
-        every common proxy stamp these headers; their presence means "remote".
+        A tunnel or reverse proxy (including `tailscale serve`) connects to Vio FROM
+        localhost, so the socket address says "local" while the request came from
+        another machine. Treating it as local would expose Vio with no login. Proxies
+        stamp these headers; their presence means "remote".
 
         A local client could forge them, but forging only makes its own request MORE
         restricted — this check can only fail safe."""
@@ -833,7 +833,7 @@ class H(BaseHTTPRequestHandler):
         """Explain a rejected hostname instead of answering with a bare '{}'."""
         host = (self.headers.get("Host") or "").split(":")[0].lower()
         msg = (f"Vio refused the hostname '{host}'. Add it to VIO_ALLOWED_HOSTS "
-               "(or '.trycloudflare.com' for a Cloudflare quick tunnel), then restart Vio.")
+               "then restart Vio.")
         self._s(403, json.dumps({"answer": msg, "error": "host not allowed"}))
 
     def _refuse_no_token(self):
@@ -842,7 +842,7 @@ class H(BaseHTTPRequestHandler):
         msg = ("Vio is being reached through a tunnel/proxy (the public internet), but "
                "no VIO_TOKEN is set. Refusing — without a token anyone with the link "
                "could read your configurations. Set VIO_TOKEN and restart Vio "
-               "(start_vio_cloudflare.bat does this for you).")
+               "(start_vio_remote.bat does this for you).")
         page = ("<!doctype html><meta charset=utf-8><title>Vio — locked</title>"
                 "<body style='font:15px system-ui;max-width:560px;margin:60px auto;"
                 "padding:0 16px'><h2>🔒 Vio is locked</h2><p>" + msg + "</p>")
@@ -863,7 +863,7 @@ class H(BaseHTTPRequestHandler):
         local (localhost dev), or a valid session cookie is present.
 
         "No token → open" used to apply to anything arriving on 127.0.0.1 — which
-        includes everything a Cloudflare tunnel forwards from the internet."""
+        includes everything a tunnel or proxy forwards from other machines."""
         if not TOKEN:
             return not self._proxied()
         return self._session() in _SESSIONS
@@ -1269,22 +1269,8 @@ if __name__ == "__main__":
               "   (and add your hostname to VIO_ALLOWED_HOSTS). Prefer Tailscale so Vio\n"
               "   is only reachable by your own devices. See SECURITY.md.")
         sys.exit(1)
-    # A tunnel reaches Vio through 127.0.0.1, so the bind-address check above never
-    # fires for it. When the operator says a tunnel is in use, demand the token here.
-    # (Requests are still refused per-request if a tunnel is used WITHOUT this flag.)
-    if os.environ.get("VIO_CLOUDFLARE") and not TOKEN:
-        print("✋ VIO_CLOUDFLARE is set but VIO_TOKEN is not. A Cloudflare tunnel puts Vio\n"
-              "   on the public internet — without a token anyone with the link could read\n"
-              "   your configurations. Set VIO_TOKEN (start_vio_cloudflare.bat does this).")
-        sys.exit(1)
     if TOKEN:
         print(f"🔒 Access token required. Vio is protected. Bound to {HOST}:{PORT}")
-    if os.environ.get("VIO_CLOUDFLARE"):
-        print("   ☁️  Cloudflare tunnel mode: every request arriving through the tunnel "
-              "must sign in.")
-        if not os.environ.get("VIO_HTTPS"):
-            print("   ⚠️  Set VIO_HTTPS=1 — the tunnel serves HTTPS, and the session cookie "
-                  "should be marked Secure.")
     # capability banner — so you can SEE which process this is (model + web research),
     # and never have to guess whether a stale old process is the one answering.
     try:

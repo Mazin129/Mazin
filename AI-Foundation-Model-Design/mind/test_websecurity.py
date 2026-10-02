@@ -1,7 +1,7 @@
 """
-test_websecurity — pins who may reach Vio, especially through a Cloudflare tunnel.
+test_websecurity — pins who may reach Vio, especially through a proxy or tunnel.
 
-cloudflared connects to Vio FROM localhost, so every request it forwards from the
+A proxy or tunnel connects to Vio FROM localhost, so every request it forwards from the
 public internet looks local at the socket level. Vio used to treat "local + no token"
 as open, which meant a tunnel published every configuration with no login at all.
 These checks pin the fix, and they drive the real handler methods rather than a copy.
@@ -48,7 +48,7 @@ def main():
     os.environ.setdefault("VIO_SEMANTIC_ASYNC", "0")
     os.environ.setdefault("VIO_TRAIN_ASYNC", "0")
     os.environ["VIO_NO_BROWSER"] = "1"
-    for k in ("VIO_TOKEN", "VIO_ALLOWED_HOSTS", "VIO_CLOUDFLARE"):
+    for k in ("VIO_TOKEN", "VIO_ALLOWED_HOSTS"):
         os.environ.pop(k, None)
 
     print("=" * 72)
@@ -56,7 +56,8 @@ def main():
     print("=" * 72)
     import web
 
-    CF = {"Host": "abc.trycloudflare.com", "Cf-Ray": "8a1b", "Cf-Connecting-Ip": "203.0.113.9"}
+    CF = {"Host": "vio.tunnel.example.net", "X-Forwarded-For": "203.0.113.9",
+          "X-Forwarded-Proto": "https"}
     LOCAL = {"Host": "localhost"}
 
     def h(headers, path="/"):
@@ -65,7 +66,7 @@ def main():
     # ---- tunnel detection ---------------------------------------------------
     print("\n-- is the request tunnelled? --")
     check("plain local request is not proxied", h(LOCAL)._proxied() is False)
-    check("Cloudflare headers mark it proxied", h(CF)._proxied() is True)
+    check("forwarding headers mark it proxied", h(CF)._proxied() is True)
     check("the --http-host-header localhost trick is still proxied",
           h({"Host": "localhost", "Cf-Ray": "x"})._proxied() is True)
     check("X-Forwarded-For (any reverse proxy) is proxied",
@@ -107,13 +108,13 @@ def main():
     web.ALLOWED_HOSTS.clear()
     check("localhost always allowed", h(LOCAL)._host_ok() is True)
     check("an unlisted host is refused", h({"Host": "evil.example.com"})._host_ok() is False)
-    web.ALLOWED_HOSTS.add(".trycloudflare.com")
-    check("'.trycloudflare.com' admits a random quick-tunnel host",
-          h({"Host": "blue-otter-42.trycloudflare.com"})._host_ok() is True)
+    web.ALLOWED_HOSTS.add(".tunnel.example.net")
+    check("a leading-dot entry admits any host in that domain",
+          h({"Host": "blue-otter-42.tunnel.example.net"})._host_ok() is True)
     check("the suffix does not admit a look-alike domain",
-          h({"Host": "trycloudflare.com.evil.net"})._host_ok() is False)
+          h({"Host": "tunnel.example.net.evil.net"})._host_ok() is False)
     check("the suffix does not admit a bare lookalike ending",
-          h({"Host": "eviltrycloudflare.com"})._host_ok() is False)
+          h({"Host": "eviltunnel.example.net"})._host_ok() is False)
     web.ALLOWED_HOSTS.clear()
     web.ALLOWED_HOSTS.add("vio.example.com")
     check("an exact host entry works", h({"Host": "vio.example.com"})._host_ok() is True)

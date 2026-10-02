@@ -58,32 +58,13 @@ That's it: TLS from Tailscale, access limited to your devices, plus Vio's own lo
 
 ---
 
-## 3. Alternative — Cloudflare Tunnel
+## 3. Behind any proxy or tunnel
 
-**Run `start_vio_cloudflare.bat`.** It will not start without a token, checks that
-`cloudflared` is installed (`winget install --id Cloudflare.cloudflared`), starts Vio,
-and opens the tunnel.
-
-- **Quick tunnel (default):** no account. You get a random `https://….trycloudflare.com`
-  address that changes on every start. `VIO_ALLOWED_HOSTS=.trycloudflare.com` (leading
-  dot = the whole domain) admits it.
-- **Named tunnel:** a fixed address on your own domain. One-time setup is at the bottom
-  of the script. Put **Cloudflare Access** (email one-time code, your address only) in
-  front — Cloudflare then checks who you are before a request ever reaches your PC.
-
-**This is the public internet, unlike Tailscale.** Anyone with the link reaches the
-login page. What protects you:
-
-- `cloudflared` connects to Vio *from localhost*, so tunnelled traffic looks local at
-  the socket. Vio instead detects it by the headers Cloudflare (and any reverse proxy)
-  adds — `Cf-Ray`, `Cf-Connecting-Ip`, `X-Forwarded-For`, … — and **always requires the
-  token for it**, even with `--http-host-header localhost`. With no token set, tunnelled
-  requests are refused outright.
-- `VIO_CLOUDFLARE=1` (set by the script) makes Vio refuse to *start* without a token.
-- The session cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` (via `VIO_HTTPS=1`).
-- Login is constant-time and throttled after repeated failures.
-
-Tradeoff: traffic transits Cloudflare, which terminates TLS at its edge.
+A proxy (including `tailscale serve`) connects to Vio *from localhost*, so its traffic
+looks local at the socket. Vio detects it by the headers proxies add —
+`X-Forwarded-For`, `Forwarded`, `X-Forwarded-Host`/`-Proto`, … — and **always requires
+the token for it**, even when the Host header says `localhost`. With no token set,
+proxied requests are refused outright.
 
 ---
 
@@ -93,9 +74,8 @@ Tradeoff: traffic transits Cloudflare, which terminates TLS at its edge.
 |---|---|
 | `VIO_TOKEN` | Access code. Set = login required. Unset = genuinely-local requests only, no login; anything arriving through a tunnel/proxy is refused. |
 | `MIND_HOST` | Bind address. Default `127.0.0.1` (local only). Vio **refuses** to bind elsewhere without `VIO_TOKEN`. |
-| `VIO_ALLOWED_HOSTS` | Comma-separated hostnames allowed in the `Host` header (your tailnet/tunnel name). A leading dot allows a whole domain: `.trycloudflare.com`. |
-| `VIO_CLOUDFLARE` | Set when a Cloudflare tunnel is in use: Vio refuses to start without `VIO_TOKEN`. |
-| `VIO_HTTPS` | Set when TLS terminates in front (Tailscale/Cloudflare/proxy) so the cookie is marked `Secure`. |
+| `VIO_ALLOWED_HOSTS` | Comma-separated hostnames allowed in the `Host` header (your tailnet/tunnel name). A leading dot allows a whole domain: `.example.net`. |
+| `VIO_HTTPS` | Set when TLS terminates in front (Tailscale/proxy) so the cookie is marked `Secure`. |
 | `MIND_PORT` | Port (default 8100). |
 | `VIO_ALLOW_NET` | `1` lets the Web Research agent search the web, read pages, and learn from them. Unset/`0` = no outbound web access (default). |
 | `VIO_NET_ALLOW` | Comma-separated domains the research agent may fetch (e.g. `docs.microsoft.com,rfc-editor.org`). Blank = any **public** site. |

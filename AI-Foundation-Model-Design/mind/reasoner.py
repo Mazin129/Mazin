@@ -1459,7 +1459,8 @@ class Mind:
                 f"{start_docs} → {len(self.lib.docs)} passage(s).")
         tail = ("" if net else
                 "\n\nLevels 3–4 need internet access. Restart Vio with VIO_ALLOW_NET=1 "
-                "(start_vio_cloudflare.bat sets it) and run  learn everything  again to "
+                "(in a terminal:  set VIO_ALLOW_NET=1  then  python web.py) and run  "
+                "learn everything  again to "
                 "pull in the trusted sources and the GitHub skill collections.")
         return {"answer": head + "\n\n" + "\n".join(levels) + tail,
                 "how": "self-learning (all levels)", "verified": True, "confidence": 0.9,
