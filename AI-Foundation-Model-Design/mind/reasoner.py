@@ -1819,7 +1819,10 @@ class Mind:
         snap = msg.split("You can now ask me about it.", 1)[-1]
         new = len(self.lib.docs) - before
         words = len((text or "").split())
-        passed, total, _misses = docstudy.self_test(self.lib, chunks)
+        passed, total, misses = docstudy.self_test(self.lib, chunks)
+        own = self.docstore.chunk_ids()
+        for mi in misses:
+            mi["found_in"] = own.get(mi.pop("found_id", ""), "the built-in library")
         k = selflearn.extract(text)
         found = [f"{len(v)} {n}" for n, v in (("rule(s)", k["rules"]),
                  ("step(s)", k["steps"]), ("definition(s)", k["definitions"]),
@@ -1827,7 +1830,8 @@ class Mind:
         self.docstore.put(source, chunk_ids=[docstudy.chunk_id(c) for c in chunks][:5000])
         self.docstore.put(source, learned=time.time(), words=words,
                                 passages=len(chunks), new=new,
-                                selftest=[passed, total], structure=found,
+                                selftest=[passed, total], misses=misses[:5],
+                                structure=found,
                                 rules=k["rules"][:20], steps=k["steps"][:20],
                                 status="queued")
         lines = [f"📄 **{source}**",
@@ -1837,9 +1841,12 @@ class Mind:
                  + "."]
         if total:
             lines.append(f"• Self-test: asked myself {total} question(s) about it — "
-                         f"found the right part {passed}/{total} time(s)."
-                         + ("" if passed == total else
-                            " The misses are parts that read like other documents I hold."))
+                         f"found the right part {passed}/{total} time(s).")
+            for mi in misses[:3]:
+                lines.append("   ✗ " + (mi["error"] or (
+                    f"“{mi['query']}” → found {mi['found_in']} instead: "
+                    f"“{mi['found'][:80]}…”" if mi["found"] else
+                    f"“{mi['query']}” → found nothing")))
         if found:
             lines.append("• Structure found: " + ", ".join(found) + ".")
         if words < 300:
@@ -1859,7 +1866,7 @@ class Mind:
                 else background
             lines.append("• 🧠 Now studying it with my model (summary, key points, "
                          "trade-offs, recommendations). Ask **“what did you learn from "
-                         f"{source[:40]}”** in a minute or two.")
+                         "the last file”** in a few minutes.")
             if run:
                 import threading
                 threading.Thread(target=self._study_document, args=(text, source),
@@ -1931,9 +1938,15 @@ class Mind:
 
     def _study_document(self, text, source):
         import docstudy
-        self.docstore.put(source, status="studying")
+        started = time.time()
+        self.docstore.put(source, status="studying", progress="starting",
+                          study_started=started)
         try:
-            digest, note = docstudy.study(self.llm, text, source)
+            digest, note = docstudy.study(
+                self.llm, text, source,
+                progress=lambda msg: self.docstore.put(source, status="studying",
+                                                       progress=msg,
+                                                       study_started=started))
         except Exception as e:
             digest, note = None, f"{type(e).__name__}: {e}"
         if not digest:
@@ -1960,13 +1973,19 @@ class Mind:
         p, t = (rec.get("selftest") or [0, 0])
         if t:
             head.append(f"Self-test: found the right part {p}/{t} time(s).")
+            for mi in (rec.get("misses") or [])[:3]:
+                head.append("\n   ✗ " + (mi.get("error") or
+                            f"“{mi.get('query')}” → found {mi.get('found_in', '?')} instead"))
         if rec.get("structure"):
             head.append("Structure: " + ", ".join(rec["structure"]) + ".")
         if rec.get("digest"):
             body = "\n\n**What I understood** (" + rec.get("study_note", "") + "):\n\n" \
                    + rec["digest"]
         elif st in ("queued", "studying"):
-            body = "\n\n⏳ I'm still studying it — ask again shortly."
+            mins = (time.time() - rec.get("study_started", time.time())) / 60
+            body = (f"\n\n⏳ Still studying it — {rec.get('progress', 'queued')}"
+                    + (f", {mins:.0f} min so far" if mins >= 1 else "")
+                    + ". On a CPU each part takes about a minute; ask again shortly.")
         else:
             body = f"\n\nNot studied yet: {st}."
             if rec.get("rules"):

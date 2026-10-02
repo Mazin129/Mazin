@@ -117,24 +117,42 @@ def self_test(lib, chunks, n=5):
     step = max(1, len(chunks) // n)
     picks = chunks[::step][:n]
     mine = {c.strip() for c in chunks}
-    idf = {}
+    # rarity must be looked up the way the index sees words: its analyzer stems them
+    # ("subnets" → "subnet"), so a raw-word lookup missed almost everything and the
+    # test fell back to merely LONG words — which in a big library match everywhere.
+    idf, analyze = {}, None
     try:
         idf = {t: lib.vec.idf_[i] for t, i in lib.vec.vocabulary_.items()}
+        analyze = lib.vec.build_analyzer()
     except Exception:
         pass
     passed, misses = 0, []
     for c in picks:
-        ws = list(dict.fromkeys(w.lower() for w in _words(c)))
-        ws.sort(key=lambda w: -idf.get(w, len(w) / 3.0))
-        q = " ".join(ws[:6])
+        best = {}
+        for w in re.findall(r"[a-z0-9]+", c.lower()):
+            stems = analyze(w) if analyze else [w]
+            if not stems or len(w) < 3:
+                continue
+            st = stems[0]
+            score = idf.get(st, 0.0)
+            if score and st not in best:
+                best[st] = (score, w)
+        ranked = sorted(best.values(), reverse=True)
+        q = " ".join(w for _, w in ranked[:6]) or " ".join(_words(c)[:6])
+        err = ""
         try:
             hits = lib.search(q, k=3)
-        except Exception:
-            hits = []
+        except Exception as e:                 # a broken search is a finding, not a miss
+            hits, err = [], f"search failed: {type(e).__name__}: {e}"
         if any((d or "").strip() in mine for d, _ in hits):
             passed += 1
         else:
-            misses.append(q)
+            # keep WHAT went wrong, so a low score can be explained, not just reported
+            top = hits[0] if hits else None
+            misses.append({"query": q, "error": err,
+                           "found": (top[0].strip().replace("\n", " ")[:120] if top else ""),
+                           "score": round(top[1], 3) if top else 0.0,
+                           "found_id": chunk_id(top[0]) if top else ""})
     return passed, len(picks), misses
 
 
@@ -177,8 +195,9 @@ def _parts(text, size=5000, cap=6):
     return out
 
 
-def study(llm, text, source):
-    """Notes per part, then one digest. Returns (digest, note) or (None, reason)."""
+def study(llm, text, source, progress=None):
+    """Notes per part, then one digest. Returns (digest, note) or (None, reason).
+    progress(msg) is called as each step starts, so 'still studying' can say where."""
     if llm is None or not getattr(llm, "available", False):
         return None, "no local model running — start Ollama to let me study documents"
     cap = int(os.environ.get("VIO_STUDY_PARTS", "6"))
@@ -186,6 +205,8 @@ def study(llm, text, source):
     parts = _parts(text, cap=cap)
     notes = []
     for i, p in enumerate(parts, 1):
+        if progress:
+            progress(f"reading part {i} of {len(parts)}")
         out = llm.generate(f"Document: {source}\nPart {i} of {len(parts)}:\n\n{p}",
                            system=PART_SYSTEM, temperature=0.2, max_tokens=700,
                            personal=False)
@@ -193,6 +214,8 @@ def study(llm, text, source):
             notes.append(f"[Part {i}]\n{out}")
     if not notes:
         return None, f"the model produced no notes ({getattr(llm, 'last_error', '')})"
+    if progress:
+        progress(f"thinking it through — writing what I understood ({len(notes)} part notes)")
     digest = llm.generate(f"Document: {source}\n\nYour notes:\n\n" + "\n\n".join(notes),
                           system=DIGEST_SYSTEM, temperature=0.2, max_tokens=1200,
                           think=True, personal=False)

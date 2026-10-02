@@ -451,10 +451,13 @@ def _ocr_png(png_bytes):
 def read_pdf(data):
     import pdftext
     best, method = "", ""
+    layer = {}                         # reader → (words, readable): why OCR was needed
     for label, fn in (("PyMuPDF", pdftext._extract_pymupdf), ("pypdf", _pypdf),
                       ("pdfminer", pdftext._extract_pdfminer),
                       ("built-in", pdftext._extract_stdlib)):
         t = _safe(fn, data)
+        if t is not None:
+            layer[label] = (len(t.split()), bool(t and pdftext.looks_readable(t)))
         if t and pdftext.looks_readable(t) and len(t.split()) > len(best.split()):
             best, method = t, label
             if label == "PyMuPDF":
@@ -479,6 +482,11 @@ def read_pdf(data):
         if ocr and len(ocr.split()) > len(best.split()):
             r.text, r.method = _tidy(ocr), (method + " + OCR" if best else "OCR")
             r.notes.append("pages were images (scanned) — read them with OCR")
+            if layer:
+                r.notes.append("the PDF's own text: " + ", ".join(
+                    (f"{k}: no text layer" if not w else
+                     f"{k} {w} words{'' if ok else ' (garbled — font encoding)'}")
+                    for k, (w, ok) in layer.items()))
         elif not best:
             r.error = _pdf_help()
         elif thin:
