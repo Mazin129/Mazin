@@ -415,6 +415,9 @@ function badge(j){const c=(j.confidence!=null)?' · '+Math.round(j.confidence*10
  else if(j.cortex==='unavailable') cx=' · <span class="no" title="no local model server reachable — run: ollama serve">🧠 no model</span>';
  else if(j.cortex==='failed')  cx=' · <span class="no" title="the model was called but produced nothing (timeout or error)">🧠 model failed</span>';
  else if(j.cortex)             cx=' · <span class="ok" title="the reasoning model wrote this answer">🧠 '+esc(j.cortex)+'</span>';
+ /* the model reasoned step by step before answering (thinking models such as qwen3.5);
+    the reasoning itself is behind a click, never mixed into the answer. */
+ if(j.thought) cx+=' · <details class="think" style="display:inline"><summary class="ok" title="the model reasoned step by step before answering">💭 thought it through</summary><div class="meta" style="white-space:pre-wrap;max-height:18em;overflow:auto">'+esc(j.thinking||'')+'</div></details>';
  /* how Vio READ the question — a wrong answer is usually a wrong reading, and this
     is the only way the user can see (and correct) the interpretation. */
  const un=j.understood?'<div class="meta" style="opacity:.75">🧭 read as: '+esc(j.understood)+'</div>':'';

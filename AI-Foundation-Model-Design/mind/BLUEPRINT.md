@@ -129,7 +129,11 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
   `http://localhost:11434`).
 - **Model** picked by `VIO_LLM_MODEL`, else auto-picked in preference order
   `qwen3.5 → qwen3 → llama3.1 → llama3.2 → mistral → gemma2 → phi3 → …`.
-  Qwen3/3.5 are thinking models: Vio sends `think: false` and strips any `<think>` trace.
+  Qwen3/3.5 are thinking models, and thinking is chosen **per task**: every expert agent
+  (network engineering, troubleshooting, security review …), config analysis and open
+  reasoning think step by step first; quick lookups answer directly. The reasoning gets
+  its own budget (`VIO_LLM_THINK_TOKENS`, default 4096), is kept apart from the answer,
+  and is shown behind a "💭 thought it through" badge. `VIO_LLM_THINK=auto|on|off`.
 - **Two brains, switchable live** (hardware: a 2 GB GPU; larger models spill to CPU):
   - `qwen3.5:4b` — fast, strong on network/security. **Default.**
   - `qwen3.5:9b` — smarter, runs mostly on CPU (slower answers).

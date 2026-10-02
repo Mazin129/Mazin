@@ -23,8 +23,10 @@ class Fake(L.LLM):
     """An LLM whose HTTP layer is a stub: `installed` models, a canned reply, and
     optionally an old server that rejects the `think` field."""
 
-    def __init__(self, installed, reply="ok", model="", old_server=False):
+    def __init__(self, installed, reply="ok", model="", old_server=False, thought="",
+                 starve=False):
         self.installed, self.reply, self.old_server = installed, reply, old_server
+        self.thought, self.starve = thought, starve
         self.bodies = []
         super().__init__(url="http://fake", model=model)
 
@@ -36,6 +38,10 @@ class Fake(L.LLM):
         if self.old_server and "think" in body:
             raise urllib.error.HTTPError(self.url + path, 400, "unknown field think",
                                          {}, io.BytesIO(b""))
+        if body.get("think"):
+            # a real thinking model: the thought comes back in its own field; a
+            # starved one spends the whole budget thinking and gives no answer.
+            return {"thinking": self.thought, "response": "" if self.starve else self.reply}
         return {"response": self.reply}
 
 
@@ -51,11 +57,34 @@ def main():
 
     f = Fake(["qwen3.5:4b"], reply="<think>\nlong hidden trace\n</think>\n\nTCP is reliable.")
     out = f.generate("what is tcp")
-    check("thinking is switched off for qwen3.5", f.bodies[-1].get("think") is False)
+    check("a quick answer does not think", f.bodies[-1].get("think") is False)
     check("any <think> trace is stripped from the answer", out == "TCP is reliable.")
 
+    f = Fake(["qwen3.5:4b"], reply="Check MTU first.", thought="step 1 … step 2 …")
+    out = f.generate("why does the tunnel drop big packets", max_tokens=1000, think=True)
+    check("a reasoning task thinks", f.bodies[-1].get("think") is True)
+    check("…with its own budget on top of the answer's",
+          f.bodies[-1]["options"]["num_predict"] > 1000)
+    check("…the answer is only the answer", out == "Check MTU first.")
+    check("…and the reasoning is kept apart", f.last_thought
+          and f.last_thinking == "step 1 … step 2 …")
+
+    f = Fake(["qwen3.5:4b"], reply="Direct answer.", thought="…", starve=True)
+    check("if thinking eats the whole budget, it answers directly instead",
+          f.generate("hard one", think=True) == "Direct answer."
+          and f.bodies[-1].get("think") is False)
+
+    L.THINK_MODE = "off"
+    f = Fake(["qwen3.5:4b"])
+    f.generate("x", think=True)
+    check("VIO_LLM_THINK=off never thinks", f.bodies[-1].get("think") is False)
+    L.THINK_MODE = "on"
+    f.generate("x")
+    check("VIO_LLM_THINK=on always thinks", f.bodies[-1].get("think") is True)
+    L.THINK_MODE = "auto"
+
     f = Fake(["llama3.1:latest"])
-    f.generate("hi")
+    f.generate("hi", think=True)
     check("non-thinking models are sent no `think` field", "think" not in f.bodies[-1])
 
     f = Fake(["qwen3.5:4b"], reply="fine", old_server=True)

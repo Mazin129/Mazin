@@ -43,11 +43,14 @@ MODEL = os.environ.get("VIO_LLM_MODEL", "")          # empty → auto-pick from 
 _PREFER = ("qwen3.5", "qwen3", "llama3.1", "llama3.2", "mistral", "gemma2", "phi3",
            "llama3", "llama2")
 
-# Qwen3 / Qwen3.5 are "thinking" models: left alone they spend most of the token budget
-# on a hidden reasoning trace before answering, which on a local CPU means timeouts.
-# Vio asks them to answer directly (Ollama's `think: false`), and strips any trace that
-# still comes back so it never reaches the user.
+# Qwen3 / Qwen3.5 are "thinking" models: they can reason step by step before answering.
+# That is worth its time on hard work (diagnosis, design, security review, config
+# analysis) and wasted on a quick lookup. So thinking is chosen PER TASK: callers doing
+# real reasoning pass think=True, quick answers pass nothing. VIO_LLM_THINK overrides:
+#   auto (default) — per task;  on — think on every call;  off — never think.
+# The thought itself is kept apart from the answer (.last_thinking), never shown as it.
 _THINKING = ("qwen3",)
+THINK_MODE = os.environ.get("VIO_LLM_THINK", "auto").strip().lower()
 _THINK_TAG = re.compile(r"<think>.*?</think>\s*", re.S | re.I)
 
 
@@ -76,6 +79,8 @@ class LLM:
         self.last_error = ""
         self.reason = ""          # why .available is False (empty when it is True)
         self.note = ""            # a warning even when available (e.g. model not installed)
+        self.last_thinking = ""   # the model's reasoning for the last call (not the answer)
+        self.last_thought = False # did the last call think?
         self._detect()
 
     # ---- discovery ----
@@ -124,8 +129,20 @@ class LLM:
         return [m.get("name", "") for m in (tags or {}).get("models", []) if m.get("name")]
 
     # ---- generation ----
-    def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024):
+    def wants_thinking(self, think=None):
+        """Should this call think? Only a thinking-capable model can; then the
+        VIO_LLM_THINK mode decides, and in `auto` the caller's request does."""
+        if not _is_thinking_model(self.model) or THINK_MODE in ("off", "0", "no"):
+            return False
+        if THINK_MODE in ("on", "1", "yes", "always"):
+            return True
+        return bool(think)
+
+    def generate(self, prompt, system=None, temperature=0.2, max_tokens=1024, think=None):
         """One-shot completion. Returns the text, or None if the server/model fails.
+
+        think=True asks a thinking model to reason step by step first (hard tasks);
+        the reasoning gets its own token budget so it cannot crowd out the answer.
 
         Every call is counted and timed, and every failure keeps its reason in
         .last_error — silent `except: return None` is exactly how Vio ended up
@@ -141,8 +158,13 @@ class LLM:
         }
         if system:
             body["system"] = system
+        thinking = self.wants_thinking(think)
         if _is_thinking_model(self.model):
-            body["think"] = False
+            body["think"] = thinking
+        if thinking:
+            body["options"]["num_predict"] = max_tokens + int(
+                os.environ.get("VIO_LLM_THINK_TOKENS", "4096"))
+        self.last_thinking, self.last_thought = "", False
         self.attempts += 1
         t0 = time.time()
         try:
@@ -164,7 +186,22 @@ class LLM:
             return None
         self.last_ms = (time.time() - t0) * 1000.0
         self.total_ms += self.last_ms
-        text = _THINK_TAG.sub("", (out or {}).get("response", "")).strip()
+        raw = (out or {}).get("response", "")
+        trace = (out or {}).get("thinking", "") or "".join(
+            m.group(1) for m in re.finditer(r"<think>(.*?)</think>", raw, re.S | re.I))
+        text = _THINK_TAG.sub("", raw).strip()
+        if not text and body.get("think"):
+            # the reasoning used the whole budget and no answer came out: answer
+            # directly instead of returning nothing.
+            body["think"] = False
+            body["options"]["num_predict"] = max_tokens
+            try:
+                out = self._post("/api/generate", body, timeout=self.gen_timeout)
+                text = _THINK_TAG.sub("", (out or {}).get("response", "")).strip()
+            except Exception:
+                text = ""
+            self.last_ms = (time.time() - t0) * 1000.0
+        self.last_thinking, self.last_thought = trace.strip(), bool(trace.strip())
         if not text:
             self.last_error = f"model returned empty text after {self.last_ms/1000:.1f}s"
             return None

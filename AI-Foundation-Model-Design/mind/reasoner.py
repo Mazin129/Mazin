@@ -1111,7 +1111,7 @@ class Mind:
         )
         prompt = f"Configuration objects:\n{ctx}\n\nRequest: {q}\n\nList every matching object."
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-        ans = self.llm.generate(prompt, system=system, max_tokens=budget)
+        ans = self.llm.generate(prompt, system=system, max_tokens=budget, think=True)
         if not ans:
             return None
 
@@ -2524,6 +2524,8 @@ class Mind:
         import selflearn
         raw = (q or "").strip()
         pre = []
+        if self.llm is not None:
+            self.llm.last_thought, self.llm.last_thinking = False, ""
         purpose = selflearn.purpose(raw)
         if self._pending_clarify and raw and purpose is None and \
                 not re.match(r"^\s*[\w-]+\s*:", raw):
@@ -2578,8 +2580,19 @@ class Mind:
     def _after_ask(self, raw, r, pre, answered=False):
         """Bookkeeping after every answer: traces, the failure log, conversation context."""
         r = dict(r or {})
+        how = r.get("how") or ""
         if pre:
             r["trace"] = pre + list(r.get("trace") or [])
+        if self.llm is not None and getattr(self.llm, "last_thought", False) and \
+                ("LLM" in how or how.startswith(("reasoning (LLM)", "council"))):
+            # the model reasoned step by step before answering: say so, and keep the
+            # reasoning available (not mixed into the answer) for anyone who wants it.
+            r["thought"] = True
+            r["thinking"] = self.llm.last_thinking[:8000]
+            note = (f"thought it through first ({len(self.llm.last_thinking.split())} "
+                    "words of reasoning)")
+            if not any("thought it through" in t for t in r.get("trace") or []):
+                r["trace"] = list(r.get("trace") or []) + [note]
         how = r.get("how") or ""
         if answered and how.startswith("no-source"):
             kind = "need-config" if "need-config" in how else "missing-knowledge"
@@ -3584,7 +3597,7 @@ class Mind:
             from llm import REASON_SYSTEM_D
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
             ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
-                                    max_tokens=budget)
+                                    max_tokens=budget, think=True)
             if ans:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) analytic reasoning — "
@@ -3650,7 +3663,7 @@ class Mind:
                 from llm import REASON_SYSTEM_D
                 budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
                 ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
-                                        max_tokens=budget)
+                                        max_tokens=budget, think=True)
                 if ans:
                     return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                             "trace": [f"local LLM ({self.llm.model}) — refused raw "
@@ -3674,7 +3687,8 @@ class Mind:
             # big deliverables (root-cause tree + timeline + appendix …) need room to
             # finish — a low cap truncates them mid-section. Configurable for slower PCs.
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-            ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3, max_tokens=budget)
+            ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3, max_tokens=budget,
+                                    think=True)
             if ans:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) reasoning — "

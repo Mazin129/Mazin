@@ -451,7 +451,8 @@ class DomainAgent(Agent):
         except Exception:
             prompt = q
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-        ans = llm.generate(prompt, system=self.system, max_tokens=budget)
+        # each expert reasons its own task through step by step (thinking models)
+        ans = llm.generate(prompt, system=self.system, max_tokens=budget, think=True)
         if not ans:
             return None
         # publish the evidence this expert used, so the quality gate can cite it and
@@ -464,7 +465,10 @@ class DomainAgent(Agent):
             pass
         return Result(ans, how=f"{self.name} (LLM)", verified=bool(passages),
                       confidence=0.72 if passages else 0.55,
-                      trace=[f"{self.name} agent grounded on {len(passages)} passage(s)"])
+                      trace=[f"{self.name} agent grounded on {len(passages)} passage(s)"]
+                      + ([f"{self.name} agent thought it through first "
+                          f"({len(llm.last_thinking.split())} words of reasoning)"]
+                         if getattr(llm, "last_thought", False) else []))
 
 
 class TroubleshootingAgent(DomainAgent):
