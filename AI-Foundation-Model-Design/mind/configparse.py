@@ -25,6 +25,10 @@ class ConfigObject:
     name: str                       # the edit key (a numeric id or a "name")
     fields: dict = _field(default_factory=dict)
     raw: str = ""
+    # For a row of a nested sub-table (`config rules` inside a profile): the owning
+    # object as "kind name". Empty for top-level objects. Nested rows are details of
+    # their parent, not objects a user asks for by bare name.
+    parent: str = ""
 
     def get(self, key, default=None):
         return self.fields.get(key.lower(), default)
@@ -57,49 +61,69 @@ def parse(text: str):
 
 
 def _parse_fortigate(text: str):
-    """Parse FortiGate stanza config into a flat list of ConfigObjects (nested configs
-    keep the innermost kind). Returns [] when the text isn't stanza config."""
-    objs, kinds, cur = [], [], None
+    """Parse FortiGate stanza config into a flat list of ConfigObjects.
+
+    Nested blocks are tracked on a stack. A sub-table inside an object (`config rules`
+    inside a profile, `config realservers` inside a VIP) produces rows whose kind is
+    qualified by the owner ("waf profile > url-access"), whose name is prefixed by
+    the owner's name, and which record their parent — so they never masquerade as
+    top-level objects. When a sub-table ends, the owning object resumes, so `set`
+    lines after it land on the right object instead of creating a nameless one."""
+    objs = []
+    stack = []            # frames: {"kind", "owner", "resume", "settings"}
+    cur = None
     for raw in (text or "").splitlines():
         line = raw.strip()
         if not line:
             continue
         m = _CONFIG.match(line)
         if m:
-            kinds.append(m.group(1).strip())
+            sub = m.group(1).strip()
+            owner = cur if cur is not None else (stack[-1]["settings"] if stack else None)
+            kind = f"{owner.kind} > {sub}" if owner is not None else sub
+            stack.append({"kind": kind, "owner": owner, "resume": cur, "settings": None})
+            cur = None
             continue
+        if not stack:
+            continue
+        frame = stack[-1]
         m = _EDIT.match(line)
-        if m and kinds:
-            if cur is not None:
-                objs.append(cur)
-            cur = ConfigObject(kind=kinds[-1], name=m.group(1).strip().strip('"'), raw=raw)
+        if m:
+            key = m.group(1).strip().strip('"')
+            owner = frame["owner"]
+            cur = ConfigObject(
+                kind=frame["kind"],
+                name=f"{owner.name}/{key}" if owner is not None and owner.name else key,
+                raw=raw,
+                parent=f"{owner.kind} {owner.name}".strip() if owner is not None else "")
+            objs.append(cur)
             continue
         m = _SET.match(line)
-        if m and cur is None and kinds:
-            # A SETTINGS block — `config system global`, `config log setting`,
-            # `config system password-policy` — has `set` lines and no `edit`. Those
-            # lines used to be dropped, which made every device-wide security setting
-            # (admin TLS versions, strong-crypto, password policy) invisible. Represent
-            # the block as one object with an empty name.
-            cur = ConfigObject(kind=kinds[-1], name="", raw=raw)
-        if m and cur is not None:
-            cur.fields[m.group(1).lower()] = m.group(2).strip()
-            cur.raw += "\n" + raw
+        if m:
+            if cur is None:
+                # A SETTINGS block (`config system global`, or a settings sub-block such
+                # as `config ipv6` inside an interface) has `set` lines and no `edit`:
+                # one object per block, created on the first `set` and reused after.
+                if frame["settings"] is None:
+                    owner = frame["owner"]
+                    frame["settings"] = ConfigObject(
+                        kind=frame["kind"], name=owner.name if owner is not None else "",
+                        raw=raw,
+                        parent=f"{owner.kind} {owner.name}".strip() if owner is not None else "")
+                    objs.append(frame["settings"])
+                target = frame["settings"]
+            else:
+                target = cur
+            target.fields[m.group(1).lower()] = m.group(2).strip()
+            target.raw += "\n" + raw
             continue
         if _NEXT.match(line):
-            if cur is not None:
-                objs.append(cur)
-                cur = None
+            cur = None
             continue
         if _END.match(line):
-            if cur is not None:
-                objs.append(cur)
-                cur = None
-            if kinds:
-                kinds.pop()
+            done = stack.pop()
+            cur = done["resume"]          # the owning object continues after its sub-table
             continue
-    if cur is not None:
-        objs.append(cur)
     return objs
 
 

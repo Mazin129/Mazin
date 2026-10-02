@@ -943,8 +943,21 @@ class Mind:
         if not objs or not u.kind:
             return None
         kind = u.kind.lower()
-        matched = [o for o in objs
-                   if kind == (o.kind or "").lower() or kind in (o.kind or "").lower()]
+        matched = [o for o in objs if not getattr(o, "parent", "")
+                   and (kind == (o.kind or "").lower() or kind in (o.kind or "").lower())]
+        # "policies for port3" / "addresses for LAN": keep only objects that mention
+        # every qualifier term in their name or values
+        if getattr(u, "filter_terms", None):
+            def _mentions(o):
+                blob = (str(o.name) + " " + " ".join(map(str, o.fields.values()))).lower()
+                return all(re.search(rf"(?<![\w.-]){re.escape(t)}(?![\w-])", blob)
+                           for t in u.filter_terms)
+            matched = [o for o in matched if _mentions(o)]
+            if not matched:
+                return {"answer": f"No {u.kind} objects mention "
+                        f"{' '.join(u.filter_terms)}.", "how":
+                        "analysis over your config (exact listing)", "verified": True,
+                        "confidence": 0.9, "trace": ["filtered listing: no match"]}
         if not matched:
             return None
 
@@ -970,6 +983,8 @@ class Mind:
                 f"(ask for a narrower set, e.g. by interface or address)"
                 if len(matched) > len(shown) else "")
         head = (f"{len(matched)} {u.kind} object(s) in the loaded configuration"
+                + (f" mentioning {' '.join(u.filter_terms)}"
+                   if getattr(u, "filter_terms", None) else "")
                 + (f" ({', '.join(kinds)})" if kinds != [u.kind] else "") + ":")
         return {"answer": head + "\n" + "\n".join(lines) + more,
                 "how": "analysis over your config (exact listing)", "verified": True,
@@ -2751,7 +2766,9 @@ class Mind:
         try:
             import brain
             self._evidence_survey = brain.survey(self)
-            self._intents = brain.read(q, self._evidence_survey.vocabulary)
+            self._intents = brain.read(q, self._evidence_survey.vocabulary,
+                                       self._evidence_survey.config_terms
+                                       if self._evidence_survey.config_objects else None)
             self._plan = brain.decide(self._intents[0], self._evidence_survey)
             self._brain_error = ""
         except Exception as ex:

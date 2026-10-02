@@ -149,7 +149,7 @@ class Understanding:
     """A structured reading of one question. Everything downstream reads this."""
 
     __slots__ = ("text", "form", "subject", "host", "vendor", "kind", "qualified",
-                 "requires", "why")
+                 "requires", "why", "filter_terms")
 
     def __init__(self, text):
         self.text = text
@@ -161,6 +161,7 @@ class Understanding:
         self.qualified = False   # narrowed by a condition ("…that point to WAN")
         self.requires = KNOWLEDGE
         self.why = ""            # plain-language justification, shown to the user
+        self.filter_terms = []   # "policies for port3" → ["port3"]
 
     def summary(self):
         bits = [self.form]
@@ -238,8 +239,36 @@ for _w, _k in (("route", "router static"), ("routes", "router static"),
     _FALLBACK_VOCAB[_w] = (_k, 2)
 
 
-def understand(q, vocabulary=None):
-    """Read ONE question into an Understanding."""
+_CONTENTS_RE = re.compile(r"\b(objects?|entries|entr(y|ies)|rules?|table|tables|"
+                          r"stanzas?|sections?|records?)\b")
+_IDENT = re.compile(r"[0-9_./:-]")
+_QUALIFIER = re.compile(r"\b(?:for|of|about|regarding|related\s+to|in|named|called)\s+"
+                        r"(?:the\s+|my\s+|our\s+)?(.+?)\s*(?:\?|$)", re.I)
+
+
+def _qualifier_terms(text, u):
+    """Words that narrow a config question: "rules for change request" → change,
+    request. Words naming the object kind, the host, the vendor or a device noun are
+    not qualifiers."""
+    m = _QUALIFIER.search(text or "")
+    if not m:
+        return []
+    skip = set(_STOP) | _DEVICE_NOUNS | {"configured", "loaded", "config", "configuration",
+                                         "device", "all", "every", "each", "list", "there"}
+    if u.kind:
+        skip |= set(u.kind.lower().replace(">", " ").split())
+    for x in (u.host, u.vendor):
+        if x:
+            skip |= set(re.split(r"[-_\s]", x.lower())) | {x.lower()}
+    words = [w for w in re.findall(r"[a-z0-9][a-z0-9_.-]*", m.group(1).lower())
+             if w not in skip and not any(w.startswith(k[:5]) for k in skip if len(k) > 4)]
+    return words
+
+
+def understand(q, vocabulary=None, terms=None):
+    """Read ONE question into an Understanding. `terms` (every word in the loaded
+    config) lets a qualifier be checked: "rules for change request" is not a config
+    question when nothing in the config is called "change request"."""
     u = Understanding((q or "").strip())
     low = u.text.lower()
     if not low:
@@ -280,6 +309,26 @@ def understand(q, vocabulary=None):
                  r"\bmy name\b", low):
         u.requires, u.why = MEMORY, "it asks about you"
         return u
+
+    # QUALIFIERS decide whether a config question is really about the config:
+    #   "rules for change request"  → nothing in the config is called that → not config
+    #   "policies for port2"        → port2 is in the config → a filtered listing
+    #   "policies for port77"       → an identifier-like name that isn't there → the
+    #                                 listing says so, rather than "I don't know"
+    if terms is not None and (u.kind or (u.form in ("count", "enumerate")
+                                         and _CONTENTS_RE.search(low))):
+        q_terms = _qualifier_terms(u.text, u)
+        if q_terms:
+            found = [t for t in q_terms if t in terms]
+            if found:
+                u.filter_terms, u.qualified = found, True
+            elif u.kind and any(_IDENT.search(t) for t in q_terms):
+                u.filter_terms, u.qualified = q_terms, True
+            else:
+                u.kind = None
+                u.requires = KNOWLEDGE
+                u.why = f"nothing in the configuration is named “{' '.join(q_terms)}”"
+                return u
 
     # Nouns that name entries IN a system rather than ideas about one. Asking to list
     # or count "objects"/"entries"/"rules" is asking about a specific system's contents
@@ -333,9 +382,9 @@ def split_questions(q):
     return parts or [(q or "").strip()]
 
 
-def read(q, vocabulary=None):
+def read(q, vocabulary=None, terms=None):
     """Read a (possibly multi-part) message: one Understanding per question."""
-    return [understand(p, vocabulary) for p in split_questions(q)]
+    return [understand(p, vocabulary, terms) for p in split_questions(q)]
 
 
 # ============================================================================ #
@@ -345,7 +394,7 @@ class Evidence:
     """An inventory of answering capacity. Computed fresh; never assumed."""
 
     __slots__ = ("config_objects", "config_kinds", "passages", "config_passages",
-                 "facts", "model", "web", "vocabulary")
+                 "facts", "model", "web", "vocabulary", "config_terms")
 
     def __init__(self):
         self.config_objects = []
@@ -356,6 +405,7 @@ class Evidence:
         self.model = None        # model name, or None
         self.web = False
         self.vocabulary = {}
+        self.config_terms = set()     # every word in object names and values
 
     def has(self, cls):
         return {CONFIG: bool(self.config_objects),
@@ -421,7 +471,10 @@ def config_vocabulary(objects):
 
     for o in objects:
         kind = (o.kind or "").strip().lower()
-        if not kind:
+        # rows of a nested sub-table ("waf profile > url-access") are details of their
+        # parent; letting their bare name ("rules") into the vocabulary is how a
+        # question about something else got answered with 114 "rules rule1" lines
+        if not kind or getattr(o, "parent", "") or ">" in kind:
             continue
         words = kind.split()
         put(kind, kind, 3)
@@ -477,6 +530,12 @@ def _survey_uncached(mind):
             k = (o.kind or "?").strip()
             ev.config_kinds[k] = ev.config_kinds.get(k, 0) + 1
         ev.vocabulary = config_vocabulary(ev.config_objects)
+        terms = set()
+        for o in ev.config_objects:
+            terms.update(re.findall(r"[a-z0-9][a-z0-9_.-]*", str(o.name).lower()))
+            for v in o.fields.values():
+                terms.update(re.findall(r"[a-z0-9][a-z0-9_.-]*", str(v).lower()))
+        ev.config_terms = terms
     except Exception:
         pass
     try:

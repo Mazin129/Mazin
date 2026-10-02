@@ -98,6 +98,22 @@ def main():
           us[0].kind == "router static" and us[2].kind == "firewall policy")
     check("the count part is read as a count", us[3].form == "count")
 
+    print("\n-- qualifiers: 'for X' narrows or redirects the question --")
+    T = {"port2", "wan1", "lan", "rule1"}
+    u = brain.understand("What are the rules for change request?", V, T)
+    check("'rules for change request' is not a config listing",
+          u.kind is None and u.requires == brain.KNOWLEDGE)
+    u = brain.understand("show firewall policies for port2", V, T)
+    check("a qualifier found in the config filters the listing",
+          u.kind == "firewall policy" and u.filter_terms == ["port2"])
+    u = brain.understand("show policies for port77", V, T)
+    check("an identifier-like qualifier is kept (answer: none match)",
+          u.kind == "firewall policy" and u.filter_terms == ["port77"])
+    check("no qualifier → unfiltered",
+          not brain.understand("how many policies are configured", V, T).filter_terms)
+    nested_vocab = brain.config_vocabulary([Obj("waf profile > rules", "p/rule1")])
+    check("nested sub-table rows never enter the vocabulary", "rules" not in nested_vocab)
+
     print("\n-- decisions follow the evidence, not the keywords --")
     u_route = brain.understand("show static route on SA-OCC firewall", V)
     check("config present → exact answer",

@@ -816,7 +816,8 @@ def is_firewall_policy(o):
     whose kind merely contains the word. `config system password-policy` is a settings
     block, and counting it made the review report 'policy  is disabled' with no name."""
     k = (o.kind or "").strip().lower()
-    return k.startswith("firewall") and "policy" in k and "shaping" not in k
+    return (k.startswith("firewall") and "policy" in k and "shaping" not in k
+            and ">" not in k and not getattr(o, "parent", ""))
 
 
 def audit(objects):
@@ -824,7 +825,7 @@ def audit(objects):
     objects = list(objects or [])
     policies = [o for o in objects if is_firewall_policy(o)]
     routes = [o for o in objects if "static" in (o.kind or "").lower()
-              and "router" in (o.kind or "").lower()]
+              and "router" in (o.kind or "").lower() and ">" not in (o.kind or "")]
 
     findings = []
     findings += _check_policies(policies, _wan_interfaces(objects))

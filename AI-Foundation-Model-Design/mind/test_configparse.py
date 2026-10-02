@@ -65,7 +65,39 @@ def main():
     _ok("non-config → []", cp.parse("just some prose here") == [])
     _ok("looks_like_config", cp.looks_like_config(SAMPLE) and not cp.looks_like_config("hi"))
 
+    # nested sub-tables (`config rules` inside a profile) are rows OF their owner
+    nested = cp.parse(NESTED)
+    rows = [o for o in nested if o.parent]
+    _ok("nested rows record their parent",
+        len(rows) == 2 and all(o.parent == "waf profile web-prof" for o in rows))
+    _ok("nested rows get a qualified kind",
+        all(o.kind == "waf profile > rules" for o in rows))
+    _ok("nested row names carry the owner", {o.name for o in rows} ==
+        {"web-prof/rule1", "web-prof/rule2"})
+    prof = [o for o in nested if o.kind == "waf profile"]
+    _ok("settings after a nested block land on the owner",
+        len(prof) == 1 and prof[0].get("comment") == '"after rules"')
+    _ok("no bogus nameless objects", all(o.name for o in nested))
+    _ok("no top-level 'rules' objects", not [o for o in nested if o.kind == "rules"])
+
     print("\nALL PASS")
+
+
+NESTED = """config waf profile
+    edit "web-prof"
+        set extended-log enable
+        config rules
+            edit "rule1"
+                set action block
+            next
+            edit "rule2"
+                set action allow
+            next
+        end
+        set comment "after rules"
+    next
+end
+"""
 
 
 if __name__ == "__main__":
