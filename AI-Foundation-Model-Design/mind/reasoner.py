@@ -661,6 +661,16 @@ class Mind:
         except Exception:
             self.corrections = {}
         self._last_q = ""
+        # Learning Agent state: validated skills, intent rules learned from
+        # misunderstandings, and the failure log the self-review reads.
+        import selflearn
+        self.skillreg = selflearn.SkillRegistry(DATA_DIR)
+        self.intent_rules = selflearn.IntentRules(DATA_DIR)
+        self.failures = selflearn.FailureLog(DATA_DIR)
+        self._pending_clarify = None          # question the user said I misread
+        self._pending_learn = None            # topic awaiting material to learn from
+        self._prev_msg = ""                   # previous user message (context for "learn this")
+        self._last_failed_q = ""              # most recent question I could not answer
         # CORTEX-OS Phase 6 — close the confidence loop: calibrate against feedback.
         self.calibration = Calibration(self)
         # Reasoning cortex — a local LLM (via Ollama) for genuine reasoning: grounded on
@@ -761,6 +771,9 @@ class Mind:
         Vio's confidence (§10)."""
         ep = self.episodic.grade_last(correct)
         self.calibration.refresh()
+        if not correct:                                  # a 👎 is a learning signal too
+            self.failures.log(getattr(self, "_answered_q", ""), "wrong-answer",
+                              "marked wrong by the user")
         if getattr(self, "si", None) is not None:       # Stage 4: feed the improvement loop
             self.si.traces.add_feedback(bool(correct))
         if ep is None:
@@ -1341,8 +1354,16 @@ class Mind:
         self.lib.add_many(chunks)
         self.graph.learn_text(text)        # extract relational edges (cheap, teach-time)
         self._retrain()                    # keep the thinker current with new knowledge
-        return (f"Learned {len(chunks)} passages into the library." if len(chunks) > 1
-                else f"Learned: “{chunks[0]}”")
+        # Never claim learning that did not happen: confirm the passage can actually be
+        # retrieved before saying so.
+        found = {d.strip() for d, _s in self.lib.search(text[:300], k=5)}
+        ok = any(c.strip() in found for c in chunks)
+        if len(chunks) > 1:
+            return (f"Stored {len(chunks)} passages in the library"
+                    + (" and verified I can retrieve them." if ok
+                       else ", but I could not retrieve them yet — ask about it to check."))
+        return (f"Stored and verified: “{chunks[0]}”" if ok
+                else f"Stored “{chunks[0]}”, but I could not retrieve it yet.")
 
     def load_csv(self, text, name="table"):
         """Load a CSV as an analyzable data table (not memorized text). Returns a
@@ -1364,6 +1385,8 @@ class Mind:
           4  knowledge gaps from questions I couldn't answer  web
           5  consolidation: merge duplicates, mine relations  offline
           6  behaviour: curate traces, run the golden gate    offline; never trains
+          7  re-validate every learned skill                  offline
+          8  self-review of recorded failures                 offline
 
         Idempotent — the library skips passages it already holds, so re-running only
         adds what's new. Nothing here trains or promotes a model; that stays behind
@@ -1453,6 +1476,40 @@ class Mind:
                     + ("PROMOTABLE" if r.get("promotable") else "not promotable")
                     + ". Nothing was trained or promoted.")
         level(6, "Behaviour (traces → curated examples → golden gate)", _behaviour)
+
+        # 7 ─ re-validate every learned skill against the material it was built from:
+        # a capability is only trusted while it still passes its own tests
+        def _skills():
+            import selflearn
+            if not self.skillreg.skills:
+                return "no learned skills yet."
+            ok, bad = 0, []
+            for sk in self.skillreg.skills.values():
+                v = selflearn.validate(sk, sk.get("source_text", ""))
+                sk["validation"] = v
+                if v["failures"]:
+                    sk["status"] = "needs-review"
+                    bad.append(sk["name"])
+                else:
+                    sk["status"] = "validated"
+                    ok += 1
+            self.skillreg._save()
+            return (f"{ok} skill(s) re-validated"
+                    + (f"; {len(bad)} failed and are no longer used: {', '.join(bad)}"
+                       if bad else "."))
+        level(7, "Learned skills (re-validated)", _skills)
+
+        # 8 ─ self-review: what failed, how often, and what would fix it
+        def _review():
+            recs = self.failures.read()
+            if not recs:
+                return "no failures recorded."
+            kinds = {}
+            for r in recs:
+                kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+            top = ", ".join(f"{k} {n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
+            return f"{len(recs)} failure(s): {top}. Ask  self review  for the full list."
+        level(8, "Self-review", _review)
 
         self._save()
         head = (f"**Self-learning run complete** in {_t.time() - t0:.0f}s — library "
@@ -2202,10 +2259,209 @@ class Mind:
     def _norm_q(q):
         return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", (q or "").lower())).strip()
 
+    # ── Learning Agent: acquire → validate → store → reuse ──────────────────
+    @staticmethod
+    def _is_material(text):
+        """Does a message look like something to learn FROM (not a question)?"""
+        t = (text or "").strip()
+        if not t or re.match(r"^\s*\w+\s*:", t) and len(t.split()) < 4:
+            return False
+        if re.search(r"→|->|=>|↘", t) or t.count("\n") >= 2:
+            return True
+        return len(t.split()) >= 15 and not t.rstrip().endswith("?")
+
+    def learn_skill(self, topic=None, material="", request=""):
+        """The full learning cycle for one capability. Returns a result dict.
+
+        1 identify the skill · 2 what I know / what is missing · 3 gather material ·
+        4 extract structure · 5 build the skill · 6 validate · 7 retry once with more
+        sources on failure · 8 store only if validated · 9 reuse automatically."""
+        import selflearn
+        import websearch
+        sources, texts = [], []
+        if material.strip():
+            sources.append("your message")
+            texts.append(material)
+        elif self._is_material(self._prev_msg):
+            sources.append("your previous message")
+            texts.append(self._prev_msg)
+
+        name = (topic or "").strip() or (getattr(self, "_pending_learn", None) or "")
+        if not name and texts:
+            k0 = selflearn.extract(texts[0])
+            if k0["states"]:
+                name = f"{k0['states'][0]} → {k0['states'][-1]} lifecycle"
+            elif k0["definitions"]:
+                name = next(iter(k0["definitions"]))
+        existing = self.skillreg.get(name) if name else None
+        # Library passages count only if they are genuinely ABOUT the topic — every
+        # distinctive topic word must appear. A loose keyword match ("states") pulled in
+        # unrelated passages, built a skill from them, and called it learned.
+        need = selflearn._topic_words(name)
+        lib_hits = [(d, sc) for d, sc in self.lib.search(name, k=8) if sc > 0.18
+                    and need and all(re.search(rf"\b{re.escape(w[:6])}", d.lower())
+                                     for w in need)] if name else []
+        current = (f"I already have version {existing['version']} of this skill."
+                   if existing else
+                   f"I hold {len(lib_hits)} library passage(s) on it." if lib_hits else
+                   "Nothing yet.")
+
+        if not texts and not lib_hits and not websearch.net_enabled():
+            self.failures.log(request or name, "missing-knowledge", "no material to learn from")
+            self._pending_learn = name or None   # the next material message completes it
+            what = name or "this"
+            return self._learning_result(
+                selflearn.learning_response(
+                    what, current, f"the actual definition of {what}",
+                    "nothing yet — I have no material to learn from",
+                    "not possible without material",
+                    "once taught, I'll answer questions about it automatically"),
+                ask=(f"Which system or document defines {what}? Paste the states and how "
+                     "they connect (for example  Draft → Sent → Accepted), the terms and "
+                     "their meanings, or the rules — or upload the document — and I'll "
+                     "learn it."),
+                learned=False)
+
+        def build(text_parts):
+            joined = "\n".join(text_parts)
+            k = selflearn.extract(joined)
+            sk = selflearn.build_skill(name or "learned skill", k, list(sources),
+                                       [joined[:400]])
+            sk["source_text"] = joined[:20000]
+            sk["validation"] = selflearn.validate(sk, joined)
+            return k, sk
+
+        k, skill = build(texts) if texts else (None, None)
+        attempts = 1
+        # FAILURE → learn again: widen to the library, then the web, and retest
+        if skill is None or selflearn._empty(k) or skill["validation"]["failures"]:
+            extra = [d for d, _s in lib_hits]
+            if extra:
+                sources.append(f"{len(extra)} library passage(s)")
+                texts = texts + extra
+            if (not extra or (k is not None and selflearn._empty(k))) and \
+                    websearch.net_enabled() and name:
+                try:
+                    r = self.research(name)
+                    if r.get("verified"):
+                        sources.append("web research")
+                        texts.append(r.get("answer", ""))
+                except Exception:
+                    pass
+            if texts:
+                k, skill = build(texts)
+                attempts += 1
+
+        v = skill["validation"] if skill else {"passed": 0, "total": 0, "failures": []}
+        learnable = skill is not None and not selflearn._empty(k)
+        if not learnable or v["failures"]:
+            reason = ("the material has no structure I can use (no states, definitions, "
+                      "rules or steps)" if not learnable else
+                      f"{len(v['failures'])} of {v['total']} self-tests failed: "
+                      + "; ".join(v["failures"][:3]))
+            self.failures.log(request or name, "validation-failed", reason)
+            return self._learning_result(
+                selflearn.learning_response(
+                    name or "the material", current, reason,
+                    f"read {', '.join(sources) or 'nothing'} ({attempts} attempt(s))",
+                    f"failed — {v['passed']}/{v['total']} tests passed",
+                    "not stored — I won't use a skill that failed its own tests"),
+                ask=("Can you give it to me in a clearer form — each state and where it "
+                     "leads (A → B), or each term with its meaning on its own line?"),
+                learned=False)
+
+        conflict_notes = []
+        if existing:
+            conflict_notes = selflearn.conflicts(existing, skill)
+            skill["version"] = existing["version"] + 1
+            skill["previous"] = {"version": existing["version"],
+                                 "knowledge": existing["knowledge"]}
+            skill["conflicts"] = conflict_notes
+        skill["status"] = "validated"
+        self.skillreg.put(skill)
+        # the validated material also goes into the library, so retrieval and the
+        # model can use it too
+        self.lib.add_many(self._drop_stubs(self._smart_chunks("\n".join(texts)))[0])
+
+        kk = skill["knowledge"]
+        learned = []
+        if kk["states"]:
+            learned.append(f"{len(kk['states'])} states and {len(kk['transitions'])} "
+                           "transitions")
+        for label, key in (("definitions", "definitions"), ("rules", "rules"),
+                           ("steps", "steps"), ("exceptions", "exceptions")):
+            if kk[key]:
+                learned.append(f"{len(kk[key])} {label}")
+        body = selflearn.learning_response(
+            skill["name"], current,
+            "a structured, reusable model of " + skill["name"],
+            f"extracted {', '.join(learned)} from {', '.join(sources)}",
+            f"passed {v['passed']}/{v['total']} self-tests — recognition, normal cases, "
+            "refusing moves that aren't allowed, and refusing to invent unknown states",
+            f"stored as skill v{skill['version']}; questions about it are answered "
+            "from it automatically from now on")
+        if conflict_notes:
+            body += ("\n\n⚠️ **This contradicts what I was taught before** — I'm using "
+                     "the new version, but check these changes:\n" +
+                     "\n".join(f"  • {c}" for c in conflict_notes[:10]))
+        if kk["transitions"]:
+            body += "\n\nWhat I learned: " + "; ".join(f"{a} → {b}" for a, b in
+                                                      kk["transitions"])
+        return self._learning_result(body, learned=True, skill=skill)
+
+    def _learning_result(self, body, ask=None, learned=False, skill=None):
+        if ask:
+            body += f"\n\n**One question:** {ask}"
+        r = {"answer": body, "how": "learning (skill acquisition)", "verified": learned,
+             "confidence": 0.95 if learned else 0.2, "cortex": "skipped",
+             "trace": ["learning agent: " + ("skill validated and stored" if learned
+                                             else "not learned — nothing stored")]}
+        if skill:
+            r["skill"] = skill["name"]
+        return r
+
+    def use_skill(self, skill, q):
+        import selflearn
+        return {"answer": selflearn.answer(skill, q), "skill": skill["name"],
+                "how": f"learned skill: {skill['name']}", "verified": True,
+                "confidence": 0.95, "cortex": "skipped",
+                "trace": [f"skill '{skill['name']}' v{skill['version']} "
+                          f"(validated {skill['validation'].get('passed')}/"
+                          f"{skill['validation'].get('total')})"]}
+
+    def reevaluate(self, prev_q):
+        """'That's not what I meant' — show how I read it, ask the smallest question,
+        and remember the answer as an intent rule."""
+        import brain
+        self.failures.log(prev_q, "misunderstood")
+        if not prev_q:
+            return {"answer": "Tell me in one line what you'd like, and I'll take it from "
+                    "there.", "how": "re-evaluate", "verified": True, "cortex": "skipped",
+                    "trace": []}
+        u = brain.read(prev_q, brain.survey(self).vocabulary)[0]
+        alt = {brain.CONFIG: "a general explanation of the concept",
+               brain.KNOWLEDGE: "something about your own device or configuration",
+               brain.REASONING: "a definition rather than a diagnosis",
+               brain.TOOL: "an explanation rather than a calculation"}.get(u.requires,
+                                                                           "something else")
+        self._pending_clarify = prev_q
+        return {"answer": (f"I read “{prev_q}” as **{u.summary()}** — {u.why}.\n\n"
+                           f"Did you mean {alt}, or something else? Tell me in one line "
+                           "what you meant. I'll answer that, and remember that this "
+                           "question means it next time."),
+                "how": "re-evaluate", "verified": True, "cortex": "skipped",
+                "trace": [f"misunderstanding logged for “{prev_q[:60]}”"]}
+
+    def self_review(self):
+        body = self.failures.review() + "\n\n" + self.skillreg.listing()
+        return {"answer": body, "how": "self-review", "verified": True,
+                "confidence": 0.9, "cortex": "skipped", "trace": []}
+
     def correct(self, question, answer):
         """Remember the RIGHT answer to a question the user corrected."""
         import time
         key = self._norm_q(question)
+        self.failures.log(question, "wrong-answer", f"corrected to: {answer[:120]}")
         if key and answer:
             self.corrections[key] = {"question": question.strip(),
                                      "answer": answer.strip(), "ts": time.time()}
@@ -2240,7 +2496,119 @@ class Mind:
         return None
 
     def ask(self, q):
-        """Public entry: recall past chats on request, run the core reasoner, then
+        """Public entry. Intent comes first — the spec's cycle, in order:
+
+          • a pending clarification: this message says what the last one meant, so it
+            becomes an intent rule and is then answered;
+          • learning intents (learn / understand / remember this, do it yourself, how
+            can you learn this, you don't understand me, self-review, learned skills);
+          • a learned intent rule rewrites wording I once misread;
+          • otherwise the reasoner (_ask), which also reuses learned skills.
+
+        Afterwards every unanswered question is logged for self-review."""
+        import selflearn
+        raw = (q or "").strip()
+        pre = []
+        purpose = selflearn.purpose(raw)
+        if self._pending_clarify and raw and purpose is None and \
+                not re.match(r"^\s*[\w-]+\s*:", raw):
+            prev, self._pending_clarify = self._pending_clarify, None
+            self.intent_rules.add(prev, raw, "clarified by the user after a misreading")
+            r = dict(self._ask(raw))
+            r["answer"] = (f"Noted — next time “{prev}” will be read as “{raw}”.\n\n"
+                           + (r.get("answer") or ""))
+            pre.append(f"intent rule learned: “{prev[:50]}” → “{raw[:50]}”")
+            return self._after_ask(raw, r, pre, answered=True)
+        # A learning request that asked for material, followed by the material itself:
+        # learn it under the topic the user named (context, not just this message).
+        pend = getattr(self, "_pending_learn", None)
+        if pend is not None and purpose is None and self._is_material(raw):
+            self._pending_learn = None
+            pre.append(f"material for the pending request to learn “{pend}”")
+            return self._after_ask(raw, self.learn_skill(pend, raw, raw), pre)
+        if purpose is not None or not self._is_material(raw):
+            self._pending_learn = None if purpose != "learn" else pend
+        if purpose == "re-evaluate":
+            return self._after_ask(raw, self.reevaluate(getattr(self, "_answered_q", "")),
+                                   pre)
+        if purpose == "learn":
+            topic, material = selflearn.learn_request(raw)
+            return self._after_ask(raw, self.learn_skill(topic, material, raw), pre)
+        if purpose == "demonstrate":
+            if self._is_material(self._prev_msg):
+                return self._after_ask(raw, self.learn_skill(None, "", raw), pre)
+            return self._after_ask(raw, self._learning_result(
+                "I learn by reading material, pulling out its structure — states and "
+                "transitions, definitions, rules, steps — building a skill from it, and "
+                "testing that skill before I use it.",
+                ask="Paste what you'd like me to learn (or upload it), then say  learn "
+                    "this  and I'll do it.", learned=False), pre)
+        if purpose == "autonomous":
+            return self._after_ask(raw, self._do_it_yourself(), pre)
+        if purpose == "self-review":
+            return self._after_ask(raw, self.self_review(), pre)
+        if purpose == "list-skills":
+            return self._after_ask(raw, {"answer": self.skillreg.listing(),
+                                         "how": "learned skills", "verified": True,
+                                         "cortex": "skipped", "trace": []}, pre)
+        rule = self.intent_rules.lookup(raw)
+        if rule:
+            pre.append(f"intent rule: read “{rule['said'][:50]}” as "
+                       f"“{rule['meant'][:50]}” (you corrected this before)")
+            raw_q = rule["meant"]
+        else:
+            raw_q = raw
+        return self._after_ask(raw, self._ask(raw_q), pre, answered=True)
+
+    def _after_ask(self, raw, r, pre, answered=False):
+        """Bookkeeping after every answer: traces, the failure log, conversation context."""
+        r = dict(r or {})
+        if pre:
+            r["trace"] = pre + list(r.get("trace") or [])
+        how = r.get("how") or ""
+        if answered and how.startswith("no-source"):
+            kind = "need-config" if "need-config" in how else "missing-knowledge"
+            self.failures.log(raw, kind, how)
+            self._last_failed_q = raw
+        if answered and raw and not how.startswith(("feedback", "correction", "re-evaluate")):
+            self._answered_q = raw
+        if how.startswith("learned skill") or (how.startswith("learning") and r.get("skill")):
+            self._last_skill = r.get("skill") or how.split(":", 1)[-1].strip()
+            self._turns_since_skill = 0
+        else:
+            self._turns_since_skill = getattr(self, "_turns_since_skill", 9) + 1
+        self._prev_msg = raw
+        return r
+
+    def _do_it_yourself(self):
+        """'Do it yourself': take the last question I could not answer, learn what it
+        needs from every source I'm allowed to use, then answer it."""
+        import brain
+        q0 = self._last_failed_q
+        if not q0:
+            return {"answer": "There's nothing I failed to answer recently. Tell me the "
+                    "task and I'll work it out.", "how": "autonomous", "verified": True,
+                    "cortex": "skipped", "trace": []}
+        u = brain.understand(q0, brain.survey(self).vocabulary)
+        if u.requires == brain.CONFIG:
+            return {"answer": f"“{q0}” needs your device configuration, which only you "
+                    "can give me — upload the .conf (📄) and I'll answer it.",
+                    "how": "autonomous", "verified": False, "cortex": "skipped",
+                    "trace": []}
+        learned = self.learn_skill(u.subject, "", q0)
+        again = self._ask(q0)
+        ok = not (again.get("how") or "").startswith("no-source")
+        head = (f"I took “{q0}”, looked for what it needs, and "
+                + ("learned it." if learned.get("verified") else
+                   "couldn't learn it from what I have.") + "\n\n")
+        return {"answer": head + (f"**Answer:** {again.get('answer')}" if ok else
+                                  learned["answer"]),
+                "how": "autonomous", "verified": bool(ok and again.get("verified")),
+                "cortex": again.get("cortex", "skipped"),
+                "trace": ["autonomous: learn → answer"] + list(again.get("trace") or [])}
+
+    def _ask(self, q):
+        """The reasoner: recall past chats on request, run the core reasoner, then
         write the interaction to episodic memory so Vio remembers it."""
         q = (q or "").strip()
         low = q.lower()
@@ -2476,6 +2844,27 @@ class Mind:
                               f"plan: {self._plan.strategy} — {self._plan.reason}",
                               f"held: {len(self._evidence_survey.config_objects)} config "
                               f"object(s), {self._evidence_survey.passages} passage(s)"]}
+        # FUTURE AUTOMATIC USE: a validated learned skill that matches this question
+        # answers it directly. Placed after the config handling above, so a config
+        # question still goes to the config engine.
+        _sk = self.skillreg.match(q)
+        # Conversation context: a follow-up in the same state-model language ("what
+        # comes after Archived?") right after a skill answered belongs to that skill —
+        # which then says plainly that Archived was never taught, instead of a generic
+        # "I don't know".
+        _recent = getattr(self, "_last_skill", None)
+        if _sk is None and _recent and getattr(self, "_turns_since_skill", 9) <= 2 and \
+                re.search(r"\b(?:what\s+comes|comes?\s+(?:after|before)|next\s+(?:state|step)|"
+                          r"from\s+\w+\s+to\s+\w+|(?:after|before)\s+[A-Z]\w*)\b", q):
+            _sk = self.skillreg.get(_recent)
+        if _sk is not None:
+            self._last_skill, self._turns_since_skill = _sk["name"], 0
+            r = self.use_skill(_sk, q)
+            if self._intents:
+                r["understood"] = self._intents[0].summary()
+            self._remember_episode(q, r)
+            return r
+
         # CORTEX AUDIT: count model calls across the whole route (every agent, every
         # branch). Vio has many deterministic short-circuits, and when one of them fires
         # the reasoning model never runs — which looked identical to "the model answered

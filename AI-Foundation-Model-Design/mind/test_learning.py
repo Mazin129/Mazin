@@ -197,7 +197,7 @@ def main():
     size1 = len(m2.lib.docs)
     r2 = m2.ask("learn everything")
     check("learn everything runs every level",
-          all(f"**{i}." in r1["answer"] for i in range(1, 7)))
+          all(f"**{i}." in r1["answer"] for i in range(1, 9)))
     check("the bundled datasets are learned", size1 > n + 100)
     check("a second run adds nothing", len(m2.lib.docs) == size1)
     check("offline, the web levels say why they were skipped",

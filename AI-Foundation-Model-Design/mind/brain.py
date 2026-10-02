@@ -226,6 +226,18 @@ def _kind_of(low, vocabulary):
     return best[2] if best else None
 
 
+_FALLBACK_VOCAB = {}
+for _w, _k in (("route", "router static"), ("routes", "router static"),
+               ("static route", "router static"), ("static routes", "router static"),
+               ("policy", "firewall policy"), ("policies", "firewall policy"),
+               ("firewall rule", "firewall policy"), ("firewall rules", "firewall policy"),
+               ("acl", "firewall policy"), ("acls", "firewall policy"),
+               ("address object", "firewall address"), ("address objects", "firewall address"),
+               ("vip", "firewall vip"), ("vips", "firewall vip"),
+               ("interfaces", "system interface")):
+    _FALLBACK_VOCAB[_w] = (_k, 2)
+
+
 def understand(q, vocabulary=None):
     """Read ONE question into an Understanding."""
     u = Understanding((q or "").strip())
@@ -248,7 +260,10 @@ def understand(q, vocabulary=None):
     # host first, so the device's name is not mistaken for the topic
     u.subject = _subject_of(u.text, low, u.host)
 
-    u.kind = _kind_of(low, vocabulary or {})
+    # With no configuration loaded there is no learned vocabulary, and "show static
+    # routes" was read as a general question. A small fallback of universal object
+    # nouns keeps such questions recognised as needing a configuration.
+    u.kind = _kind_of(low, vocabulary or _FALLBACK_VOCAB)
 
     # ---- the decision everything hangs on: what class of evidence is required --
     if _LIVE.search(low):

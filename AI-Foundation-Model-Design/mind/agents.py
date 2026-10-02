@@ -305,6 +305,52 @@ def agent_from_how(how):
     return "core"
 
 
+class LearningAgent(Agent):
+    """Acquires capabilities and reuses them. Learning requests ("learn this",
+    "understand X", "do it yourself") build, test and store a skill; a question that
+    matches a validated learned skill is answered from it. The learning cycle and the
+    skill registry live in selflearn.py; Mind.ask routes these intents before the
+    general router, and this agent makes the same capability visible to the
+    orchestrator (agents / who answers / council)."""
+    name = "learning"
+    domains = ("learning", "skills")
+
+    def score(self, q, ctx):
+        import selflearn
+        if selflearn.purpose(q) in ("learn", "demonstrate", "autonomous"):
+            return 0.97
+        reg = getattr(self.mind, "skillreg", None)
+        return 0.93 if reg is not None and reg.match(q) is not None else 0.0
+
+    def run(self, q, ctx):
+        import selflearn
+        reg = self.mind.skillreg
+        if selflearn.purpose(q) is None and reg.match(q) is not None:
+            r = self.mind.use_skill(reg.match(q), q)
+        else:
+            topic, material = selflearn.learn_request(q) or (None, "")
+            r = self.mind.learn_skill(topic, material, q)
+        return Result(answer=r["answer"], how=r["how"], verified=r["verified"],
+                      confidence=r.get("confidence", 0.9), agent=self.name,
+                      trace=list(r.get("trace", [])))
+
+
+class SelfImprovementAgent(Agent):
+    """Reviews failures — unanswered questions, corrections, misunderstandings —
+    prioritises the repeated ones and names what would fix each."""
+    name = "self_improvement"
+    domains = ("self-review",)
+
+    def score(self, q, ctx):
+        import selflearn
+        return 0.97 if selflearn.purpose(q) in ("self-review", "list-skills") else 0.0
+
+    def run(self, q, ctx):
+        r = self.mind.self_review()
+        return Result(answer=r["answer"], how=r["how"], verified=True, confidence=0.9,
+                      agent=self.name)
+
+
 class CoreRouterAgent(Agent):
     """The FRONT of the proven router (commands, tools, generation, math, world,
     reasoning, planning, aggregate) as one agent. It runs _core_front, which returns
@@ -582,9 +628,10 @@ class NetworkEngineeringAgent(ExpertAgent):
 # the catch-alls; CoreRouter (front) then Knowledge (tail) remain the bottom fallbacks.
 # NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
 # (teach:/math/tools/research/draw/agents/…); folding it in would break those.
-DEFAULT_AGENTS = (WebResearchAgent, SkillGrowAgent, DiagramAgent, SkillAgent, MathAgent,
-                  PlannerAgent, WorldModelAgent, ReasoningAgent, NetworkEngineeringAgent,
-                  MemoryAgent, CoreRouterAgent, KnowledgeAgent)
+DEFAULT_AGENTS = (LearningAgent, SelfImprovementAgent, WebResearchAgent, SkillGrowAgent,
+                  DiagramAgent, SkillAgent, MathAgent, PlannerAgent, WorldModelAgent,
+                  ReasoningAgent, NetworkEngineeringAgent, MemoryAgent, CoreRouterAgent,
+                  KnowledgeAgent)
 
 
 class Registry:

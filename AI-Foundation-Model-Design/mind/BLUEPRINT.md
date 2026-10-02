@@ -347,6 +347,11 @@ brain — back them up.** All git-ignored (per-machine).
 - **Cognition core:** `reasoner.py` (the Mind), `kernel/executive.py` (two-clock),
   `kernel/workspace.py`.
 - **Agents:** `agents.py`.
+- **Learning:** `selflearn.py` — Learning Agent (material → states/transitions, definitions,
+  rules, steps, exceptions → skill → self-tests → stored only if validated), Skill
+  Registry with automatic reuse and conflict detection, intent rules learned from
+  misunderstandings, failure log + self-review. Commands: `learn this`, `understand X`,
+  `do it yourself`, `self review`, `learned skills`.
 - **Brain:** `brain.py` (decision core: understanding → evidence survey →
   strategy → verification), `llm.py` (local model client).
 - **Cognition modules:** `cognition/` — `confidence`, `critic`, `calibration`,
