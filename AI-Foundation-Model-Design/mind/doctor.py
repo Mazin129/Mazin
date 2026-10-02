@@ -153,7 +153,9 @@ def stage_readers():
         return
     caps = readers.capabilities()
     for label, ok in caps.items():
-        _line(ok, label, "" if ok else "pip install -r requirements.txt")
+        _line(ok, label, "" if ok else ("pip install -r requirements-ocr.txt"
+                                         if label.startswith("OCR")
+                                         else "pip install -r requirements.txt"))
     _line(True, "Word, Excel, PowerPoint, e-mail, HTML, JSON, zip — built in")
 
 

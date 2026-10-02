@@ -16,7 +16,7 @@ to OCR for scanned pages; nothing is uploaded anywhere.
     Archives    .zip                                  (every readable member)
 
 Install once for the best PDF and OCR results (doctor.py checks them):
-    pip install pymupdf pypdf rapidocr-onnxruntime
+    pip install pymupdf pypdf rapidocr onnxruntime
 """
 from __future__ import annotations
 
@@ -404,8 +404,11 @@ def _pypdf(data):
 
 def ocr_available():
     import importlib.util
-    if importlib.util.find_spec("rapidocr_onnxruntime") is not None:
-        return "rapidocr"
+    # `rapidocr` (3.x, any Python incl. 3.13) or the older `rapidocr_onnxruntime`
+    # (Python ≤ 3.12 only)
+    for mod in ("rapidocr", "rapidocr_onnxruntime"):
+        if importlib.util.find_spec(mod) is not None:
+            return "rapidocr"
     def tess():
         import pytesseract
         pytesseract.get_tesseract_version()
@@ -425,10 +428,18 @@ def _ocr_png(png_bytes):
     global _RAPID
     eng = ocr_available()
     if eng == "rapidocr":
-        from rapidocr_onnxruntime import RapidOCR
         if _RAPID is None:
+            try:
+                import logging
+                from rapidocr import RapidOCR
+                logging.getLogger("RapidOCR").setLevel(logging.WARNING)
+            except ImportError:
+                from rapidocr_onnxruntime import RapidOCR
             _RAPID = RapidOCR()
-        res, _ = _RAPID(png_bytes)
+        out = _RAPID(png_bytes)
+        if hasattr(out, "txts"):                     # rapidocr 3.x
+            return "\n".join(out.txts or ())
+        res = out[0] if isinstance(out, tuple) else out   # rapidocr_onnxruntime 1.x
         return "\n".join(r[1] for r in (res or []))
     if eng == "tesseract":
         import pytesseract
@@ -473,7 +484,7 @@ def read_pdf(data):
         elif thin:
             r.notes.append("some pages have little text (pictures or diagrams); "
                            + ("OCR found nothing more" if ocr_available() else
-                              "install OCR to read them: pip install rapidocr-onnxruntime"))
+                              "install OCR to read them: pip install rapidocr onnxruntime"))
     return r
 
 
@@ -519,11 +530,11 @@ def _pdf_help():
             have.append(mod)
     if "pymupdf" not in have:
         return ("no PDF reader strong enough for this file is installed. Run:  "
-                "pip install pymupdf pypdf rapidocr-onnxruntime   — then upload it again. "
+                "pip install pymupdf pypdf rapidocr onnxruntime   — then upload it again. "
                 "(Most PDFs exported from Word need PyMuPDF to decode their fonts.)")
     if not ocr_available():
         return ("this PDF has no text layer (scanned pages). Install OCR and upload it "
-                "again:  pip install rapidocr-onnxruntime")
+                "again:  pip install rapidocr onnxruntime")
     return "the PDF contains no readable text, even with OCR"
 
 
@@ -556,7 +567,7 @@ def read_file(name: str, data: bytes, _depth=0) -> ReadResult:
             t = ocr_png(data)
             if t is None:
                 return ReadResult(error="no OCR engine installed — run:  "
-                                        "pip install rapidocr-onnxruntime")
+                                        "pip install rapidocr onnxruntime")
             return ReadResult(_tidy(t), "image-ocr", ocr_available() or "ocr",
                               error="" if t.strip() else "no readable text in the image")
         if ext in ARCHIVE_EXTS and _depth < 2:
