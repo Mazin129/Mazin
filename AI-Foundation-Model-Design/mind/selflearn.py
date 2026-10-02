@@ -269,6 +269,18 @@ def matches(skill, q):
     return bool(term and re.search(r"\b(what is|what's|define|meaning|mean)\b", low))
 
 
+def strong_match(skill, q, config_words=()):
+    """The question names the skill's WHOLE topic ("rules for change request" →
+    "change request states"), and that topic is not config vocabulary. Such a
+    question belongs to the skill even when another word in it ("rules") also means
+    something in a firewall config."""
+    topic = _topic_words(skill["name"])
+    if not topic or topic & {w.lower() for w in config_words}:
+        return False
+    low = (q or "").lower()
+    return all(re.search(rf"\b{re.escape(w[:6])}", low) for w in topic)
+
+
 def answer(skill, q):
     """Answer `q` from the skill's structure. Never invents a state or term."""
     k = skill["knowledge"]
@@ -341,9 +353,15 @@ def answer(skill, q):
                      else "It is a final state.")
         return " ".join(parts)
 
-    if re.search(r"\b(rule|rules|must|allowed|policy|condition)\b", low) and k["rules"]:
-        return "The rules I was taught: " + " ".join(f"({i}) {r}." for i, r in
-                                                     enumerate(k["rules"], 1))
+    if re.search(r"\b(rule|rules|must|allowed|policy|condition|exceptions?)\b", low) and \
+            (k["rules"] or k["exceptions"]):
+        parts = []
+        if k["rules"]:
+            parts.append("The rules I was taught: " + " ".join(
+                f"({i}) {r}." for i, r in enumerate(k["rules"], 1)))
+        if k["exceptions"]:
+            parts.append("Exceptions: " + " ".join(f"{e}." for e in k["exceptions"]))
+        return " ".join(parts)
     if re.search(r"\b(steps?|procedure|process|how do|workflow)\b", low) and k["steps"]:
         return "The steps: " + " ".join(f"{i}. {s}." for i, s in enumerate(k["steps"], 1))
 

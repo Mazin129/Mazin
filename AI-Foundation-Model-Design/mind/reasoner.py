@@ -2761,6 +2761,21 @@ class Mind:
             self._intents, self._plan, self._evidence_survey = [], None, None
             self._brain_error = f"{type(ex).__name__}: {ex}"
 
+        # A question naming a learned skill's whole topic goes to that skill before
+        # any config handling: "what are the rules for change request?" contains the
+        # config word "rules", but it is about the learned change-request process.
+        if self._evidence_survey is not None:
+            import selflearn
+            _strong = self.skillreg.match(q)
+            if _strong is not None and selflearn.strong_match(
+                    _strong, q, self._evidence_survey.vocabulary.keys()):
+                self._last_skill, self._turns_since_skill = _strong["name"], 0
+                r = self.use_skill(_strong, q)
+                if self._intents:
+                    r["understood"] = self._intents[0].summary()
+                self._remember_episode(q, r)
+                return r
+
         # A REVIEW of the configuration is its own strategy: "audit my config", "review
         # the firewall", "any problems with my policies", "is this secure". The brain
         # already classified these as evaluate-form questions about a specific system;

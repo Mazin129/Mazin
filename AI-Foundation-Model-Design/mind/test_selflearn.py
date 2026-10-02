@@ -148,6 +148,18 @@ def main():
           "contradicts what I was taught before" in r["answer"])
     check("…and versioned", m2.skillreg.get("quotation states")["version"] == 2)
 
+    print("\n§13  a skill's whole topic beats a config word in the question")
+    m2.ask("learn change request states:\nDraft → Submitted → Approved → Closed\n"
+           "Approved must be signed by the CAB.\n"
+           "Emergency changes skip CAB unless the change touches the core firewall.")
+    r = m2.ask("what are the rules for change request?")
+    check("'rules for change request' goes to the learned skill, not the config engine",
+          r["how"] == "learned skill: change request states")
+    check("…and the answer includes the exceptions", "Exceptions:" in r["answer"])
+    check("a real config question still goes to the config path",
+          not m2.ask("how many firewall rules are configured")["how"].startswith(
+              "learned skill"))
+
     print("\n§11  never claim false learning")
     r = m2.ask("learn this: nothing here has any structure at all, just some words "
                "written down to see what happens when there is no content worth keeping")
