@@ -474,7 +474,8 @@ class DomainAgent(Agent):
             prompt = q
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
         # each expert reasons its own task through step by step (thinking models)
-        ans = llm.generate(prompt, system=self.system, max_tokens=budget, think=True)
+        think = getattr(self.mind, "_think_for", lambda _q: True)(q)
+        ans = llm.generate(prompt, system=self.system, max_tokens=budget, think=think)
         if not ans:
             return None
         # publish the evidence this expert used, so the quality gate can cite it and

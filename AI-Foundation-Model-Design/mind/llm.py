@@ -178,7 +178,7 @@ class LLM:
             body["think"] = thinking
         if thinking:
             body["options"]["num_predict"] = max_tokens + int(
-                os.environ.get("VIO_LLM_THINK_TOKENS", "4096"))
+                os.environ.get("VIO_LLM_THINK_TOKENS", "1536"))
         self.last_thinking, self.last_thought = "", False
         self.attempts += 1
         t0 = time.time()

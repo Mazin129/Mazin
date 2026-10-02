@@ -1116,7 +1116,8 @@ class Mind:
         )
         prompt = f"Configuration objects:\n{ctx}\n\nRequest: {q}\n\nList every matching object."
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-        ans = self.llm.generate(prompt, system=system, max_tokens=budget, think=True)
+        ans = self.llm.generate(prompt, system=system, max_tokens=budget,
+                                think=self._think_for(q))
         if not ans:
             return None
 
@@ -1786,7 +1787,7 @@ class Mind:
         rr = readers.read_file(name, data)
         if not rr.ok:
             return f"📄 **{name}** — I couldn't read it: {rr.error}."
-        head = (f"📖 Read as {rr.kind} with {rr.method}"
+        head = (f"📖 Read as {rr.kind}" + (f" with {rr.method}" if rr.method != rr.kind else "")
                 + (f" · {rr.pages} {'slide' if rr.kind == 'slides' else 'sheet' if rr.kind == 'sheet' else 'page'}(s)"
                    if rr.pages else "")
                 + (" · " + "; ".join(rr.notes) if rr.notes else ""))
@@ -1905,6 +1906,16 @@ class Mind:
             if da:
                 return tbl, da
         return None, None
+
+    def _think_for(self, q):
+        """Think step by step only when the task needs it: diagnosis, comparison,
+        evaluation, procedures/design, or a long multi-part request. A lookup or a
+        definition answered with a long hidden reasoning pass took minutes on a CPU."""
+        forms = {getattr(u, "form", "") for u in (getattr(self, "_intents", None) or [])}
+        return bool(forms & {"diagnose", "compare", "evaluate", "procedure"}) or \
+            len(q or "") > 280 or bool(re.search(
+                r"\b(design|plan|architect|troubleshoot|root cause|migrat|trade-?offs?|"
+                r"recommend|decide|step[- ]by[- ]step|analy[sz]e)\w*", (q or "").lower()))
 
     def _own_material_for(self, q):
         """The user's own taught document or table that answers `q`, or None."""
@@ -2733,6 +2744,18 @@ class Mind:
         if self.llm is not None:
             self.llm.last_thought, self.llm.last_thinking = False, ""
         purpose = selflearn.purpose(raw)
+        # explicit write commands are obeyed FIRST: "remember: DR-FGT serial number is
+        # FG…" names a device, and used to be captured by the config router as a
+        # question about DR-FGT — so the fact was never saved.
+        low_raw = raw.lower()
+        if low_raw.startswith("remember:"):
+            return self._after_ask(raw, {"answer": self.remember(raw[9:].strip()),
+                                         "how": "memory-write", "verified": True,
+                                         "cortex": "skipped", "trace": []}, pre)
+        if low_raw.startswith("teach:"):
+            return self._after_ask(raw, {"answer": self.teach(raw[6:].strip()),
+                                         "how": "library-write", "verified": True,
+                                         "cortex": "skipped", "trace": []}, pre)
         m_doc = re.match(r"^\s*(?:what\s+(?:did|have)\s+you\s+(?:learn(?:ed|t)?|understood?|"
                          r"get)\s+(?:from|about|out\s+of)\s+(.+?)|(?:summari[sz]e|what\s+is\s+in)"
                          r"\s+(?:the\s+)?(?:last\s+)?(?:file|document|pdf|doc)\s*(.*?))\s*[?.!]*\s*$",
@@ -2742,6 +2765,27 @@ class Mind:
             name = re.sub(r"^(?:the\s+)?(?:last\s+|latest\s+)?(?:file|document|pdf|doc)\b",
                           "", name, flags=re.I).strip()
             return self._after_ask(raw, self.document_report(name), pre)
+        # Device facts — serial number, model, firmware, hostname, uptime — are looked
+        # up exactly from configs, command output, tables and memory. No model: a guess
+        # at a serial number is worse than useless.
+        try:
+            import devicefacts
+            if raw.count("\n") >= 2:
+                facts = devicefacts.from_text(raw)
+                if facts.get("hostname") and ({"serial", "firmware", "model"} & set(facts)):
+                    self.lib.add_many([raw.strip()])
+                    got = ", ".join(f"{devicefacts._LABEL.get(k, k)} {v}"
+                                    for k, v in facts.items() if k in devicefacts._LABEL)
+                    return self._after_ask(raw, {
+                        "answer": f"Got it — **{facts['hostname']}**: {got}. I'll use this "
+                                  "when you ask about that device.",
+                        "how": "device facts (stored)", "verified": True,
+                        "cortex": "skipped", "trace": ["command output stored"]}, pre)
+            df = devicefacts.answer(self, raw)
+            if df:
+                return self._after_ask(raw, df, pre, answered=True)
+        except Exception as e:
+            pre.append(f"device facts unavailable: {type(e).__name__}")
         if self._pending_clarify and raw and purpose is None and \
                 not re.match(r"^\s*[\w-]+\s*:", raw):
             prev, self._pending_clarify = self._pending_clarify, None
@@ -3895,7 +3939,7 @@ class Mind:
             from llm import REASON_SYSTEM_D
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
             ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
-                                    max_tokens=budget, think=True)
+                                    max_tokens=budget, think=self._think_for(q))
             if ans:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) analytic reasoning — "
@@ -3961,7 +4005,7 @@ class Mind:
                 from llm import REASON_SYSTEM_D
                 budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
                 ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
-                                        max_tokens=budget, think=True)
+                                        max_tokens=budget, think=self._think_for(q))
                 if ans:
                     return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                             "trace": [f"local LLM ({self.llm.model}) — refused raw "
@@ -3986,7 +4030,7 @@ class Mind:
             # finish — a low cap truncates them mid-section. Configurable for slower PCs.
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
             ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3, max_tokens=budget,
-                                    think=True)
+                                    think=self._think_for(q))
             if ans:
                 return {"answer": ans, "how": "reasoning (LLM)", "verified": False,
                         "trace": [f"local LLM ({self.llm.model}) reasoning — "
