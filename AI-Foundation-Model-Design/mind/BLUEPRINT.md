@@ -441,6 +441,14 @@ set VIO_ALLOW_NET=1
 python web.py
 ```
 
+> **Kaspersky / antivirus note:** `install_autostart.bat` writes a `.vbs` launcher into
+> the Startup folder — AVs routinely quarantine that (a script dropping a startup script
+> is a classic malware pattern). Script-free alternative that AVs leave alone: set your
+> env once with `setx` (`setx VIO_LLM_MODEL llama3.2:3b`, `setx VIO_ALLOW_NET 1`,
+> optionally `setx VIO_TOKEN …`), then put a plain shortcut in `shell:startup` targeting
+> `pythonw.exe` with arguments `web.py --service` and *Start-in* = this folder. Vio then
+> starts hidden at every login — no script on disk to delete.
+
 Banner confirms `🧠 model:` and `🌐 web research:`. Then open `http://localhost:8100`
 (PC) or `https://<name>.ts.net/` (phone).
 
