@@ -126,11 +126,14 @@ DASHBOARD = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 
  <div class="card full" style="margin-bottom:16px">
   <h2>Agents — live blueprint <span class="pill" id="modelPill"></span><span class="pill" id="webPill"></span></h2>
-  <p class="cap">Every agent under the master. They don't message each other directly — they
-    share one brain (the counts below), so what any one learns, all use. 💬 advisory agents
-    answer; ⚙️ acting agents can reach out or change things (guardrail-gated).</p>
+  <p class="cap">Every agent talks through <b>one coordinator</b>. Before anyone answers, it
+    asks each agent that holds data — knowledge, memory, tables, devices, config — what it
+    knows, sends the research agent to the web when the library has a gap (only with web
+    ON; nothing private is searched), and hands that shared board to the agent that
+    answers. What any agent learns, all use. Click the 🌐 pill to switch web research.</p>
   <div class="agents" id="agentsGrid"></div>
   <div class="shared" id="sharedBrain"></div>
+  <div class="shared" id="agentTalk" style="white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px"></div>
  </div>
 
  <div class="grid" style="margin-bottom:16px">
@@ -361,6 +364,10 @@ async function loadAgents(){
       `<div class="ad">${esc(dom)}</div></div>`;
   }).join('')||'<span class="cap">No agents registered.</span>';
   const s=j.shared_brain||{};
+  const c=j.coordinator||{};
+  $('agentTalk').textContent=(c.messages&&c.messages.length)?
+    ('🤝 last conversation — “'+(c.question||'')+'”\n'+c.messages.join('\n')):
+    '🤝 ask Vio something to see the agents talk through the coordinator';
   $('sharedBrain').innerHTML=`🧠 shared brain (every agent reads &amp; writes): `+
     `<b>${s.library_passages||0}</b> passages · <b>${s.memory_facts||0}</b> facts · `+
     `<b>${s.skills||0}</b> skills · <b>${s.episodes||0}</b> episodes`;
@@ -368,7 +375,12 @@ async function loadAgents(){
 }
 async function loadCaps(){
  try{const j=await(await fetch('/api/status')).json();
-  const w=$('webPill'); if(w){w.textContent=j.web?'🌐 web research ON':'🌐 web OFF';w.className='pill '+(j.web?'on':'off');}
+  const w=$('webPill'); if(w){w.textContent=(j.web?'🌐 web research ON':'🌐 web OFF')+' — click to switch';w.className='pill '+(j.web?'on':'off');
+    w.style.cursor='pointer';
+    w.onclick=async()=>{const on=!j.web;
+      if(on&&!confirm('Let the research agent read public web pages when my library has a gap? Nothing private is searched.'))return;
+      await fetch('/api/web',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({on})});
+      loadCaps();loadAgents();};}
   const m=$('modelPill'); if(m){m.textContent=j.brain?('🧠 '+j.brain):'🧠 no model — install Ollama';m.className='pill '+(j.brain?'on':'off');}
  }catch(e){}
 }

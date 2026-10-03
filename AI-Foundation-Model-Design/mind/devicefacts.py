@@ -97,7 +97,22 @@ def _forti_model(code):
 # --------------------------------------------------------------------------- #
 def inventory(mind):
     """{device name: {attr: (value, source)}} from configs, command output, tables
-    and memory."""
+    and memory. Cached until any of those change — it runs on every question."""
+    try:
+        key = (getattr(mind.lib, "version", 0), len(mind.config_snapshots()),
+               len(getattr(mind, "tables", []) or []),
+               len((getattr(mind, "mem", {}) or {}).get("facts", [])))
+    except Exception:
+        key = None
+    cached = getattr(mind, "_inventory_cache", None)
+    if key is not None and cached and cached[0] == key:
+        return cached[1]
+    inv = _inventory(mind)
+    mind._inventory_cache = (key, inv)
+    return inv
+
+
+def _inventory(mind):
     inv = {}
 
     def put(dev, facts, source):

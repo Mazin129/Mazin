@@ -680,6 +680,7 @@ class Mind:
         # Vio's retrieved facts for knowledge questions, open for logic/planning/decisions.
         # Optional: if no local server is running, .available is False and Vio stays
         # purely on its exact + lexical engine.
+        self._load_settings()
         try:
             from llm import LLM
             self.llm = LLM()
@@ -1907,6 +1908,51 @@ class Mind:
                 return tbl, da
         return None, None
 
+    # ---- the web switch: a human decision, remembered across restarts ---------------
+    def _settings_path(self):
+        return os.path.join(DATA_DIR, "settings.json")
+
+    def _load_settings(self):
+        try:
+            with open(self._settings_path(), encoding="utf-8") as f:
+                st = json.load(f)
+        except Exception:
+            st = {}
+        # an explicit VIO_ALLOW_NET in the environment wins over the saved switch
+        if "web" in st and not os.environ.get("VIO_ALLOW_NET", "").strip():
+            os.environ["VIO_ALLOW_NET"] = "1" if st["web"] else "0"
+
+    def set_web(self, on):
+        """Turn web research on/off for every agent (read-only; the research agent
+        searches and reads public pages, nothing private is sent)."""
+        os.environ["VIO_ALLOW_NET"] = "1" if on else "0"
+        try:
+            st = {}
+            if os.path.exists(self._settings_path()):
+                with open(self._settings_path(), encoding="utf-8") as f:
+                    st = json.load(f)
+            st["web"] = bool(on)
+            with open(self._settings_path(), "w", encoding="utf-8") as f:
+                json.dump(st, f)
+        except Exception:
+            pass
+        if on:
+            return ("🌐 Web research is **ON**. When my library doesn't cover a question, "
+                    "the coordinator sends the research agent to read public pages and "
+                    "learns them for every agent. It never searches for your own systems "
+                    "and strips IP addresses, host names, serials and e-mails from "
+                    "queries. Say “web off” to stop.")
+        return "🌐 Web research is **OFF**. Agents use only what is on this PC."
+
+    def agent_conversation(self):
+        """The last conversation between agents, via the coordinator."""
+        c = getattr(self, "coordinator", None)
+        rep = c.report() if c else {"question": "", "messages": []}
+        if not rep["messages"]:
+            return "No agent conversation yet — ask me something first."
+        return (f"How my agents worked on “{rep['question']}”:\n"
+                + "\n".join(f"  {m}" for m in rep["messages"]))
+
     def _think_for(self, q):
         """Think step by step only when the task needs it: diagnosis, comparison,
         evaluation, procedures/design, or a long multi-part request. A lookup or a
@@ -2744,6 +2790,19 @@ class Mind:
         if self.llm is not None:
             self.llm.last_thought, self.llm.last_thinking = False, ""
         purpose = selflearn.purpose(raw)
+        m_web = re.match(r"^\s*(?:turn\s+)?(?:web|internet)(?:\s+research)?\s+(on|off)\s*[.!]*$",
+                         raw, re.I) or re.match(r"^\s*(enable|disable)\s+(?:web|internet)"
+                                                r"(?:\s+research)?\s*[.!]*$", raw, re.I)
+        if m_web:
+            on = m_web.group(1).lower() in ("on", "enable")
+            return self._after_ask(raw, {"answer": self.set_web(on), "how": "settings",
+                                         "verified": True, "cortex": "skipped",
+                                         "trace": []}, pre)
+        if re.match(r"^\s*(?:agent\s+(?:conversation|talk|chat|log)|how did (?:the|your) "
+                    r"agents? (?:work|talk)|show agent (?:conversation|talk))\b", raw, re.I):
+            return self._after_ask(raw, {"answer": self.agent_conversation(),
+                                         "how": "agents", "verified": True,
+                                         "cortex": "skipped", "trace": []}, pre)
         # explicit write commands are obeyed FIRST: "remember: DR-FGT serial number is
         # FG…" names a device, and used to be captured by the config router as a
         # question about DR-FGT — so the fact was never saved.
@@ -3345,14 +3404,23 @@ class Mind:
                   "graph_edges": getattr(self.graph, "edge_count", lambda: 0)()
                   if hasattr(self.graph, "edge_count") else None,
                   "episodes": len(self.episodic.episodes)}
-        return {"agents": roster, "shared_brain": shared}
+        coord = getattr(self, "coordinator", None)
+        try:
+            import websearch
+            web = bool(websearch.net_enabled())
+        except Exception:
+            web = False
+        return {"agents": roster, "shared_brain": shared, "web": web,
+                "coordinator": coord.report() if coord else None}
 
     def agents_summary(self):
         """Human-readable version of agents_report() for the chat."""
         rep = self.agents_report()
-        lines = [f"I run {len(rep['agents'])} agents under one master. They don't message "
-                 "each other directly — they collaborate through a SHARED brain, so what "
-                 "any one learns, all can use:"]
+        lines = [f"I run {len(rep['agents'])} agents, and they all talk through ONE "
+                 "coordinator: before anyone answers, it asks every agent that holds data "
+                 "(knowledge, memory, tables, devices, config) what it knows, fetches from "
+                 "the web when the library has a gap (if web is on), and hands the whole "
+                 "board to the agent that answers:"]
         for a in rep["agents"]:
             tag = "⚙️ acting" if a["acts"] else "💬 advisory"
             dom = ", ".join(a["domains"]) or "—"
@@ -3363,6 +3431,9 @@ class Mind:
                      f"{s['skills']} skills · {s['episodes']} episodes.")
         lines.append("Check routing for a question with:  who answers: <your question>")
         lines.append("Make several agents team up on one answer with:  council: <question>")
+        lines.append("See how they worked on your last question:  agent conversation")
+        lines.append("Web research is " + ("ON" if rep.get("web") else "OFF")
+                     + " — switch with  web on / web off")
         return "\n".join(lines)
 
     def who_answers(self, q):

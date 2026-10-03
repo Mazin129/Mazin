@@ -37,10 +37,14 @@ class Result:
     confidence: float = 0.5
     agent: str = ""
     trace: list = field(default_factory=list)
+    team: str = ""                # which agents shared what, via the coordinator
 
     def as_dict(self):
-        return {"answer": self.answer, "how": self.how, "verified": self.verified,
-                "confidence": self.confidence, "agent": self.agent, "trace": self.trace}
+        d = {"answer": self.answer, "how": self.how, "verified": self.verified,
+             "confidence": self.confidence, "agent": self.agent, "trace": self.trace}
+        if self.team:
+            d["team"] = self.team
+        return d
 
     @classmethod
     def from_dict(cls, d, agent=""):
@@ -459,8 +463,17 @@ class DomainAgent(Agent):
         llm = getattr(self.mind, "llm", None)
         if not (llm and llm.available):
             return None                          # no LLM → let the base path handle it
+        # the coordinator already asked every data-holding agent; use the shared board
+        # (library + web research + memory + tables + devices + config) instead of a
+        # private search, so this expert sees what the others found
+        board = ctx.get("board")
         hits = self.mind.lib.search(q, k=8)
         passages = [d for d, _ in hits]
+        if board is not None:
+            for p in board.passages():
+                if p not in passages:
+                    passages.insert(0, p)
+            passages = passages[:8]
         if self.strip_config:                    # keep raw firewall/router stanzas out of
             try:                                 # a conceptual answer (the mTLS→VoIP bug)
                 passages = [d for d in passages
@@ -469,7 +482,8 @@ class DomainAgent(Agent):
                 pass
         try:
             from llm import grounded_prompt
-            prompt = grounded_prompt(q, passages)
+            shared = board.brief_text() if board is not None else ""
+            prompt = grounded_prompt(q, passages + ([shared] if shared else []))
         except Exception:
             prompt = q
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
@@ -718,13 +732,26 @@ class Master:
     first validated result wins. Returns None if no agent handled the query (the caller
     then falls back to the legacy router)."""
 
-    def __init__(self, registry, guardrail=None):
+    def __init__(self, registry, guardrail=None, coordinator=None):
         self.registry = registry
         self.guardrail = guardrail or Guardrail()
+        self.coordinator = coordinator
 
     def handle(self, q, ctx=None):
         ctx = ctx or {}
+        # every agent talks through ONE coordinator: it briefs them all from the agents
+        # that hold data, fills knowledge gaps from the web (when allowed), then the
+        # best-fitting agent answers with that shared board
+        board = None
+        if self.coordinator is not None:
+            try:
+                board = self.coordinator.brief(q, ctx)
+            except Exception:
+                board = None
         for _score, agent in self.registry.ranked(q, ctx):
+            if board is not None:
+                board.log.append(("coordinator", agent.name, "your turn — answer with "
+                                  "the board"))
             try:
                 res = agent.run(q, ctx)
             except Exception:
@@ -732,7 +759,14 @@ class Master:
             if res and agent.validate(res, ctx):
                 if not res.agent:               # keep a finer name the agent already set
                     res.agent = agent.name
+                if board is not None:
+                    board.log.append((res.agent, "coordinator", "answered"))
+                    res.team = self.coordinator.footer(board)
+                    res.trace = list(res.trace) + ["agents: " + "; ".join(
+                        board.transcript()[-8:])]
                 return self.guardrail.check(q, agent, res, ctx)
+            if board is not None:
+                board.log.append((agent.name, "coordinator", "passed — not mine"))
         return None
 
     def council(self, q, ctx=None, k=3):
@@ -769,4 +803,10 @@ def build_master(mind):
     reg = Registry()
     for cls in DEFAULT_AGENTS:
         reg.register(cls(mind))
-    return Master(reg), reg
+    try:
+        from coordinator import Coordinator
+        coord = Coordinator(mind)
+    except Exception:
+        coord = None
+    mind.coordinator = coord
+    return Master(reg, coordinator=coord), reg

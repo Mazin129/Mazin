@@ -421,7 +421,8 @@ function badge(j){const c=(j.confidence!=null)?' · '+Math.round(j.confidence*10
  /* how Vio READ the question — a wrong answer is usually a wrong reading, and this
     is the only way the user can see (and correct) the interpretation. */
  const un=j.understood?'<div class="meta" style="opacity:.75">🧭 read as: '+esc(j.understood)+'</div>':'';
- return un+(j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c+cx+ag;}
+ const tm=j.team?'<div class="meta" style="opacity:.75">'+esc(j.team)+'</div>':'';
+ return un+tm+(j.verified?'<span class="ok">✓ verified</span>':'<span class="no">… unverified</span>')+' · '+esc(j.how||'')+c+cx+ag;}
 function finalize(b,j){
  b.classList.toggle('rtl',isAr(j.answer));
  b.innerHTML=fmt(j.answer);
@@ -1058,6 +1059,11 @@ class H(BaseHTTPRequestHandler):
                 self._s(200, json.dumps({"ok": True, "added": added}, ensure_ascii=False))
             except ValueError as e:
                 self._s(200, json.dumps({"ok": False, "message": str(e)}))
+
+        elif self.path == "/api/web":                    # the user flips web research
+            on = bool(body.get("on"))
+            self._s(200, json.dumps({"answer": MIND.set_web(on), "web": _web_research_on()},
+                                    ensure_ascii=False))
 
         elif self.path == "/api/learn":
             # every file type goes through one reader (readers.py): Word, Excel,
