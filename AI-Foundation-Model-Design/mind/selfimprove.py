@@ -37,12 +37,15 @@ class TraceLog:
 
     def record(self, q, result, evidence=None):
         ev = evidence or {}
+        task = result.get("task") or {}
         rec = {
             "id": "%d" % int(time.time() * 1000),
             "ts": time.time(),
             "question": (q or "")[:2000],
             "agent": result.get("agent", ""),
             "how": result.get("how", ""),
+            "task_id": task.get("task_id", ""),
+            "task_status": task.get("status", ""),
             "verified": bool(result.get("verified")),
             "confidence": result.get("confidence"),
             "system": result.get("system"),

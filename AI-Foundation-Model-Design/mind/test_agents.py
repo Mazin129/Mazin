@@ -22,8 +22,10 @@ def main():
 
     # registry wired
     names = [a.name for a in m.agent_registry.agents]
-    check("registry populated", set(("skill", "math", "world_model", "reasoning",
+    # registry wired (NOTE: no `math` agent by design — exact math is a core-front tool)
+    check("registry populated", set(("skill", "world_model", "reasoning",
           "network_engineering", "memory", "planner")) <= set(names), str(names))
+    check("no dedicated math agent", "math" not in set(names), str(names))
     # the unified net/sec expert covers the domain space; inert without an LLM so it never
     # regresses the base path — a troubleshoot query still answers via the fallback here.
     check("unified domain expert registered",
@@ -94,7 +96,10 @@ def main():
 
     # migrated capabilities route through the expected agent
     check("skill -> skill agent", m.ask_agentic("hi").get("agent") == "skill")
-    check("symbolic math -> math agent", m.ask_agentic("integrate x^2").get("agent") == "math")
+    r_math = m.ask_agentic("integrate x^2")
+    check("symbolic math -> core front (math is a tool, not an agent)",
+          r_math.get("agent") == "core" and "symbolic" in r_math.get("how", ""),
+          f"agent={r_math.get('agent')} how={r_math.get('how')}")
     check("what-if -> world_model agent",
           m.ask_agentic("what happens if congestion occurs").get("agent") == "world_model")
 
@@ -102,8 +107,14 @@ def main():
     # retrieval-tempting words (factorial, roman) must still go to the front, not Knowledge.
     check("retrieval -> knowledge agent", m.ask_agentic("what is OSPF").get("agent") == "knowledge")
     # exact tools get their own provenance now, and are NOT hijacked by knowledge
-    check("exact tool -> tools agent", m.ask_agentic("roman numeral for 42").get("agent") == "tools")
-    check("factorial -> tools agent", m.ask_agentic("what is 5 factorial").get("agent") == "tools")
+    r1 = m.ask_agentic("roman numeral for 42")
+    r2 = m.ask_agentic("what is 5 factorial")
+    check("exact tool -> core agent, exact-tool how",
+          r1.get("agent") == "core" and "exact tool" in r1.get("how", ""),
+          f"agent={r1.get('agent')} how={r1.get('how')}")
+    check("factorial -> core agent, verified",
+          r2.get("agent") == "core" and r2.get("verified") is True,
+          f"agent={r2.get('agent')} how={r2.get('how')}")
 
     # Stage 2: EVERY answer carries provenance (the core catch-all tags itself from `how`)
     for q in ("what is 20% of 50", "what is OSPF", "hi", "integrate x^2"):

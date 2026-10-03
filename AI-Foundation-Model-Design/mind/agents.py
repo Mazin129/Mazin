@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import os
 import re
+import time
+import uuid
 from dataclasses import dataclass, field
 
 try:
@@ -38,12 +40,15 @@ class Result:
     agent: str = ""
     trace: list = field(default_factory=list)
     team: str = ""                # which agents shared what, via the coordinator
+    task: dict = field(default_factory=dict)   # the Task record of this dispatch (§3)
 
     def as_dict(self):
         d = {"answer": self.answer, "how": self.how, "verified": self.verified,
              "confidence": self.confidence, "agent": self.agent, "trace": self.trace}
         if self.team:
             d["team"] = self.team
+        if self.task:
+            d["task"] = self.task
         return d
 
     @classmethod
@@ -52,7 +57,45 @@ class Result:
             return None
         return cls(answer=d["answer"], how=d.get("how", ""), verified=bool(d.get("verified")),
                    confidence=float(d.get("confidence", 0.5)), agent=agent,
-                   trace=list(d.get("trace") or []))
+                   trace=list(d.get("trace") or []), task=dict(d.get("task") or {}))
+
+
+@dataclass
+class Task:
+    """The capability-request message schema (redesign prompt §3).
+
+    The Master creates one Task per dispatch; it flows through run → validate →
+    guardrail, and the finished record is attached to the Result (`result["task"]`)
+    so every capability call is traceable (task id, who was asked, what happened).
+    Fields the runtime does not yet ENFORCE (priority, timeout, retry, cancellation)
+    are carried explicitly — the schema exists before the machinery, so adding
+    enforcement is a change of behaviour, not of interface."""
+    capability: str = ""                    # the agent/capability being asked
+    requester: str = "user"                 # who originated the request
+    parent: str = ""                        # parent task id (delegation chains)
+    task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    priority: int = 5                       # 1 (highest) .. 9
+    inputs: str = ""                        # the query payload
+    context: dict = field(default_factory=dict)
+    expected: str = "answer"                # expected output kind
+    timeout_s: float = 300.0                # advisory until per-capability enforcement
+    max_retries: int = 0
+    status: str = "pending"                 # pending|running|done|empty|rejected|failed|gated
+    confidence: float = 0.0
+    evidence: dict = field(default_factory=dict)
+    error: str = ""
+    cancelled: bool = False
+    permissions: frozenset = frozenset()
+    started: float = 0.0
+    elapsed_ms: float = 0.0
+
+    def as_dict(self):
+        return {"task_id": self.task_id, "parent": self.parent, "capability": self.capability,
+                "requester": self.requester, "priority": self.priority, "status": self.status,
+                "inputs": self.inputs[:200], "expected": self.expected,
+                "timeout_s": self.timeout_s, "max_retries": self.max_retries,
+                "confidence": self.confidence, "error": self.error,
+                "cancelled": self.cancelled, "elapsed_ms": self.elapsed_ms}
 
 
 # permission tokens — an agent declares what it may do. Advisory agents are read-only
@@ -100,20 +143,9 @@ class SkillAgent(Agent):
         return Result(sk[1], how=f"skill: {sk[0]}", verified=True, confidence=0.9)
 
 
-class MathAgent(Agent):
-    name, domains = "math", ("math",)
-
-    def score(self, q, ctx):
-        return 0.92 if self.mind.math.looks_mathy(q) else 0.0
-
-    def run(self, q, ctx):
-        if not self.mind.math.looks_mathy(q):
-            return None
-        ans, trace, ok = self.mind.math.handle(q)
-        if ans is None:
-            return None
-        return Result(ans, how="symbolic reasoning (sympy)", verified=ok,
-                      confidence=0.95 if ok else 0.5, trace=list(trace or []))
+# NOTE: there is deliberately NO math agent — exact math is a TOOL of the core front
+# (MathReasoner inside _core_front), not a dedicated agent. The redesign prompt forbids
+# a `math` agent, and the front's exact-tool branch already owns it end to end.
 
 
 class DataAgent(Agent):
@@ -309,25 +341,43 @@ class DiagramAgent(Agent):
 
 
 def agent_from_how(how):
-    """Map a result's `how` string to a canonical agent name, for provenance on
-    answers produced by the catch-all core router (until every branch is its own agent)."""
+    """Map a result's `how` string to the REGISTERED agent that produced it, for
+    provenance on answers from the catch-all core router. Provenance must never name
+    a capability that is not in the roster — retired names ("math", "tools") made
+    traces attribute answers to agents that do not exist. The specific engine stays
+    visible in `how` ("symbolic reasoning (sympy)" etc.); the agent named here is the
+    one that actually ran."""
     h = (how or "").lower()
-    table = [("symbolic", "math"), ("quadratic", "math"), ("function plot", "math"),
-             ("exact tool", "tools"), ("clock", "tools"),
-             ("skill:", "skill"), ("generation", "generation"),
-             ("world model", "world_model"), ("planning", "planner"),
-             ("reasoning over knowledge", "knowledge"), ("retrieval", "knowledge"),
-             ("data analysis", "data"), ("analysis over your", "config"),
-             ("reasoning (llm", "reasoning"), ("reasoning (", "reasoning"),
-             ("library", "memory"), ("episodic", "memory"), ("memory", "memory"),
-             ("web research", "research"), ("research", "research"),
-             ("github", "research"), ("learned from github", "research"),
-             ("consolidation", "self_improvement"), ("calibration", "self_improvement"),
-             ("feedback", "feedback"), ("greeting", "core"), ("no-source", "core"),
-             ("llm-timeout", "knowledge")]
-    for key, name in table:
-        if key in h:
-            return name
+    if any(k in h for k in ("web research", "research", "github", "learned from")):
+        return "research"
+    if "skill_grow" in h or "proposal" in h:
+        return "skill_grow"
+    if h.startswith("skill:"):
+        return "skill"
+    if "diagram" in h:
+        return "diagram"
+    if "world model" in h:
+        return "world_model"
+    if "planning" in h:
+        return "planner"
+    if "analysis over your" in h:
+        return "network_engineering"
+    if any(k in h for k in ("data analysis", "table")):
+        return "data"
+    if any(k in h for k in ("learned skill", "self-review", "skill registry")):
+        return "learning"
+    if any(k in h for k in ("symbolic", "quadratic", "function plot", "exact tool",
+                            "clock", "generation", "greeting")):
+        return "core"                       # math/tools/generation run in the core front
+    if any(k in h for k in ("library", "episodic", "memory")):
+        return "memory"
+    if any(k in h for k in ("consolidation", "calibration", "self-review")):
+        return "self_improvement"
+    if "llm-timeout" in h or "no-source" in h or "retrieval" in h \
+            or "reasoning over knowledge" in h or "llm" in h:
+        return "knowledge"
+    if "reasoning" in h:
+        return "reasoning"
     return "core"
 
 
@@ -480,10 +530,20 @@ class DomainAgent(Agent):
                             if not self.mind._is_configish_snippet(d)]
             except Exception:
                 pass
+        # PROVENANCE-AWARE GROUNDING (redesign prompt §5/§12): validated passages ground
+        # the answer; unvalidated web notes ride along only as flagged leads and can
+        # never make an expert answer "verified". The coordinator's board brief (the
+        # user's own memory/devices/config) counts as validated.
+        board_val, board_unval = [], []
+        if board is not None:
+            shared = board.brief_text()
+            if shared:
+                board_val.append(shared)
+        for d in passages:
+            (board_val if self.mind.lib.is_validated(d) else board_unval).append(d)
         try:
             from llm import grounded_prompt
-            shared = board.brief_text() if board is not None else ""
-            prompt = grounded_prompt(q, passages + ([shared] if shared else []))
+            prompt = grounded_prompt(q, board_val, unvalidated=board_unval)
         except Exception:
             prompt = q
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
@@ -493,16 +553,19 @@ class DomainAgent(Agent):
         if not ans:
             return None
         # publish the evidence this expert used, so the quality gate can cite it and
-        # decide 'verified' correctly (a security answer with no passages is NOT verified).
+        # decide 'verified' correctly (a security answer standing only on unvalidated
+        # web notes is NOT verified).
         try:
-            self.mind._last_evidence = {"hits": len(passages), "facts": 0,
+            self.mind._last_evidence = {"hits": len(board_val) + len(board_unval),
+                                        "facts": 0, "unvalidated": len(board_unval),
                                         "top": (hits[0][1] if hits else 0.0),
-                                        "excerpts": passages[:3]}
+                                        "excerpts": (board_val + board_unval)[:3]}
         except Exception:
             pass
-        return Result(ans, how=f"{self.name} (LLM)", verified=bool(passages),
-                      confidence=0.72 if passages else 0.55,
-                      trace=[f"{self.name} agent grounded on {len(passages)} passage(s)"]
+        return Result(ans, how=f"{self.name} (LLM)", verified=bool(board_val),
+                      confidence=0.72 if board_val else 0.55,
+                      trace=[f"{self.name} agent grounded on {len(board_val)} validated "
+                             f"+ {len(board_unval)} unvalidated passage(s)"]
                       + ([f"{self.name} agent thought it through first "
                           f"({len(llm.last_thinking.split())} words of reasoning)"]
                          if getattr(llm, "last_thought", False) else []))
@@ -599,6 +662,9 @@ class NetworkEngineeringAgent(ExpertAgent):
         r"spanning ?tree|\bnat\b|\bacl\b|\bqos\b|route reflector|as-?path|prefix|\bbfd\b|"
         r"ecmp|next ?hop|default route|state (table|exhaustion)|conntrack|session table|"
         r"firewall|polic\w*|vpn|ipsec|wireguard|tunnel|interface|port\b|dns|dhcp|"
+        # perimeter / edge security the datasets cover (were invisible to routing)
+        r"sd-?wan|\bnac\b|\bwaf\b|\bddos\b|do[sS] mitigation|forescout|netskope|"
+        r"sase|ztna|zero trust|secure web gateway|"
         # kubernetes / service mesh
         r"kubernetes|k8s|istio|linkerd|envoy|service ?mesh|sidecar|mtls|peerauthentication|"
         r"authorizationpolicy|network ?polic\w*|pod security|admission controller|kubelet|"
@@ -670,7 +736,7 @@ class NetworkEngineeringAgent(ExpertAgent):
 # NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
 # (teach:/math/tools/research/draw/agents/…); folding it in would break those.
 DEFAULT_AGENTS = (LearningAgent, SelfImprovementAgent, WebResearchAgent, SkillGrowAgent,
-                  DiagramAgent, SkillAgent, MathAgent, DataAgent, PlannerAgent, WorldModelAgent,
+                  DiagramAgent, SkillAgent, DataAgent, PlannerAgent, WorldModelAgent,
                   ReasoningAgent, NetworkEngineeringAgent, MemoryAgent, CoreRouterAgent,
                   KnowledgeAgent)
 
@@ -700,6 +766,35 @@ class Registry:
         return out
 
 
+# --------------------------------------------------------------------------- #
+# Human-control levels (redesign prompt §22) — set with VIO_AUTONOMY.
+#   advisory   : every acting (network/write) result is gated for confirmation,
+#                even where standing web consent exists.
+#   assisted   : DEFAULT — standing consent (VIO_ALLOW_NET) covers read-only web
+#                research; WRITE always gates behind "reply confirm".
+#   autonomous : headroom for pre-approved low-risk acting tools — behaves like
+#                assisted today (and write still gates), because no write tool
+#                exists yet. The level exists so the ladder is visible before the
+#                first acting tool lands.
+_LEVELS = ("advisory", "assisted", "autonomous")
+
+
+def autonomy_level():
+    lvl = os.environ.get("VIO_AUTONOMY", "assisted").strip().lower()
+    return lvl if lvl in _LEVELS else "assisted"
+
+
+AUTONOMY_REPORT = {
+    "advisory": ("ADVISORY — I only analyze and recommend. Every action (even web "
+                 "research with VIO_ALLOW_NET set) asks you first."),
+    "assisted": ("ASSISTED — read-only web research runs when you opted in with "
+                 "VIO_ALLOW_NET; anything that writes or changes state asks you first."),
+    "autonomous": ("AUTONOMOUS — pre-approved low-risk actions run unattended; "
+                   "writes STILL ask first (no write tools exist yet, so this "
+                   "currently behaves like assisted)."),
+}
+
+
 class Guardrail:
     """R1/R2 — consulted by the master before any result is returned. Advisory
     (read-only) answers pass straight through. A result from an ACTING agent
@@ -709,15 +804,22 @@ class Guardrail:
 
     def check(self, q, agent, result, ctx):
         perms = set(getattr(agent, "permissions", ()))
-        acts = bool(perms & {WRITE, NETWORK})
+        acts = perms & {WRITE, NETWORK}
         if not acts or ctx.get("confirmed"):
             return result                       # advisory, or already approved
-        # A purely-network action the user has explicitly opted into (VIO_ALLOW_NET) is
-        # standing consent — don't nag on every web lookup. WRITE always still gates.
-        if (perms & {WRITE, NETWORK}) == {NETWORK} and \
-                os.environ.get("VIO_ALLOW_NET", "").strip():
-            return result
-        scope = "reach outside Vio" if NETWORK in agent.permissions else "change something"
+        scope = "reach outside Vio" if NETWORK in perms else "change something"
+        net_only = acts == {NETWORK}
+        if net_only:
+            if autonomy_level() == "advisory":  # §22 advisory: ask EVERY time
+                return self._gate(q, agent, result, scope)
+            # A purely-network action the user has explicitly opted into (VIO_ALLOW_NET) is
+            # standing consent — don't nag on every web lookup. WRITE always still gates.
+            if os.environ.get("VIO_ALLOW_NET", "").strip():
+                return result
+        return self._gate(q, agent, result, scope)
+
+    @staticmethod
+    def _gate(q, agent, result, scope):
         result.answer = (result.answer or "").rstrip() + (
             f"\n\n⚠️ This would {scope}. I won't run it without your OK — reply "
             "'confirm' to proceed.")
@@ -736,6 +838,7 @@ class Master:
         self.registry = registry
         self.guardrail = guardrail or Guardrail()
         self.coordinator = coordinator
+        self.last_task = None                   # the most recent Task record (observability)
 
     def handle(self, q, ctx=None):
         ctx = ctx or {}
@@ -752,19 +855,38 @@ class Master:
             if board is not None:
                 board.log.append(("coordinator", agent.name, "your turn — answer with "
                                   "the board"))
+            task = Task(capability=agent.name, inputs=q, context=dict(ctx),
+                        permissions=frozenset(getattr(agent, "permissions", ())))
+            self.last_task = task
+            task.status = "running"
+            task.started = time.time()
             try:
                 res = agent.run(q, ctx)
-            except Exception:
+            except Exception as e:
                 res = None
+                task.status = "failed"
+                task.error = f"{type(e).__name__}: {e}"[:200]
+            task.elapsed_ms = round((time.time() - task.started) * 1000, 1)
             if res and agent.validate(res, ctx):
                 if not res.agent:               # keep a finer name the agent already set
                     res.agent = agent.name
+                task.status = "done"
+                task.confidence = float(getattr(res, "confidence", 0.5) or 0.5)
+                how_before = res.how or ""
                 if board is not None:
                     board.log.append((res.agent, "coordinator", "answered"))
                     res.team = self.coordinator.footer(board)
                     res.trace = list(res.trace) + ["agents: " + "; ".join(
                         board.transcript()[-8:])]
-                return self.guardrail.check(q, agent, res, ctx)
+                gated = self.guardrail.check(q, agent, res, ctx)
+                if (gated.how or "") != how_before:
+                    task.status = "gated"       # guardrail held it for confirmation
+                res.task = task.as_dict()
+                return gated
+            if res is not None:
+                task.status = "rejected"        # validate() refused the result
+            elif task.status != "failed":
+                task.status = "empty"           # the agent ran and chose not to apply
             if board is not None:
                 board.log.append((agent.name, "coordinator", "passed — not mine"))
         return None
@@ -772,25 +894,34 @@ class Master:
     def council(self, q, ctx=None, k=3):
         """COLLABORATION: gather contributions from the top-k advisory agents instead of
         letting one winner take all. Acting agents (network/write) are skipped unless
-        confirmed, so a council never triggers a side effect. Returns [(name, Result)] —
-        the caller (Mind.council) synthesises them into one answer. The agents already
-        share knowledge through the common Mind; this lets them share an ANSWER too."""
+        confirmed, so a council never triggers a side effect. Contributions run in
+        PARALLEL (performance §20) — agents are independent on this path; results are
+        kept in rank order, first k valid win. Returns [(name, Result)] — the caller
+        (Mind.council) synthesises them into one answer."""
         ctx = ctx or {}
+        eligible = [a for _s, a in self.registry.ranked(q, ctx)
+                    if not (set(getattr(a, "permissions", ())) & {WRITE, NETWORK}
+                            and not ctx.get("confirmed"))][:6]
+        if not eligible:
+            return []
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run(agent):
+            try:
+                return agent, agent.run(q, ctx)
+            except Exception:
+                return agent, None
+
+        with ThreadPoolExecutor(max_workers=min(4, len(eligible))) as ex:
+            outcomes = list(ex.map(_run, eligible))
         contribs, seen = [], set()
-        for _score, agent in self.registry.ranked(q, ctx):
+        for agent, res in outcomes:                     # rank order preserved by ex.map
             if len(contribs) >= k:
                 break
-            if set(getattr(agent, "permissions", ())) & {WRITE, NETWORK} \
-                    and not ctx.get("confirmed"):
-                continue                        # advisory council: no side-effecting agents
-            try:
-                res = agent.run(q, ctx)
-            except Exception:
-                res = None
             if not (res and agent.validate(res, ctx) and (res.answer or "").strip()):
                 continue
             key = (res.answer or "").strip()[:200]
-            if key in seen:                     # don't double-count identical answers
+            if key in seen:                             # don't double-count identical answers
                 continue
             seen.add(key)
             if not res.agent:

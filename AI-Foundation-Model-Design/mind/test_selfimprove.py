@@ -32,7 +32,7 @@ def main():
     st = m.si.traces.stats()
     check("interactions captured", st["interactions"] >= 4, str(st))
     check("feedback captured", st["feedback"] == 2 and st["thumbs_up"] == 1 and st["thumbs_down"] == 1, str(st))
-    check("provenance in traces", "knowledge" in st["by_agent"] and "math" in st["by_agent"], str(st))
+    check("provenance in traces", "knowledge" in st["by_agent"] and "core" in st["by_agent"], str(st))
 
     # curator: keeps good, drops no-source and 👎
     curated = m.si.curator.curate()

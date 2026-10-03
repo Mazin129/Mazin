@@ -39,7 +39,7 @@ DATA_DIR = os.environ.get("VIO_DATA_DIR", HERE)
 
 # Curated, clean, mostly-factual datasets that teach well (name → how to pull it).
 CURATED = {
-    "wikipedia":  ("hf", "wikipedia", "20220301.simple", ("text",),
+    "wikipedia":  ("hf", "wikimedia/wikipedia", "20231101.simple", ("text",),
                    "Simple-English Wikipedia — broad factual prose."),
     "ag_news":    ("hf", "ag_news", None, ("text",),
                    "News articles (world/sports/business/sci-tech)."),
@@ -49,7 +49,7 @@ CURATED = {
                    "Science exam support passages."),
     "eli5category": ("hf", "sentence-transformers/eli5", None, ("answer",),
                      "Plain-language explanations of real questions."),
-    "wikics":     ("hf", "wikipedia", "20220301.en", ("text",),
+    "wikics":     ("hf", "wikimedia/wikipedia", "20231101.en", ("text",),
                    "Full English Wikipedia (large — use a small --n)."),
 }
 
@@ -334,7 +334,7 @@ def teach_into_vio(passages, source):
     from reasoner import Mind
     m = Mind()
     before = len(m.lib.docs)
-    m.lib.add_many(passages)          # add as knowledge (retrieval + language model)
+    m.lib.add_many(passages, origin="dataset", source=source or "hf-dataset")
     m._retrain()
     m.mem["last_learned"] = {"source": source, "count": len(passages)}
     m._save()

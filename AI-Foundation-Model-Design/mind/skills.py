@@ -23,6 +23,7 @@ grows the assistant's competence at runtime, and every skill is inspectable.
 import json
 import os
 import re
+import time
 
 HERE = os.environ.get("VIO_DATA_DIR") or os.path.dirname(os.path.abspath(__file__))
 SKILLS_FILE = os.path.join(HERE, "skills.json")
@@ -59,6 +60,14 @@ class SkillBook:
                 self.skills = json.load(open(SKILLS_FILE, encoding="utf-8"))
             except (ValueError, OSError):
                 self.skills = []
+        # registry metadata (redesign prompt §8): version, status, timestamps. Older
+        # skills.json files predate these fields — backfill instead of failing.
+        for s in self.skills:
+            s.setdefault("version", 1)
+            s.setdefault("status", "active")
+            s.setdefault("created_ts", 0.0)
+            s.setdefault("updated_ts", 0.0)
+            s.setdefault("tested_against", 0)
         self._recompile()
 
     def _recompile(self):
@@ -69,12 +78,15 @@ class SkillBook:
                 s["_rx"], s["_slots"] = None, []
 
     def _save(self):
-        dump = [{"name": s["name"], "trigger": s["trigger"], "reply": s["reply"]}
+        dump = [{k: s.get(k) for k in ("name", "trigger", "reply", "version", "status",
+                                       "created_ts", "updated_ts", "tested_against")}
                 for s in self.skills]
         json.dump(dump, open(SKILLS_FILE, "w", encoding="utf-8"),
                   ensure_ascii=False, indent=2)
 
-    def add(self, name, trigger, reply):
+    def add(self, name, trigger, reply, tested_against=0):
+        """Install (or upgrade) a skill. Re-adding an existing name bumps its version —
+        an improvement, not a replacement the registry forgets."""
         name = (name or "").strip()[:80]
         trigger = (trigger or "").strip()[:MAX_LEN]
         reply = (reply or "").strip()[:MAX_LEN]
@@ -88,11 +100,20 @@ class SkillBook:
         missing = r_slots - t_slots
         if missing:
             return False, f"Reply uses {{{', '.join(missing)}}} not found in the trigger."
+        now = time.time()
+        prev = next((s for s in self.skills if s["name"].lower() == name.lower()), None)
+        version = (prev.get("version", 1) + 1) if prev else 1
+        created = prev.get("created_ts", 0.0) if prev else now
         self.skills = [s for s in self.skills if s["name"].lower() != name.lower()]
-        self.skills.append({"name": name, "trigger": trigger, "reply": reply})
+        self.skills.append({"name": name, "trigger": trigger, "reply": reply,
+                            "version": version, "status": "active",
+                            "created_ts": created, "updated_ts": now,
+                            "tested_against": int(tested_against or 0)})
         self._recompile()
         self._save()
-        return True, f"Skill “{name}” learned. Try it: {trigger}"
+        return True, (f"Skill “{name}” v{version} learned (registry: active"
+                      + (f", pre-tested on {tested_against} past question(s)"
+                         if tested_against else "") + f"). Try it: {trigger}")
 
     def remove(self, name):
         before = len(self.skills)
@@ -100,9 +121,23 @@ class SkillBook:
         self._save()
         return len(self.skills) < before
 
-    def match(self, query):
-        """Return (skill_name, reply) for the first matching skill, else None."""
+    def set_status(self, name, active=True):
+        """Disable (kept, but never fires) or re-enable a skill — registry lifecycle."""
+        hit = False
         for s in self.skills:
+            if s["name"].lower() == (name or "").lower():
+                s["status"] = "active" if active else "disabled"
+                s["updated_ts"] = time.time()
+                hit = True
+        if hit:
+            self._save()
+        return hit
+
+    def match(self, query):
+        """Return (skill_name, reply) for the first matching ACTIVE skill, else None."""
+        for s in self.skills:
+            if s.get("status") == "disabled":
+                continue                       # disabled skills stay stored but never fire
             rx = s.get("_rx")
             if not rx:
                 continue
@@ -115,7 +150,9 @@ class SkillBook:
         return None
 
     def list(self):
-        return [{"name": s["name"], "trigger": s["trigger"], "reply": s["reply"]}
+        return [{"name": s["name"], "trigger": s["trigger"], "reply": s["reply"],
+                 "version": s.get("version", 1), "status": s.get("status", "active"),
+                 "tested_against": s.get("tested_against", 0)}
                 for s in self.skills]
 
 

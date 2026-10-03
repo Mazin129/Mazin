@@ -53,6 +53,44 @@ _THINKING = ("qwen3",)
 THINK_MODE = os.environ.get("VIO_LLM_THINK", "auto").strip().lower()
 _THINK_TAG = re.compile(r"<think>.*?</think>\s*", re.S | re.I)
 
+# ---- model router (redesign prompt §14) ------------------------------------- #
+_ROUTING_ON = {"1", "true", "yes", "on"}
+
+
+def _model_size(name):
+    """'qwen3.5:4b' → 4.0 · 'llama3.1:8b-instruct-q4' → 8.0 · unknown → 0.0."""
+    m = re.search(r":(\d+(?:\.\d+)?)b", (name or "").lower())
+    return float(m.group(1)) if m else 0.0
+
+
+# what makes a call worth the SLOW model: analytic verbs, or a big prompt.
+_ANALYTIC = re.compile(
+    r"\b(analy[sz]e|why\b|compare|versus|\bvs\b|trade-?off|design|architect|threat|"
+    r"debug|troubleshoot|root ?cause|attack|hardening|incident|correlat\w*|assess\w*|"
+    r"walk me|step by step|plan)\b", re.I)
+
+
+def pick_model(inventory, prompt, prefer=_PREFER):
+    """Choose between installed models for one call: within the most-preferred
+    installed family, short/simple prompts go to the small fast model and analytic /
+    heavy prompts to the largest. One model installed → no routing. Pure + testable."""
+    if not inventory:
+        return None
+    fams = {}
+    for n in inventory:
+        fams.setdefault((n or "").split(":")[0], []).append(n)
+
+    def fam_rank(f):
+        return next((i for i, p in enumerate(prefer)
+                     if f == p or f.startswith(p + ":") or p.startswith(f)), len(prefer))
+
+    best = min(fams, key=fam_rank)
+    sizes = sorted(fams[best], key=_model_size)
+    if len(sizes) == 1:
+        return sizes[0]
+    analytic = bool(_ANALYTIC.search(prompt or "")) or len(prompt or "") > 1200
+    return sizes[-1] if analytic else sizes[0]
+
 
 def _is_thinking_model(name):
     return (name or "").lower().startswith(_THINKING)
@@ -79,6 +117,11 @@ class LLM:
         self.last_error = ""
         self.reason = ""          # why .available is False (empty when it is True)
         self.note = ""            # a warning even when available (e.g. model not installed)
+        # ---- model router + token accounting (redesign prompt §14, §21) --------
+        self.inventory = []       # every installed model tag (routing + switcher)
+        self.auto_picked = False  # True when no explicit model was requested
+        self.last_model = ""      # the model the last generate() actually used
+        self.usage_counts = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
         # who Vio is, who the user is and what we were just talking about — a callable
         # set by the Mind. Without it every call was a stranger reading one message.
         self.context = None
@@ -97,6 +140,7 @@ class LLM:
                            "Start it with:  ollama serve")
             return
         names = [m.get("name", "") for m in (tags or {}).get("models", [])]
+        self.inventory = [n for n in names if n]
         if not names:
             self.available = False
             self.reason = ("Ollama is running but has NO models installed. "
@@ -111,6 +155,7 @@ class LLM:
         if self.model and any(n == self.model or n.startswith(self.model + ":")
                               for n in names):
             self.available = True
+            self.auto_picked = False              # an explicit choice — routing stays off
             return
         # auto-pick: first installed model matching the preference order, else the first
         for pref in _PREFER:
@@ -118,9 +163,19 @@ class LLM:
                 if n == pref or n.startswith(pref + ":"):
                     self.model = n
                     self.available = True
+                    self.auto_picked = True
                     return
         self.model = names[0]
         self.available = True
+        self.auto_picked = True
+
+    # ---- model router (redesign prompt §14, pure + testable) ------------------
+    def usage(self):
+        """Token/call accounting for observability (§21). Counts come from Ollama's
+        eval counts; zero without a live server."""
+        u = dict(self.usage_counts)
+        u["avg_ms"] = round(self.total_ms / u["calls"], 1) if u["calls"] else 0.0
+        return u
 
     # ---- inventory ----
     def list_models(self):
@@ -151,12 +206,24 @@ class LLM:
 
         Every call is counted and timed, and every failure keeps its reason in
         .last_error — silent `except: return None` is exactly how Vio ended up
-        answering from raw keyword matches while looking like it had reasoned."""
+        answering from raw keyword matches while looking like it had reasoned.
+        MODEL ROUTING (§14, opt-in with VIO_MODEL_ROUTING=1): when several models of
+        the preferred family are installed and the user has NOT pinned a model, short/
+        simple prompts go to the small fast model, analytic/heavy ones to the largest.
+        An explicit VIO_LLM_MODEL or a dashboard switch disables routing."""
         if not self.available:
             self.last_error = self.reason or "no local model available"
             return None
+        use_model = self.model
+        if (os.environ.get("VIO_MODEL_ROUTING", "").strip().lower() in _ROUTING_ON
+                and self.auto_picked and self.inventory
+                and not os.environ.get("VIO_LLM_MODEL", "").strip()):
+            routed = pick_model(self.inventory, prompt)
+            if routed:
+                use_model = routed
+        self.last_model = use_model
         body = {
-            "model": self.model,
+            "model": use_model,
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": temperature, "num_predict": max_tokens,
@@ -222,6 +289,9 @@ class LLM:
             return None
         self.last_error = ""
         self.calls += 1
+        self.usage_counts["calls"] += 1
+        self.usage_counts["prompt_tokens"] += int((out or {}).get("prompt_eval_count") or 0)
+        self.usage_counts["completion_tokens"] += int((out or {}).get("eval_count") or 0)
         return text
 
     # ---- http (stdlib) ----
@@ -267,21 +337,33 @@ GROUNDED_SYSTEM_D = GROUNDED_SYSTEM
 REASON_SYSTEM_D = REASON_SYSTEM
 
 
-def grounded_prompt(question, passages):
-    if passages:
-        ctx = "\n".join(f"- {p}" for p in passages)
+def grounded_prompt(question, passages, unvalidated=None):
+    """Build the grounding prompt with a provenance split (redesign prompt §5/§12):
+    `passages` are validated knowledge (authoritative); `unvalidated` are auto-learned
+    web notes the model may use only as clearly-flagged leads — never as facts."""
+    un = [p for p in (unvalidated or []) if p]
+    if not passages and not un:
         return (
-            f"Facts from the user's knowledge base (authoritative):\n{ctx}\n\n"
             f"Question: {question}\n\n"
-            "Answer using the facts above where they apply. Quote concrete settings "
-            "(policy ids, interfaces, addresses, actions). If the facts are insufficient, "
-            "say exactly what is missing and ask one clarifying question."
+            "No retrieved facts are available. If you can answer generally and usefully, "
+            "do so briefly; if the question needs the user's config or specifics, ask one "
+            "clarifying question instead of inventing them."
         )
+    head = ""
+    if passages:
+        head += ("Facts from the user's knowledge base (authoritative):\n"
+                 + "\n".join(f"- {p}" for p in passages) + "\n\n")
+    if un:
+        head += ("Unvalidated research notes (auto-collected from the web — NOT verified. "
+                 "Treat as leads only: never state them as certain facts, and say "
+                 "explicitly when your answer relies on them):\n"
+                 + "\n".join(f"- {p}" for p in un) + "\n\n")
     return (
-        f"Question: {question}\n\n"
-        "No retrieved facts are available. If you can answer generally and usefully, "
-        "do so briefly; if the question needs the user's config or specifics, ask one "
-        "clarifying question instead of inventing them."
+        head
+        + f"Question: {question}\n\n"
+        "Answer using the facts above where they apply. Quote concrete settings "
+        "(policy ids, interfaces, addresses, actions). If the facts are insufficient, "
+        "say exactly what is missing and ask one clarifying question."
     )
 
 

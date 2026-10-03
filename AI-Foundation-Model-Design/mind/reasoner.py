@@ -55,6 +55,10 @@ if DATA_DIR != HERE:
     os.makedirs(DATA_DIR, exist_ok=True)
 MEM_FILE = os.path.join(DATA_DIR, "mind_memory.json")
 KB_FILE = os.path.join(DATA_DIR, "knowledge.json")
+# Provenance for every library passage (redesign prompt §5): origin, source, timestamp,
+# validated flag. Passages missing here (a pre-meta library) are legacy user-taught
+# content → validated.
+META_FILE = os.path.join(DATA_DIR, "knowledge_meta.json")
 TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
 X = sp.symbols("x")
 
@@ -487,13 +491,21 @@ class Library:
         self._lock = threading.RLock()
         self.docs = []
         self.sem = None
+        self.meta = {}                       # passage text -> {origin, source, ts, validated}
         # bumped on every write. The parsed-configuration cache keys off it, so one
         # question re-parses the config at most once instead of once per consumer.
         self.version = 0
+        if os.path.exists(META_FILE):
+            try:
+                self.meta = json.load(open(META_FILE, encoding="utf-8"))
+            except Exception:
+                self.meta = {}
         if os.path.exists(KB_FILE):
             self.docs = json.load(open(KB_FILE, encoding="utf-8"))
         else:
             self._seed()                     # first ever run: load built-in knowledge
+        self._prune_meta()
+        self._save_meta()
         self._fit()
 
     def _seed(self):
@@ -556,10 +568,17 @@ class Library:
     def add(self, text):
         self.add_many([text])
 
-    def add_many(self, texts):
+    def add_many(self, texts, origin="teach", source="", validated=None):
         """Add passages, skipping any already in the library. Returns how many were
         actually new. Without the check, re-running a learning pass (or re-uploading a
-        file) stacked identical copies that crowded out everything else in retrieval."""
+        file) stacked identical copies that crowded out everything else in retrieval.
+        PROVENANCE (redesign prompt §5): every passage is recorded with its origin
+        (teach|file|web|github|builtin|dataset|seed), source, timestamp, and a
+        `validated` flag — auto-learned web content defaults to UNVALIDATED and can
+        ground an answer only as a flagged lead, never as trusted knowledge."""
+        if validated is None:
+            validated = origin != "web"
+        ts = time.time()
         with self._lock:
             seen = {d.strip() for d in self.docs}
             fresh = []
@@ -572,16 +591,54 @@ class Library:
                 return 0
             self.version += 1                       # invalidates the parsed-config cache
             self.docs = self.docs + fresh           # rebind, don't mutate in place
+            for t in fresh:
+                self.meta[t] = {"origin": origin, "source": source, "ts": ts,
+                                "validated": bool(validated)}
+            self._prune_meta()
+            self._save_meta()
             json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
             self._fit()
             return len(fresh)
+
+    # ---- provenance / validation (redesign prompt §5) -----------------------
+    def meta_for(self, doc):
+        """Provenance of one passage; unknown passages are legacy user-taught content."""
+        return self.meta.get(doc) or {"origin": "legacy", "source": "", "ts": 0.0,
+                                      "validated": True}
+
+    def is_validated(self, doc):
+        """True when a passage is trusted knowledge (taught, file, dataset, builtin,
+        curated source, corroborated research) — False for auto-learned web content,
+        which may ground an answer only as a clearly-flagged unvalidated lead."""
+        return bool(self.meta_for(doc).get("validated", True))
+
+    def validated_split(self, docs):
+        """([validated…], [unvalidated…]) over a list of passages."""
+        yes, no = [], []
+        for d in docs:
+            (yes if self.is_validated(d) else no).append(d)
+        return yes, no
+
+    def _prune_meta(self):
+        if self.meta:
+            live = set(self.docs)
+            self.meta = {k: v for k, v in self.meta.items() if k in live}
+
+    def _save_meta(self):
+        try:
+            json.dump(self.meta, open(META_FILE, "w", encoding="utf-8"),
+                      ensure_ascii=False)
+        except Exception:
+            pass
 
     def replace(self, texts):
         """Swap the whole corpus (used by library cleaning) and rebuild the index."""
         with self._lock:
             self.version += 1
             self.docs = list(texts)
+            self._prune_meta()
+            self._save_meta()
             json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
             self._fit()
@@ -1337,7 +1394,7 @@ class Mind:
             self.graph.learn_text(text)
             per.append((name, f"{len(chunks)} passages")); learned += 1
         if all_chunks:
-            self.lib.add_many(all_chunks)
+            self.lib.add_many(all_chunks, origin="file", source=f"folder:{path}")
             self._retrain()
         self.mem["last_learned"] = {"source": f"folder:{path}", "count": len(all_chunks)}
         self._save()
@@ -1363,7 +1420,7 @@ class Mind:
 
     def teach(self, text):                 # add durable knowledge to the library
         chunks = self._smart_chunks(text)
-        self.lib.add_many(chunks)
+        self.lib.add_many(chunks, origin="teach")
         self.graph.learn_text(text)        # extract relational edges (cheap, teach-time)
         self._retrain()                    # keep the thinker current with new knowledge
         # Never claim learning that did not happen: confirm the passage can actually be
@@ -1775,7 +1832,8 @@ class Mind:
                 snap_note = self._snapshot_config(text, source, chunks)
         except Exception as e:                      # a snapshot must never block learning
             snap_note = f" (config snapshot not saved: {type(e).__name__})"
-        self.lib.add_many(chunks)
+        self.lib.add_many(chunks, origin="github" if str(source).startswith("github:")
+                          else "file", source=source or "user upload")
         self.graph.learn_text(text)                 # relational edges (cheap, teach-time)
         self._retrain()
         if source:                                  # remember the most recent source
@@ -2135,7 +2193,9 @@ class Mind:
         all_chunks = []
         for source, text in docs:
             all_chunks.extend(self._smart_chunks(text))
-        self.lib.add_many(all_chunks)                  # one add + one retrain (efficient)
+        # explicit user command ("learn from github …") = user-directed, like teach
+        self.lib.add_many(all_chunks, origin="github",
+                          source=f"github:{owner}/{repo}")  # one add + one retrain (efficient)
         self._retrain()
         # provenance: where it came from and under what licence, so any passage in the
         # library can be traced back and its terms honoured
@@ -2171,8 +2231,11 @@ class Mind:
         """WEB RESEARCH: search the public web, read the top pages, LEARN them into the
         library, then answer grounded on those fresh sources with citations. Read-only;
         requires the user to opt in with VIO_ALLOW_NET=1. Returns a result dict.
-        If propose_skill=True and research succeeds, also drafts a pending SkillProposal
-        (never auto-installed — use approve skill: <id>)."""
+        SOURCE VALIDATION (redesign prompt §5/§6): pages from curated trusted domains
+        are validated knowledge; anything else is stored as an UNVALIDATED lead, and
+        the answer is only "verified" when it stands on a trusted source or ≥2
+        independent domains. Identical queries inside VIO_RESEARCH_CACHE_TTL are
+        served from an in-RAM cache (bypassed when propose_skill=True)."""
         import websearch
         if not websearch.net_enabled():
             return {"ok": False, "how": "web research (disabled)", "verified": False,
@@ -2181,6 +2244,17 @@ class Mind:
                     "example.com,docs.site to restrict to trusted domains). Then ask again.",
                     "trace": []}
         query = (query or "").strip()
+        cache_key = re.sub(r"\s+", " ",
+                           f"{k}|{re.sub(r'[?,.!]+', ' ', query.lower())}".strip())
+        ttl = int(os.environ.get("VIO_RESEARCH_CACHE_TTL", "3600") or 0)
+        cached = getattr(self, "_research_cache", {}).get(cache_key)
+        if cached and not propose_skill and ttl > 0 \
+                and (time.time() - cached["ts"]) < ttl:
+            r = dict(cached["result"])
+            r["how"] = (r.get("how") or "web research") + " (cached)"
+            r["trace"] = list(r.get("trace") or []) + [
+                f"served from research cache (age {int(time.time() - cached['ts'])}s)"]
+            return r
         try:
             if re.match(r"^https?://\S+$", query, re.I):
                 sources = [{"url": query, "title": query}]     # a bare URL → read it
@@ -2194,49 +2268,91 @@ class Mind:
         if not sources:
             return {"ok": False, "how": "web research", "verified": False,
                     "answer": "I couldn't find any results to read for that.", "trace": []}
-        fetched, all_chunks = [], []
-        for s in sources[:k]:
+        # fetch the pages in PARALLEL (network-bound; no shared state on this path)
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _grab(s):
             try:
                 doc = websearch.fetch(s["url"])
             except Exception:                                  # skip a page we can't read
-                continue
+                return None
             body = (doc.get("text") or "")[:20000]
             if len(body) < 200:                                # too thin to be useful
-                continue
-            all_chunks.extend(self._smart_chunks(body))
+                return None
+            return {"url": doc["url"], "title": doc.get("title") or doc["url"],
+                    "text": body, "chunks": self._smart_chunks(body)}
+        picks = sources[:k]
+        with ThreadPoolExecutor(max_workers=min(4, max(1, len(picks)))) as ex:
+            got = list(ex.map(_grab, picks))
+        fetched = [g for g in got if g]
+        for g in fetched:
             try:
-                self.graph.learn_text(body)
+                self.graph.learn_text(g["text"])
             except Exception:
                 pass
-            fetched.append({"url": doc["url"], "title": doc.get("title") or doc["url"],
-                            "text": body})
         if not fetched:
             return {"ok": False, "how": "web research", "verified": False,
                     "answer": "I found results but couldn't read usable text from them "
                     "(they may be blocked, image-only, or require a login).", "trace": []}
-        self.lib.add_many(all_chunks)                          # one add + one retrain
+        # validation gate: trusted domain (curated sources.py) ⇒ validated knowledge
+        import sources as _sources
+        from urllib.parse import urlparse as _up
+        trusted = _sources.domains()
+
+        def _host(u):
+            return (_up(u or "").hostname or "").lower()
+
+        for d in fetched:
+            h = _host(d["url"])
+            d["trusted"] = any(h == t or h.endswith("." + t) for t in trusted)
+        val_chunks = [c for d in fetched if d["trusted"] for c in d["chunks"]]
+        unval_chunks = [c for d in fetched if not d["trusted"] for c in d["chunks"]]
+        if val_chunks:
+            self.lib.add_many(val_chunks, origin="web", validated=True)
+        if unval_chunks:
+            self.lib.add_many(unval_chunks, origin="web", validated=False)
         self._retrain()
-        self.mem["last_learned"] = {"source": "web", "count": len(all_chunks)}
+        domains = {_host(d["url"]) for d in fetched if _host(d["url"])}
+        trusted_hit = any(d["trusted"] for d in fetched)
+        well_sourced = trusted_hit or len(domains) >= 2
+        self.mem["last_learned"] = {"source": "web",
+                                    "count": len(val_chunks) + len(unval_chunks)}
         self._save()
         self._last_evidence = {"sources": [f"{d['title']} — {d['url']}" for d in fetched],
-                               "hits": len(fetched)}
+                               "hits": len(fetched), "unvalidated": len(unval_chunks)}
         cites = "\n".join(f"  • {d['title']} — {d['url']}" for d in fetched)
-        ctx = [f"[{d['title']}] {d['text'][:4000]}" for d in fetched]
+        val_ctx = [f"[{d['title']}] {d['text'][:4000]}" for d in fetched if d["trusted"]]
+        unval_ctx = [f"[{d['title']}] {d['text'][:4000]}" for d in fetched if not d["trusted"]]
         note = (f"\n\nSources I read just now (and learned):\n{cites}")
-        trace = [f"fetched {len(fetched)} page(s); learned {len(all_chunks)} passages"]
+        if not well_sourced:
+            note += ("\n\n⚠️ Single untrusted source — I stored this as UNVALIDATED research "
+                     "notes, not confirmed knowledge. Cross-check it, or `teach:` me the "
+                     "confirmed fact and I'll treat it as authoritative.")
+        trace = [f"fetched {len(fetched)} page(s) over {len(domains)} domain(s); learned "
+                 f"{len(val_chunks) + len(unval_chunks)} passage(s) "
+                 f"({len(val_chunks)} validated / {len(unval_chunks)} unvalidated)"]
         ans_body = ""
         if self.llm is not None and self.llm.available:
             from llm import grounded_prompt, GROUNDED_SYSTEM_D
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-            ans_body = self.llm.generate(grounded_prompt(query, ctx), system=GROUNDED_SYSTEM_D,
-                                         max_tokens=budget) or ""
+            ans_body = self.llm.generate(
+                grounded_prompt(query, val_ctx, unvalidated=unval_ctx),
+                system=GROUNDED_SYSTEM_D, max_tokens=budget) or ""
         if not ans_body:
             excerpt = self.thinker.synthesize(query, [d["text"] for d in fetched], [])
             ans_body = excerpt or (fetched[0]["text"][:1200].rstrip() + " …")
         how = ("web research (LLM, grounded)" if (self.llm and self.llm.available and ans_body)
                else "web research (excerpt)")
-        out = {"ok": True, "how": how, "verified": True,
+        out = {"ok": True, "how": how, "verified": well_sourced,
                "answer": ans_body + note, "trace": trace}
+        if ttl > 0 and fetched:
+            if not hasattr(self, "_research_cache"):
+                self._research_cache = {}
+            self._research_cache[cache_key] = {"ts": time.time(), "result": dict(out)}
+            if len(self._research_cache) > 50:            # keep the 50 newest entries
+                for old in sorted(self._research_cache,
+                                  key=lambda kk: self._research_cache[kk]["ts"])[:-50]:
+                    self._research_cache.pop(old, None)
         if propose_skill:
             prop_note = self._maybe_propose_skill(query, ans_body, fetched)
             if prop_note:
@@ -2284,7 +2400,10 @@ class Mind:
                 "trace": [], "proposals": items}
 
     def approve_skill_proposal(self, key):
-        ok, msg = self.skill_proposals.approve(key, self.skills)
+        # pre-install test: run the proposal's trigger against recent questions so the
+        # human approving sees what it would have fired on before it goes live
+        episodes = [e.get("cue", "") for e in self.episodic.episodes[-500:]]
+        ok, msg = self.skill_proposals.approve(key, self.skills, episodes=episodes)
         return {"answer": msg, "how": "skill_grow (approve)", "verified": ok, "trace": []}
 
     def reject_skill_proposal(self, key):
@@ -2355,7 +2474,7 @@ class Mind:
                     "Ask me about BGP, OSPF, mTLS, firewalls, IAM, incident response, and "
                     "more — or add your own with  learn essentials  /  teach:  / 📄.",
                     "how": "builtin-knowledge", "verified": True, "trace": []}
-        self.lib.add_many(new)
+        self.lib.add_many(new, origin="builtin", source="seed_netsec")
         self._retrain()
         return {"answer": f"✓ Loaded {len(new)} built-in network & security passages "
                 "(routing, firewalls, VPN/TLS, Kubernetes & mesh, cloud/IAM, security "
@@ -3277,6 +3396,15 @@ class Mind:
             self._intents, self._plan, self._evidence_survey = [], None, None
             self._brain_error = f"{type(ex).__name__}: {ex}"
 
+        # WRITE COMMANDS ARE NOT QUESTIONS: `remember: my favourite quotation is "The
+        # network is the computer."` mentions a system noun + a possessive, so the
+        # evidence-class reader classified it as a CONFIG question and the config
+        # branch hijacked the command (answered "no-source (config-analyse)" instead
+        # of storing the fact). teach:/remember:/skill: are writes — route them, never
+        # intercept them.
+        if self._intents and re.match(r"^\s*(?:teach|remember|skill)\s*:", q, re.I):
+            self._intents, self._plan = [], None
+
         # A question naming a learned skill's whole topic goes to that skill before
         # any config handling: "what are the rules for change request?" contains the
         # config word "rules", but it is about the learned change-request process.
@@ -3669,10 +3797,12 @@ class Mind:
             "reasoning_cortex": {
                 "llm": bool(self.llm and self.llm.available),
                 "model": (self.llm.model if self.llm and self.llm.available else None),
+                "usage": (self.llm.usage() if self.llm and self.llm.available else None),
                 "semantic": (self.lib.sem.backend if getattr(self.lib, "sem", None) else None),
                 # Vio's OWN from-scratch model (trained by you, on your data only)
                 "own_model": self._own_model_info(),
             },
+            "autonomy": (lambda: __import__("agents").autonomy_level())(),
             "last_route": getattr(self, "_last_route", None),
             "graph": self.graph.summary(),
             "vocab": st["vocab"],
@@ -3704,6 +3834,15 @@ class Mind:
         sdef = parse_skill_definition(q)
         if sdef:
             ok, msg = self.skills.add(*sdef)
+            return {"answer": msg, "how": "skill-write", "verified": ok, "trace": []}
+
+        # disable / enable an existing skill (registry lifecycle — park without deleting)
+        mds = re.match(r"^\s*(disable|enable)\s+skill\s*[:\-]?\s*(.+)$", q, re.I)
+        if mds:
+            ok = self.skills.set_status(mds.group(2).strip(),
+                                        active=mds.group(1).lower() == "enable")
+            msg = (f"Skill “{mds.group(2).strip()}” {'enabled' if ok else 'disabled'}."
+                   if ok else f"No skill named “{mds.group(2).strip()}”.")
             return {"answer": msg, "how": "skill-write", "verified": ok, "trace": []}
 
         # governed skill growth (propose / list / approve / reject)
@@ -3759,6 +3898,16 @@ class Mind:
                     r"agent\s+status|which\s+agents)\s*\??\s*$", low):
             return {"answer": self.agents_summary(), "how": "agents", "verified": True,
                     "trace": []}
+        # human-control level (§22): "autonomy" / "what is your autonomy level"
+        if re.match(r"^\s*(?:what'?s\s+|what\s+is\s+)?(?:your\s+)?autonomy(?:\s+level)?"
+                    r"\s*\??\s*$", low):
+            from agents import AUTONOMY_REPORT, autonomy_level
+            lvl = autonomy_level()
+            other = ", ".join(l for l in AUTONOMY_REPORT if l != lvl)
+            return {"answer": f"{AUTONOMY_REPORT[lvl]}\n\nSwitch with:  set "
+                    f"VIO_AUTONOMY={'|'.join(AUTONOMY_REPORT)}  (now: {lvl}; "
+                    f"others: {other}).",
+                    "how": "autonomy", "verified": True, "trace": []}
         wa = re.match(r"^\s*who\s+(?:would\s+)?answers?\s*[:\-]?\s*(.+)$", q, re.I) or \
             re.match(r"^\s*which\s+agent\s+(?:would\s+)?(?:answers?|handles?)\s*[:\-]?\s*(.+)$",
                      q, re.I)
@@ -4098,8 +4247,10 @@ class Mind:
             facts = list(self.mem["facts"])          # "what do you know about me" -> all
         else:
             facts = [f for f in self.mem["facts"] if self._match_fact(f, words)]
+        n_unval = sum(1 for d, _ in hits if not self.lib.is_validated(d))
         self._last_evidence = {"top": (hits[0][1] if hits else 0.0),
                                "hits": len(hits), "facts": len(facts),
+                               "unvalidated": n_unval,
                                "excerpts": [d for d, _ in hits[:3]]}
 
         # Analytic / multi-hop: always open LLM when available (hits already cleared).
@@ -4133,39 +4284,56 @@ class Mind:
             # hallucination (it is told to answer from the context or say it can't).
             if self.llm is not None and self.llm.available:
                 from llm import grounded_prompt, GROUNDED_SYSTEM_D
-                ctx = [d for d, _ in hits] + list(facts)
+                # PROVENANCE SPLIT (redesign prompt §5): validated passages ground the
+                # answer; unvalidated web-learned ones ride along only as flagged leads
+                # and can never make the answer "verified".
+                val_hits = [(d, s) for d, s in hits if self.lib.is_validated(d)]
+                unval_hits = [(d, s) for d, s in hits if not self.lib.is_validated(d)]
+                top_val = val_hits[0][1] if val_hits else 0.0
+                ctx_val = [d for d, _ in val_hits] + list(facts)
+                ctx_unval = [d for d, _ in unval_hits]
                 budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-                ans = self.llm.generate(grounded_prompt(q, ctx), system=GROUNDED_SYSTEM_D,
+                ans = self.llm.generate(grounded_prompt(q, ctx_val, unvalidated=ctx_unval),
+                                        system=GROUNDED_SYSTEM_D,
                                         max_tokens=budget)
                 if ans:
-                    # "Verified" only when retrieval genuinely backs the answer. A weak,
-                    # off-topic hit still lets the model answer from its own knowledge
-                    # (the hybrid prompt allows that) — but that answer must NOT wear a
-                    # "verified" badge, or a general-knowledge reply looks sourced.
+                    # "Verified" only when VALIDATED retrieval genuinely backs the
+                    # answer. A weak, off-topic hit still lets the model answer from its
+                    # own knowledge (the hybrid prompt allows that) — but that answer
+                    # must NOT wear a "verified" badge, and neither may one that stands
+                    # only on unvalidated web notes.
                     top = hits[0][1] if hits else 0.0
-                    # Stricter than before: one mediocre hit must not get a ✓ badge
-                    # (that is how a VoIP service object looked "verified" for mTLS).
-                    strong = bool(facts) or (len(hits) >= 2 and top >= 0.32) or top >= 0.45
+                    strong = (bool(facts) or (len(val_hits) >= 2 and top >= 0.32)
+                              or top_val >= 0.45)
+                    tr = [f"local LLM ({self.llm.model}) "
+                          + (f"grounded on {len(val_hits)} validated + "
+                             f"{len(unval_hits)} unvalidated passage(s) + "
+                             f"{len(facts)} fact(s)" if strong
+                             else f"answered from general knowledge "
+                             f"(weak retrieval, top {top:.2f})")]
+                    if unval_hits and strong:
+                        tr.append("unvalidated web notes included as flagged leads only")
                     return {"answer": ans,
                             "how": ("reasoning over knowledge (LLM, grounded)" if strong
                                     else "reasoning (LLM)"),
                             "verified": bool(strong),
-                            "trace": [f"local LLM ({self.llm.model}) "
-                                      + (f"grounded on {len(hits)} passage(s) + "
-                                         f"{len(facts)} fact(s)" if strong
-                                         else f"answered from general knowledge "
-                                         f"(weak retrieval, top {top:.2f})")]}
+                            "trace": tr}
             # open-ended THINKING: synthesise the exact sentences that answer the
             # question, drawn from several passages at once (grounded, no guessing).
             syn = self.thinker.synthesize(q, [d for d, _ in hits], facts, focus=focus)
             if syn:
                 # Synthesis is grounded in passages, but only "verified" when the hit
-                # is strong — weak lexical matches were the FortiGate-VoIP-for-mTLS bug.
+                # is strong AND validated — weak lexical matches were the
+                # FortiGate-VoIP-for-mTLS bug; unvalidated web notes never verify.
                 top = hits[0][1] if hits else 0.0
-                strong = bool(facts) or (len(hits) >= 2 and top >= 0.28) or top >= 0.40
+                val_hits = [(d, s) for d, s in hits if self.lib.is_validated(d)]
+                top_val = val_hits[0][1] if val_hits else 0.0
+                strong = (bool(facts) or (len(val_hits) >= 2 and top >= 0.28)
+                          or top_val >= 0.40)
                 return {"answer": syn, "how": "reasoning over knowledge (synthesis)",
                         "verified": bool(strong),
-                        "trace": [f"synthesised from {len(hits)} passage(s) + "
+                        "trace": [f"synthesised from {len(val_hits)} validated + "
+                                  f"{len(hits) - len(val_hits)} unvalidated passage(s) + "
                                   f"{len(facts)} memory fact(s)"]}
             # fallback: show the passages/facts directly — NEVER mark verified.
             # A raw config dump is a lead, not an answer (see mTLS→VoIP service bug).
