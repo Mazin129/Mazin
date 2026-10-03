@@ -25,3 +25,4 @@ transcript.jsonl
 
 # real-world test reports (machine-specific)
 reports/
+knowledge_meta.json
