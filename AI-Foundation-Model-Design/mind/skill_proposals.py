@@ -104,7 +104,11 @@ class SkillProposalStore:
         self._save()
         return item, f"Proposed skill “{name}” (id={item['id']}). Approve with: approve skill: {item['id']}"
 
-    def approve(self, key, skillbook):
+    def approve(self, key, skillbook, episodes=None):
+        """Human-approved install, WITH a pre-install regression test (prompt §8):
+        the proposal's trigger is run against recent past questions so the approver
+        sees how often it would have fired — a trigger that hijacks common questions
+        is visible before it goes live, not after."""
         it = self.get(key)
         if not it:
             return False, f"No proposal matching “{key}”."
@@ -112,13 +116,19 @@ class SkillProposalStore:
             return True, f"Already approved: {it['name']}"
         if it.get("status") == "rejected":
             return False, f"Proposal “{it['name']}” was rejected — re-propose if needed."
-        ok, msg = skillbook.add(it["name"], it["trigger"], it["reply"])
+        tested = _test_against_episodes(it, episodes or [])
+        ok, msg = skillbook.add(it["name"], it["trigger"], it["reply"],
+                                tested_against=tested)
         if not ok:
             return False, msg
         it["status"] = "approved"
         it["approved_ts"] = time.time()
+        it["installed_version"] = next((s.get("version") for s in skillbook.list()
+                                        if s["name"] == it["name"]), 1)
         self._save()
-        return True, f"Approved & installed skill “{it['name']}”. {msg}"
+        note = (f" Pre-install test: trigger would have fired on {tested} of the last "
+                f"{len(episodes)} question(s)." if episodes else "")
+        return True, f"Approved & installed skill “{it['name']}”. {msg}{note}"
 
     def reject(self, key, reason=""):
         it = self.get(key)
@@ -129,6 +139,28 @@ class SkillProposalStore:
         it["rejected_ts"] = time.time()
         self._save()
         return True, f"Rejected proposal “{it['name']}”."
+
+
+def _test_against_episodes(item, episodes):
+    """Pre-install regression test: count how many past questions this proposal's
+    trigger would have matched. A trigger that fires on everyday questions is a
+    hijack — visible here, before the human approves the install."""
+    try:
+        from skills import _compile
+        rx, _slots = _compile(item.get("trigger", ""))
+    except Exception:
+        return 0
+    n = 0
+    for cue in episodes or []:
+        cue = (cue or "").strip()
+        if not cue:
+            continue
+        try:
+            if rx.match(cue):
+                n += 1
+        except Exception:
+            pass
+    return n
 
 
 def draft_from_research(topic, answer_text, sources=None, llm=None):

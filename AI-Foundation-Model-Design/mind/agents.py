@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import os
 import re
+import time
+import uuid
 from dataclasses import dataclass, field
 
 try:
@@ -37,10 +39,12 @@ class Result:
     confidence: float = 0.5
     agent: str = ""
     trace: list = field(default_factory=list)
+    task: dict = field(default_factory=dict)
 
     def as_dict(self):
         return {"answer": self.answer, "how": self.how, "verified": self.verified,
-                "confidence": self.confidence, "agent": self.agent, "trace": self.trace}
+                "confidence": self.confidence, "agent": self.agent, "trace": self.trace,
+                "task": self.task}
 
     @classmethod
     def from_dict(cls, d, agent=""):
@@ -48,7 +52,45 @@ class Result:
             return None
         return cls(answer=d["answer"], how=d.get("how", ""), verified=bool(d.get("verified")),
                    confidence=float(d.get("confidence", 0.5)), agent=agent,
-                   trace=list(d.get("trace") or []))
+                   trace=list(d.get("trace") or []), task=dict(d.get("task") or {}))
+
+
+@dataclass
+class Task:
+    """The capability-request message schema (redesign prompt §3).
+
+    The Master creates one Task per dispatch; it flows through run → validate →
+    guardrail, and the finished record is attached to the Result (`result["task"]`)
+    so every capability call is traceable (task id, who was asked, what happened).
+    Fields the runtime does not yet ENFORCE (priority, timeout, retry, cancellation)
+    are carried explicitly — the schema exists before the machinery, so adding
+    enforcement is a change of behaviour, not of interface."""
+    capability: str = ""                    # the agent/capability being asked
+    requester: str = "user"                 # who originated the request
+    parent: str = ""                        # parent task id (delegation chains)
+    task_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    priority: int = 5                       # 1 (highest) .. 9
+    inputs: str = ""                        # the query payload
+    context: dict = field(default_factory=dict)
+    expected: str = "answer"                # expected output kind
+    timeout_s: float = 300.0                # advisory until per-capability enforcement
+    max_retries: int = 0
+    status: str = "pending"                 # pending|running|done|empty|rejected|failed|gated
+    confidence: float = 0.0
+    evidence: dict = field(default_factory=dict)
+    error: str = ""
+    cancelled: bool = False
+    permissions: frozenset = frozenset()
+    started: float = 0.0
+    elapsed_ms: float = 0.0
+
+    def as_dict(self):
+        return {"task_id": self.task_id, "parent": self.parent, "capability": self.capability,
+                "requester": self.requester, "priority": self.priority, "status": self.status,
+                "inputs": self.inputs[:200], "expected": self.expected,
+                "timeout_s": self.timeout_s, "max_retries": self.max_retries,
+                "confidence": self.confidence, "error": self.error,
+                "cancelled": self.cancelled, "elapsed_ms": self.elapsed_ms}
 
 
 # permission tokens — an agent declares what it may do. Advisory agents are read-only
@@ -96,20 +138,9 @@ class SkillAgent(Agent):
         return Result(sk[1], how=f"skill: {sk[0]}", verified=True, confidence=0.9)
 
 
-class MathAgent(Agent):
-    name, domains = "math", ("math",)
-
-    def score(self, q, ctx):
-        return 0.92 if self.mind.math.looks_mathy(q) else 0.0
-
-    def run(self, q, ctx):
-        if not self.mind.math.looks_mathy(q):
-            return None
-        ans, trace, ok = self.mind.math.handle(q)
-        if ans is None:
-            return None
-        return Result(ans, how="symbolic reasoning (sympy)", verified=ok,
-                      confidence=0.95 if ok else 0.5, trace=list(trace or []))
+# NOTE: there is deliberately NO math agent — exact math is a TOOL of the core front
+# (MathReasoner inside _core_front), not a dedicated agent. The redesign prompt forbids
+# a `math` agent, and the front's exact-tool branch already owns it end to end.
 
 
 class PlannerAgent(Agent):
@@ -157,31 +188,6 @@ class ReasoningAgent(Agent):
     def run(self, q, ctx):
         r = self.mind.reasoning.answer(q)
         return Result.from_dict(r) if r else None
-
-
-class ConfigAgent(Agent):
-    """Config / firewall object analysis — only claims aggregate list/filter queries
-    when the library actually holds config-shaped passages. Never constant-scores."""
-    name, domains = "config", ("networking", "security", "config")
-    _CFG = re.compile(
-        r"\b(polic(?:y|ies)|firewall|rule(?:s)?|interface(?:s)?|vlan(?:s)?|"
-        r"address(?:es)?|object(?:s)?|route(?:s)?|vpn|tunnel|fortigate|forti|"
-        r"running[- ]?config|dstintf|srcintf|nat)\b", re.I)
-    _AGG = re.compile(
-        r"\b(all|every|each|list|which|how many|count|show|any|pointing|matching)\b", re.I)
-
-    def score(self, q, ctx):
-        if not (self._CFG.search(q) and self._AGG.search(q)):
-            return 0.0
-        docs = getattr(getattr(self.mind, "lib", None), "docs", None) or []
-        # cheap probe — only claim when config stanzas exist
-        for d in docs[:300]:
-            if re.search(r"^\s*(config|edit|set)\b", d, re.M | re.I):
-                return 0.72
-        return 0.0
-
-    def run(self, q, ctx):
-        return Result.from_dict(self.mind._aggregate_answer(q))
 
 
 class MemoryAgent(Agent):
@@ -283,25 +289,38 @@ class DiagramAgent(Agent):
 
 
 def agent_from_how(how):
-    """Map a result's `how` string to a canonical agent name, for provenance on
-    answers produced by the catch-all core router (until every branch is its own agent)."""
+    """Map a result's `how` string to the REGISTERED agent that produced it, for
+    provenance on answers from the catch-all core router. Provenance must never name
+    a capability that is not in the roster — retired names ("math", "tools", "data",
+    "self_improvement") made traces attribute answers to agents that do not exist.
+    The specific engine stays visible in `how` ("symbolic reasoning (sympy)" etc.);
+    the agent named here is the one that actually ran."""
     h = (how or "").lower()
-    table = [("symbolic", "math"), ("quadratic", "math"), ("function plot", "math"),
-             ("exact tool", "tools"), ("clock", "tools"),
-             ("skill:", "skill"), ("generation", "generation"),
-             ("world model", "world_model"), ("planning", "planner"),
-             ("reasoning over knowledge", "knowledge"), ("retrieval", "knowledge"),
-             ("data analysis", "data"), ("analysis over your", "config"),
-             ("reasoning (llm", "reasoning"), ("reasoning (", "reasoning"),
-             ("library", "memory"), ("episodic", "memory"), ("memory", "memory"),
-             ("web research", "research"), ("research", "research"),
-             ("github", "research"), ("learned from github", "research"),
-             ("consolidation", "self_improvement"), ("calibration", "self_improvement"),
-             ("feedback", "feedback"), ("greeting", "core"), ("no-source", "core"),
-             ("llm-timeout", "knowledge")]
-    for key, name in table:
-        if key in h:
-            return name
+    if any(k in h for k in ("web research", "research", "github", "learned from")):
+        return "research"
+    if "skill_grow" in h or "proposal" in h:
+        return "skill_grow"
+    if h.startswith("skill:"):
+        return "skill"
+    if "diagram" in h:
+        return "diagram"
+    if "world model" in h:
+        return "world_model"
+    if "planning" in h:
+        return "planner"
+    if "analysis over your" in h:
+        return "network_engineering"
+    if any(k in h for k in ("symbolic", "quadratic", "function plot", "exact tool",
+                            "clock", "generation", "data analysis", "greeting")):
+        return "core"                       # math/tools/generation run in the core front
+    if any(k in h for k in ("library", "episodic", "memory", "consolidation",
+                            "calibration", "feedback")):
+        return "memory"
+    if "llm-timeout" in h or "no-source" in h or "retrieval" in h \
+            or "reasoning over knowledge" in h or "llm" in h:
+        return "knowledge"
+    if "reasoning" in h:
+        return "reasoning"
     return "core"
 
 
@@ -392,16 +411,22 @@ class DomainAgent(Agent):
         if not (llm and llm.available):
             return None                          # no LLM → let the base path handle it
         hits = self.mind.lib.search(q, k=8)
-        passages = [d for d, _ in hits]
+        # PROVENANCE-AWARE GROUNDING (redesign prompt §5/§12): passages learned from
+        # unvalidated web research may support the answer only as flagged leads — they
+        # can never make an expert answer "verified". Validated (taught/file/builtin/
+        # corroborated) passages ground the answer for real.
+        val = [d for d, _ in hits if self.mind.lib.is_validated(d)]
+        unval = [d for d, _ in hits if not self.mind.lib.is_validated(d)]
         if self.strip_config:                    # keep raw firewall/router stanzas out of
             try:                                 # a conceptual answer (the mTLS→VoIP bug)
-                passages = [d for d in passages
-                            if not self.mind._is_configish_snippet(d)]
+                val = [d for d in val if not self.mind._is_configish_snippet(d)]
+                unval = [d for d in unval if not self.mind._is_configish_snippet(d)]
             except Exception:
                 pass
+        passages = val + unval
         try:
             from llm import grounded_prompt
-            prompt = grounded_prompt(q, passages)
+            prompt = grounded_prompt(q, val, unvalidated=unval)
         except Exception:
             prompt = q
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
@@ -409,42 +434,19 @@ class DomainAgent(Agent):
         if not ans:
             return None
         # publish the evidence this expert used, so the quality gate can cite it and
-        # decide 'verified' correctly (a security answer with no passages is NOT verified).
+        # decide 'verified' correctly (a security answer with no VALIDATED passages is
+        # NOT verified — unvalidated web notes alone never verify).
         try:
             self.mind._last_evidence = {"hits": len(passages), "facts": 0,
+                                        "unvalidated": len(unval),
                                         "top": (hits[0][1] if hits else 0.0),
                                         "excerpts": passages[:3]}
         except Exception:
             pass
-        return Result(ans, how=f"{self.name} (LLM)", verified=bool(passages),
-                      confidence=0.72 if passages else 0.55,
-                      trace=[f"{self.name} agent grounded on {len(passages)} passage(s)"])
-
-
-class TroubleshootingAgent(DomainAgent):
-    name, domains = "troubleshooting", ("networking", "support")
-    intent = re.compile(
-        r"\b(troubleshoot|diagnos\w*|root ?cause|debug|not working|isn'?t working|"
-        r"won'?t \w+|failing|keeps? (dropping|failing)|no connectivity|"
-        r"can'?t (ping|connect|reach|browse)|why is .*\b(down|failing|slow|dropping))\b", re.I)
-    system = ("You are a senior network & security TROUBLESHOOTING agent. Respond as a "
-              "structured diagnosis: (1) the most likely causes, ranked; (2) the exact check "
-              "or command to confirm each; (3) the fix. Ground device/vendor specifics in the "
-              "provided facts; use expert knowledge for the method. Be concrete and ordered.")
-
-
-class SecurityReviewAgent(DomainAgent):
-    name, domains = "security_review", ("security",)
-    intent = re.compile(
-        r"is (this|it|my|the)\b[\w\s'-]{0,50}\b(secure|safe|hardened)|"
-        r"\b(security (review|risk|posture|concern|audit)|harden\w*|best practice|"
-        r"misconfigur\w*|vulnerab\w*|attack surface|least privilege|any (security )?risk|"
-        r"review (this|my|the) (policy|config|firewall|rule)|"
-        r"what.?s wrong with (this|the|my) (policy|config|rule))\b", re.I)
-    system = ("You are a SECURITY REVIEW agent. Assess the described config/design for risk: "
-              "call out misconfigurations, over-permissive rules, and exposure, each with why it "
-              "matters and the recommended hardening. Ground specifics in the provided facts; do "
-              "not invent rules that aren't there. Prioritise the highest-risk findings first.")
+        return Result(ans, how=f"{self.name} (LLM)", verified=bool(val),
+                      confidence=0.72 if val else 0.55,
+                      trace=[f"{self.name} agent grounded on {len(val)} validated + "
+                             f"{len(unval)} unvalidated passage(s)"])
 
 
 class ExpertAgent(DomainAgent):
@@ -512,6 +514,9 @@ class NetworkEngineeringAgent(ExpertAgent):
         r"spanning ?tree|\bnat\b|\bacl\b|\bqos\b|route reflector|as-?path|prefix|\bbfd\b|"
         r"ecmp|next ?hop|default route|state (table|exhaustion)|conntrack|session table|"
         r"firewall|polic\w*|vpn|ipsec|wireguard|tunnel|interface|port\b|dns|dhcp|"
+        # perimeter / edge security vendors the datasets cover (were invisible to routing)
+        r"sd-?wan|\bnac\b|\bwaf\b|\bddos\b|do[sS] mitigation|forescout|netskope|"
+        r"sase|ztna|zero trust|secure web gateway|"
         # kubernetes / service mesh
         r"kubernetes|k8s|istio|linkerd|envoy|service ?mesh|sidecar|mtls|peerauthentication|"
         r"authorizationpolicy|network ?polic\w*|pod security|admission controller|kubelet|"
@@ -580,9 +585,11 @@ class NetworkEngineeringAgent(ExpertAgent):
 
 # order is only a tie-breaker; scores drive dispatch. The one net/sec expert sits above
 # the catch-alls; CoreRouter (front) then Knowledge (tail) remain the bottom fallbacks.
+# There is deliberately NO `math` agent — exact math is a core-front TOOL (redesign
+# prompt: "math should NOT be a dedicated agent").
 # NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
 # (teach:/math/tools/research/draw/agents/…); folding it in would break those.
-DEFAULT_AGENTS = (WebResearchAgent, SkillGrowAgent, DiagramAgent, SkillAgent, MathAgent,
+DEFAULT_AGENTS = (WebResearchAgent, SkillGrowAgent, DiagramAgent, SkillAgent,
                   PlannerAgent, WorldModelAgent, ReasoningAgent, NetworkEngineeringAgent,
                   MemoryAgent, CoreRouterAgent, KnowledgeAgent)
 
@@ -612,6 +619,35 @@ class Registry:
         return out
 
 
+# --------------------------------------------------------------------------- #
+# Human-control levels (redesign prompt §22) — set with VIO_AUTONOMY.
+#   advisory   : every acting (network/write) result is gated for confirmation,
+#                even where standing web consent exists.
+#   assisted   : DEFAULT — standing consent (VIO_ALLOW_NET) covers read-only web
+#                research; WRITE always gates behind "reply confirm".
+#   autonomous : headroom for pre-approved low-risk acting tools — behaves like
+#                assisted today (and write still gates), because no write tool
+#                exists yet. The level exists so the ladder is visible before the
+#                first acting tool lands.
+_LEVELS = ("advisory", "assisted", "autonomous")
+
+
+def autonomy_level():
+    lvl = os.environ.get("VIO_AUTONOMY", "assisted").strip().lower()
+    return lvl if lvl in _LEVELS else "assisted"
+
+
+AUTONOMY_REPORT = {
+    "advisory": ("ADVISORY — I only analyze and recommend. Every action (even web "
+                 "research with VIO_ALLOW_NET set) asks you first."),
+    "assisted": ("ASSISTED — read-only web research runs when you opted in with "
+                 "VIO_ALLOW_NET; anything that writes or changes state asks you first."),
+    "autonomous": ("AUTONOMOUS — pre-approved low-risk actions run unattended; "
+                   "writes STILL ask first (no write tools exist yet, so this "
+                   "currently behaves like assisted)."),
+}
+
+
 class Guardrail:
     """R1/R2 — consulted by the master before any result is returned. Advisory
     (read-only) answers pass straight through. A result from an ACTING agent
@@ -621,15 +657,22 @@ class Guardrail:
 
     def check(self, q, agent, result, ctx):
         perms = set(getattr(agent, "permissions", ()))
-        acts = bool(perms & {WRITE, NETWORK})
+        acts = perms & {WRITE, NETWORK}
         if not acts or ctx.get("confirmed"):
             return result                       # advisory, or already approved
-        # A purely-network action the user has explicitly opted into (VIO_ALLOW_NET) is
-        # standing consent — don't nag on every web lookup. WRITE always still gates.
-        if (perms & {WRITE, NETWORK}) == {NETWORK} and \
-                os.environ.get("VIO_ALLOW_NET", "").strip():
-            return result
-        scope = "reach outside Vio" if NETWORK in agent.permissions else "change something"
+        scope = "reach outside Vio" if NETWORK in perms else "change something"
+        net_only = acts == {NETWORK}
+        if net_only:
+            if autonomy_level() == "advisory":  # §22 advisory: ask EVERY time
+                return self._gate(q, agent, result, scope)
+            # A purely-network action the user has explicitly opted into (VIO_ALLOW_NET) is
+            # standing consent — don't nag on every web lookup. WRITE always still gates.
+            if os.environ.get("VIO_ALLOW_NET", "").strip():
+                return result
+        return self._gate(q, agent, result, scope)
+
+    @staticmethod
+    def _gate(q, agent, result, scope):
         result.answer = (result.answer or "").rstrip() + (
             f"\n\n⚠️ This would {scope}. I won't run it without your OK — reply "
             "'confirm' to proceed.")
@@ -647,42 +690,71 @@ class Master:
     def __init__(self, registry, guardrail=None):
         self.registry = registry
         self.guardrail = guardrail or Guardrail()
+        self.last_task = None                   # the most recent Task record (observability)
 
     def handle(self, q, ctx=None):
         ctx = ctx or {}
         for _score, agent in self.registry.ranked(q, ctx):
+            task = Task(capability=agent.name, inputs=q, context=dict(ctx),
+                        permissions=frozenset(getattr(agent, "permissions", ())))
+            self.last_task = task
+            task.status = "running"
+            task.started = time.time()
             try:
                 res = agent.run(q, ctx)
-            except Exception:
+            except Exception as e:
                 res = None
+                task.status = "failed"
+                task.error = f"{type(e).__name__}: {e}"[:200]
+            task.elapsed_ms = round((time.time() - task.started) * 1000, 1)
             if res and agent.validate(res, ctx):
                 if not res.agent:               # keep a finer name the agent already set
                     res.agent = agent.name
-                return self.guardrail.check(q, agent, res, ctx)
+                task.status = "done"
+                task.confidence = float(getattr(res, "confidence", 0.5) or 0.5)
+                how_before = res.how or ""
+                gated = self.guardrail.check(q, agent, res, ctx)
+                if (gated.how or "") != how_before:
+                    task.status = "gated"       # guardrail held it for confirmation
+                res.task = task.as_dict()
+                return gated
+            if res is not None:
+                task.status = "rejected"        # validate() refused the result
+            elif task.status != "failed":
+                task.status = "empty"           # the agent ran and chose not to apply
         return None
 
     def council(self, q, ctx=None, k=3):
         """COLLABORATION: gather contributions from the top-k advisory agents instead of
         letting one winner take all. Acting agents (network/write) are skipped unless
-        confirmed, so a council never triggers a side effect. Returns [(name, Result)] —
-        the caller (Mind.council) synthesises them into one answer. The agents already
-        share knowledge through the common Mind; this lets them share an ANSWER too."""
+        confirmed, so a council never triggers a side effect. Contributions run in
+        PARALLEL (performance §20) — agents are independent and share no mutable state
+        on this path; results are kept in rank order, first k valid win.
+        Returns [(name, Result)] — the caller (Mind.council) synthesises them."""
         ctx = ctx or {}
+        eligible = [a for _s, a in self.registry.ranked(q, ctx)
+                    if not (set(getattr(a, "permissions", ())) & {WRITE, NETWORK}
+                            and not ctx.get("confirmed"))][:6]
+        if not eligible:
+            return []
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run(agent):
+            try:
+                return agent, agent.run(q, ctx)
+            except Exception:
+                return agent, None
+
+        with ThreadPoolExecutor(max_workers=min(4, len(eligible))) as ex:
+            outcomes = list(ex.map(_run, eligible))
         contribs, seen = [], set()
-        for _score, agent in self.registry.ranked(q, ctx):
+        for agent, res in outcomes:                     # rank order preserved by ex.map
             if len(contribs) >= k:
                 break
-            if set(getattr(agent, "permissions", ())) & {WRITE, NETWORK} \
-                    and not ctx.get("confirmed"):
-                continue                        # advisory council: no side-effecting agents
-            try:
-                res = agent.run(q, ctx)
-            except Exception:
-                res = None
             if not (res and agent.validate(res, ctx) and (res.answer or "").strip()):
                 continue
             key = (res.answer or "").strip()[:200]
-            if key in seen:                     # don't double-count identical answers
+            if key in seen:                             # don't double-count identical answers
                 continue
             seen.add(key)
             if not res.agent:

@@ -89,24 +89,24 @@ shared library and every other agent can use it on the next question.
 
 ---
 
-## 4. The agents (12)
+## 4. The agents (11)
 
 Scores drive dispatch (highest wins); order only breaks ties. Advisory = read-only;
-Acting = holds network/write permission and is guardrail-gated.
+Acting = holds network/write permission and is guardrail-gated. There is deliberately
+**no `math` agent** — exact math is a *tool* of the core front, per the redesign prompt.
 
 | Agent | Kind | Fires on |
 |---|---|---|
 | `research` (WebResearchAgent) | ⚙️ acting (network) | `research:` / `look up` / `search the web` — learns pages, cites; may draft a **pending** skill proposal |
 | `skill_grow` (SkillGrowAgent) | 💬 advisory | `train skill:` / `approve skill:` / `reject skill:` / `list skill proposals` — self-develop via **proposals only** (web via research gate) |
 | `diagram` (DiagramAgent) | 💬 read-only | `draw:` / `diagram:` / `sketch a …` — LLM follows the vendored diagram-design skill → deterministic self-contained SVG at `/diagram/<id>` (model only emits a node/edge spec; `VIO_DIAGRAM_ENGINE=skill` for full editorial SVG on a strong model) |
-| `network_engineering` | 💬 expert (unified) | ALL network & security: routing/switching, firewalls, k8s/mesh (mTLS), cloud/IAM, incident response, threat modeling, troubleshooting, security review, and config analysis (exact structural counts). Merged from the former per-domain experts. |
+| `network_engineering` | 💬 expert (unified) | ALL network & security: routing/switching, SD-WAN, NAC, WAF, DDoS, firewalls, k8s/mesh (mTLS), cloud/IAM, incident response, threat modeling, troubleshooting, security review, and config analysis (exact structural counts). Merged from the former per-domain experts. |
 | `skill` | 💬 reflex | user-taught `skill:` reflexes |
-| `math` | 💬 | symbolic math (sympy) |
 | `planner` | 💬 | "make a plan to…" |
 | `world_model` | 💬 | "what happens if…" causal what-ifs (intent-scored only) |
 | `reasoning` | 💬 | structured graph reasoning (intent-scored only) |
 | `memory` | 💬 | "what did we discuss", "what do you know about me" |
-| `core` (CoreRouterAgent) | 💬 catch-all | the proven front router (`_core_front`) |
+| `core` (CoreRouterAgent) | 💬 catch-all | the proven front router (`_core_front`) — commands, exact tools (incl. math), generation, research plumbing |
 | `knowledge` (KnowledgeAgent) | 💬 tail | retrieval + grounded/open LLM + honest no-source |
 
 The one `network_engineering` expert is **conceptual**: they strip raw device-config passages from their
@@ -133,6 +133,12 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
   - `qwen2.5:3b` — fits the GPU, fast, strong on network/security. **Default.**
   - `qwen2.5:7b` — smarter, runs on CPU (~20–60 s/answer).
   - Switch instantly from **/dashboard → Brain dropdown** (or `POST /api/model`), no restart.
+- **Model routing (§14, opt-in):** start with `VIO_MODEL_ROUTING=1` and, with several
+  models of the preferred family installed, Vio picks per prompt — short/simple calls go
+  to the small fast model, analytic/heavy ones to the largest. An explicit
+  `VIO_LLM_MODEL` or a dashboard switch disables it.
+- **Token accounting (§21):** every generation records prompt/completion tokens from
+  Ollama's eval counts (`llm.usage()`), surfaced in `/api/telemetry`.
 - **Timeouts:** detect within 2 s (`available`); generation ceiling `VIO_LLM_TIMEOUT`
   (default 300 s), answer length `VIO_LLM_MAX_TOKENS` (default 3072).
 - **Honesty:** if the grounded call returns empty (a timeout on a too-big model), Vio
@@ -145,12 +151,20 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
 
 | Store | Module | What it holds |
 |---|---|---|
-| **Library** | `reasoner.py: Library` | passages; TF-IDF search (`+ semantic.py` re-rank if `sentence-transformers` installed) |
+| **Library** | `reasoner.py: Library` | passages; TF-IDF search (`+ semantic.py` re-rank if `sentence-transformers` installed) — **every passage carries provenance** (`knowledge_meta.json`): origin (teach/file/web/github/builtin/seed), source, timestamp, and a **validated** flag |
 | **Memory facts** | `reasoner.py` | `remember:` / `teach:` facts about you & the world |
-| **Skills** | `skills.py` | user-taught `skill:` reflexes (instant, verified) |
+| **Skills** | `skills.py` | user-taught `skill:` reflexes — registry entries with **version, status (active/disabled), timestamps, pre-install test count** |
 | **Episodic** | `reasoner.py` | past conversations (recall) |
 | **Knowledge graph** | `reasoner.py: graph` | relational edges learned at teach-time |
 | **Curiosity / Gaps** | `cognition/curiosity.py` | topics it couldn't answer (`gaps.json`) |
+
+**Knowledge validation (unvalidated web content is never trusted knowledge).**
+Taught, uploaded, builtin and GitHub-learned passages are *validated*. Pages auto-learned
+by web research are stored as **unvalidated leads** unless they come from a curated
+trusted domain (`sources.py`). Grounding prompts split the two: validated passages are
+"authoritative facts"; unvalidated ones are flagged *"NOT verified — leads only"*.
+An unvalidated passage alone can never make an answer wear the ✓ badge, and a research
+answer is only "verified" when it stands on a trusted source or ≥2 independent domains.
 
 - **Config-aware chunking:** FortiGate/router configs are split by stanza (`config/edit/
   set … next/end`) so a config is never shredded into prose fragments; a
@@ -189,8 +203,9 @@ collaborating on a single question. Acting agents are excluded unless confirmed.
     SkillBook reflex (name / trigger / reply) — plain data, never executable code.
   - Chat: `train skill: <topic>`, `list skill proposals`, `approve skill: <id>`,
     `reject skill: <id>`. APIs under `/api/skills/*`.
-  - Installation requires human approve → `SkillBook.add`. No auto-promote of skills,
-    agents, or models.
+  - Installation requires human approve → `SkillBook.add` (versioned; the approval runs a
+    **pre-install test** showing how many past questions the trigger would have fired on).
+    No auto-promote of skills, agents, or models.
 
 ---
 
@@ -276,7 +291,8 @@ A private WireGuard mesh — never a public port. `start_vio_remote.bat` sets al
 | *(any question)* | routed to the best agent |
 | `teach: <fact>` | store a fact |
 | `remember: <fact>` | store a personal fact |
-| `skill: name \| when: trigger \| reply: text` | define a reflex |
+| `skill: name \| when: trigger \| reply: text` | define a reflex (registry: v1, active) |
+| `disable skill: <name>` / `enable skill: <name>` | park a reflex without deleting it (registry lifecycle) |
 | `research: <topic \| URL>` | search/read the web, learn, answer with sources |
 | `look up …` / `search the web for …` | same |
 | `list sources` | show the trusted-source catalog |
@@ -286,11 +302,47 @@ A private WireGuard mesh — never a public port. `start_vio_remote.bat` sets al
 | `agents` / `list agents` | agent roster + shared brain |
 | `who answers: <q>` | which agents would handle it |
 | `council: <q>` / `team: <q>` / `ask all agents <q>` | agents collaborate |
+| `autonomy` | show the human-control level (advisory / assisted / autonomous) |
 | `learn from github owner/repo` | learn a repo's docs |
 | `draw: <description>` / `diagram:` / `sketch a …` | generate an HTML/SVG diagram (diagram-design skill) |
 | `what do you want to learn` | curiosity wishlist |
 | `what's in your library` | library summary |
 | `load knowledge` | load the built-in network & security knowledge base (offline) |
+
+---
+
+## 12.1 Worked workflow examples (redesign prompt §19 A–E)
+
+**A — Network troubleshooting** · *"Why is my FortiGate HA out of sync?"*
+`brain.read` classifies it as a `diagnose` question needing REASONING → `decide()` plans
+"reason with the local model" → `network_engineering` claims it (HA/adjacency terms in its
+intent) → grounded on validated library passages (teach/upload the configs and it reads
+them structurally) → LLM answers ranked-causes → exact-checks → fix → Confidence Engine +
+Critic score it; empty evidence would have forced an honest "share the config" instead.
+
+**B — Teach yourself** · *"train skill: FortiGate VIP checklist"*
+`SkillGrowAgent` → `train_skill_from_web` → `research()` (needs `VIO_ALLOW_NET=1`) →
+fetch + source-validate (trusted domain or ≥2 domains ⇒ validated) → learns the library →
+drafts a **pending** SkillProposal → you `approve skill: <id>` (the approval message shows
+how many past questions the trigger would have fired on) → the reflex is live at v1;
+`skill: list` shows version/status; `disable skill:` parks it.
+
+**C — User correction** · *"correct: 203.0.113.9"*
+The correction is stored against the previous question (`corrections.json`) → the same
+question (or a fuzzy variant ≥75% content-overlap) is served the corrected answer first,
+forever → the 👎 also feeds calibration (confidence scalar) and the Curator (never
+curates 👎'd turns into training data).
+
+**D — Missing knowledge** · *"what is the flimport protocol xyzzy"* → precision gates find
+no real support → honest `no-source` → **Curiosity logs a gap** and asks to be taught →
+`cover gaps` (or the user) closes it: research → source-validate → learn → the gap clears
+once answered confidently.
+
+**E — Multi-agent cooperation** · *"council: how do I segment a hybrid cloud"*
+The Master picks the top-3 advisory agents by score; each runs independently against the
+SHARED brain (no agent-to-agent chat, no side effects — acting agents are excluded unless
+confirmed) → the LLM merges the contributions into one answer that names who weighed in
+and where they disagree → every contribution is traceable via each Task record.
 
 ---
 
@@ -320,10 +372,13 @@ All routes except `/` and `/api/login` require a valid session (token login firs
 | `VIO_ALLOWED_HOSTS` | — | comma-separated allowed `Host` headers (your tailnet name) |
 | `VIO_HTTPS` | — | mark cookie `Secure` (TLS terminates in front) |
 | `VIO_LLM_URL` | `http://localhost:11434` | Ollama endpoint |
-| `VIO_LLM_MODEL` | *(auto)* | force a model tag |
+| `VIO_LLM_MODEL` | *(auto)* | force a model tag (disables routing) |
+| `VIO_MODEL_ROUTING` | off | route per prompt: short/simple → the family's small model, analytic/heavy → the largest (`pick_model`, §14) |
 | `VIO_LLM_TIMEOUT` | `300` | generation timeout (s) |
 | `VIO_LLM_MAX_TOKENS` | `3072` | max answer length |
 | `VIO_ALLOW_NET` | off | enable web research |
+| `VIO_AUTONOMY` | `assisted` | human-control level (§22): `advisory` gates every acting action · `assisted` lets opted-in web research run · `autonomous` = headroom for pre-approved low-risk tools (write still gates) |
+| `VIO_RESEARCH_CACHE_TTL` | `3600` | seconds an identical research query is served from the in-RAM cache (0 = off) |
 | `VIO_NET_ALLOW` / `VIO_NET_BLOCK` | — | restrict fetchable domains |
 | `VIO_DATA_DIR` | *(mind/)* | where the brain-on-disk lives |
 | `VIO_NO_BROWSER` | — | don't auto-open a browser (service mode) |
@@ -334,10 +389,11 @@ All routes except `/` and `/api/login` require a valid session (token login firs
 
 ## 15. The brain on disk (data files, in `VIO_DATA_DIR`)
 
-`knowledge.json` (library) · `mind_memory.json` (facts) · `skills.json` · `episodic.json`
-· `graph.json` · `gaps.json` · `traces.jsonl` (behaviour) · `curated_sft.jsonl` ·
-`model_state.json` (promotions) · `vio_token.txt` (git-ignored secret). **These are your
-brain — back them up.** All git-ignored (per-machine).
+`knowledge.json` (library) · `knowledge_meta.json` (per-passage provenance: origin,
+source, timestamp, validated flag) · `mind_memory.json` (facts) · `skills.json` ·
+`episodic.json` · `graph.json` · `gaps.json` · `traces.jsonl` (behaviour) ·
+`curated_sft.jsonl` · `model_state.json` (promotions) · `vio_token.txt` (git-ignored
+secret). **These are your brain — back them up.** All git-ignored (per-machine).
 
 ---
 
@@ -356,14 +412,15 @@ brain — back them up.** All git-ignored (per-machine).
   `teach_datasets.py`.
 - **Web research:** `websearch.py`, `sources.py`.
 - **Diagrams:** `diagramdet.py` (deterministic SVG — default, never blank), `diagramgen.py` + `vendor/diagram-design/` (skill engine, Cathryn Lavery MIT — `VIO_DIAGRAM_ENGINE=skill`).
-- **Answer quality:** `quality.py` (verification gate + citations), `configparse.py`
+- **Answer quality:** `brain.py` (verification gate + citations + the evidence-class decision core), `configparse.py`
   (structured config), `golden_eval.py` (correctness/safety/latency gate).
 - **Training pipeline:** `trainpipe.py` (licensed collect → sanitize → dedupe → chunk → license-gate → RAG/SFT/eval split → grounded SFT → quality/license/dedup/leakage reports).
 - **Self-improvement:** `selfimprove.py`.
 - **Training (external/offline):** `train_all.py`, `train_model.py`,
   `data_ingest.py`, `neural_model.py`, `trainpipe.py`.
 - **Tests:** `capability_test.py` (26 checks), `golden_eval.py` (quality gate),
-  `test_agents.py`, `test_selfimprove.py`, `test_websearch.py`, `test_configparse.py`.
+  `test_agents.py`, `test_fixes.py` (provenance/validation/registry/Task-schema guard),
+  `test_selfimprove.py`, `test_websearch.py`, `test_configparse.py`.
 
 ---
 
@@ -418,6 +475,14 @@ Banner confirms `🧠 model:` and `🌐 web research:`. Then open `http://localh
 ---
 
 ## 20. Max-level autonomy (governed — not unconstrained)
+
+**Human-control levels (§22) — `VIO_AUTONOMY`, ask Vio anytime with `autonomy`:**
+
+| Level | Meaning |
+|---|---|
+| `advisory` | Analyze and recommend only — every acting action (even opted-in web research) asks first |
+| `assisted` *(default)* | Perform after approval — opted-in read-only web research runs; anything that writes asks first |
+| `autonomous` | Pre-approved low-risk actions run unattended — write STILL gates (no write tools exist yet) |
 
 **Goal:** every agent is free to *develop itself* — research the internet, draft new
 skills, grow the shared library — while remaining under hard safety rails.

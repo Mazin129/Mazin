@@ -32,7 +32,9 @@ def main():
     st = m.si.traces.stats()
     check("interactions captured", st["interactions"] >= 4, str(st))
     check("feedback captured", st["feedback"] == 2 and st["thumbs_up"] == 1 and st["thumbs_down"] == 1, str(st))
-    check("provenance in traces", "knowledge" in st["by_agent"] and "math" in st["by_agent"], str(st))
+    # provenance names REAL agents: the math answer runs in the core front (math is a
+    # tool, not an agent), so its traces attribute to 'core' — never a retired name.
+    check("provenance in traces", "knowledge" in st["by_agent"] and "core" in st["by_agent"], str(st))
 
     # curator: keeps good, drops no-source and 👎
     curated = m.si.curator.curate()
@@ -44,7 +46,9 @@ def main():
     mm = m.si.models
     gated = mm.promote("candidate-v2")
     check("promote gated without approval", gated.get("gated") and not gated.get("ok"))
-    ok = mm.promote("candidate-v2", approved=True)
+    # require_golden=False = the sanctioned live-switch path (UI brain dropdown);
+    # the golden gate itself is pinned by golden_eval.py and SelfImprovement.propose.
+    ok = mm.promote("candidate-v2", approved=True, require_golden=False)
     check("approved promote applies", ok.get("ok") and mm.current() == "candidate-v2")
     rb = mm.rollback()
     check("rollback reverts", rb.get("ok") and mm.current() != "candidate-v2")

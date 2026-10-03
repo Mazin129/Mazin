@@ -37,6 +37,7 @@ class TraceLog:
 
     def record(self, q, result, evidence=None):
         ev = evidence or {}
+        task = result.get("task") or {}
         rec = {
             "id": "%d" % int(time.time() * 1000),
             "ts": time.time(),
@@ -47,6 +48,10 @@ class TraceLog:
             "confidence": result.get("confidence"),
             "system": result.get("system"),
             "domain": result.get("domain"),
+            # task-schema observability (§3/§21): which capability call answered, and
+            # how it ended (done/gated/failed) — joins answers to capability dispatches.
+            "task_id": task.get("task_id", ""),
+            "task_status": task.get("status", ""),
             "evidence": {k: ev.get(k) for k in ("top", "hits", "facts")},
             # FULL reasoning trace (not shallow Q→A): the grounding the answer used and
             # the reasoning/critic steps it took — this is what a judgement-learning

@@ -52,6 +52,24 @@ SECURITY_SOURCES = [
 TOPICS = sorted({t for _, _, _, t in SECURITY_SOURCES})
 
 
+def domains():
+    """Hostnames of every curated trusted source (github.com for the repos). Used by
+    web research as the validation gate: a fetched page from one of these domains is
+    trusted knowledge; anything else is an unvalidated lead (redesign prompt §5/§6)."""
+    import urllib.parse
+    out = set()
+    for _name, kind, ref, _tp in SECURITY_SOURCES:
+        if kind == "github":
+            out.add("github.com")
+        else:
+            host = (urllib.parse.urlparse(ref).hostname or "").lower()
+            if host:
+                # trust the registrable domain, so docs.aws.amazon.com trusts amazon.com
+                parts = host.rsplit(".", 2)
+                out.add(".".join(parts[-2:]) if len(parts) >= 2 else host)
+    return out
+
+
 def catalog(topic=None):
     """Return the source entries, optionally filtered by a topic substring."""
     if not topic:

@@ -22,3 +22,5 @@ diagrams/
 trainpipe_out/
 corrections.json
 transcript.jsonl
+knowledge_meta.json
+skill_proposals.json

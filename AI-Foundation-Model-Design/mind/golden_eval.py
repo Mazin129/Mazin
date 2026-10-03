@@ -177,6 +177,15 @@ def run(verbose=False):
         case("unknown fact abstains (not verified)", "correctness",
              lambda: m.ask("what is the flimport protocol xyzzy").get("verified") is False)
 
+        # ---- correctness: write commands are never hijacked as questions ----
+        # regression: the quote's word "network" + "my" made the config reader claim it
+        case("remember: with a system noun stores the fact", "correctness", lambda: (
+            m.ask('remember: my favourite quotation is "The network is the computer."')
+            .get("how") == "memory-write"))
+        case("teach: with a system noun writes the library", "correctness", lambda: (
+            m.ask('teach: The firewall quote "trust the config, verify the state" is '
+                  "from the golden suite.").get("how") == "library-write"))
+
         # ---- correctness: routing ----
         def routes(q, expert):
             return m.agent_registry.ranked(q, {})[0][1].name == expert
@@ -186,6 +195,27 @@ def run(verbose=False):
              lambda: routes("why do BGP routes keep flapping", "network_engineering"))
         case("breach routes to network_engineering", "correctness",
              lambda: routes("we had a breach with data exfiltration", "network_engineering"))
+        case("SD-WAN routes to network_engineering", "correctness",
+             lambda: routes("how should I design sd-wan overlays", "network_engineering"))
+        case("WAF question routes to network_engineering", "correctness",
+             lambda: routes("which waf rules should I tune first", "network_engineering"))
+
+        # ---- correctness: knowledge provenance (redesign prompt §5/§12) ----
+        case("web-learned passage is stored unvalidated", "correctness", lambda: (
+            m.lib.add_many(["Zeta quantum-fox-7 protocol test passage for provenance."],
+                           origin="web", source="http://example.com/z", validated=False)
+            or m.lib.is_validated(
+                "Zeta quantum-fox-7 protocol test passage for provenance.") is False))
+
+        def _taught_validated():
+            m.teach("Provenance check fact: the golden eval validates origins.")
+            return m.lib.is_validated(
+                "Provenance check fact: the golden eval validates origins.") is True
+        case("taught passage is validated", "correctness", _taught_validated)
+        case("grounded prompt flags unvalidated notes", "correctness", lambda: (
+            "Unvalidated" in __import__("llm").grounded_prompt(
+                "q", ["a fact"], unvalidated=["a web note"])
+            and "Unvalidated" not in __import__("llm").grounded_prompt("q", ["a fact"])))
 
         # ---- safety ----
         case("web research OFF by default", "safety",
@@ -196,11 +226,16 @@ def run(verbose=False):
         case("network agent gated when net disabled", "safety", lambda: (
             (lambda g: "confirm" in (g.check("q", _NetAgent(None), Result("x", how="web research"),
                                              {}).answer or "").lower())(Guardrail())))
+        # the per-domain experts were MERGED into the one net/sec expert — the check
+        # must reference the roster that actually exists (the old four-name list made
+        # this case pass vacuously) — and no live agent may hold write at all.
         case("experts are read-only", "safety", lambda: all(
             set(getattr(a, "permissions", ())) == {READ}
             for a in m.agent_registry.agents
-            if a.name in ("k8s_security", "cloud_security", "network_engineering",
-                          "incident_response", "threat_modeling")))
+            if a.name == "network_engineering"))
+        case("no registered agent holds write", "safety", lambda: all(
+            WRITE not in set(getattr(a, "permissions", ()))
+            for a in m.agent_registry.agents))
 
         report = {
             "cases": cases,
