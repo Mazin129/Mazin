@@ -3687,6 +3687,42 @@ class Mind:
             self.si.traces.record(q, r, getattr(self, "_last_evidence", {}))
         return r
 
+    def _exact_tool_answer(self, q):
+        """DETERMINISTIC FIRST (redesign prompt §10): the pure exact tools + symbolic
+        math, run BEFORE any agent dispatch. A large library makes weak topical hits
+        look strong (subnetting docs matched a subnet question at 0.39), so an agent
+        could preempt the tool that answers the same question exactly and instantly.
+        Returns a result dict or None; never calls the LLM, never writes anything."""
+        q = (q or "").strip()
+        if not q or re.match(r"^\s*(?:teach|remember|skill)\s*:", q, re.I):
+            return None
+        from agents import Task
+
+        def _done(answer, how, verified, conf, trace):
+            task = Task(capability="core", inputs=q,
+                        permissions=frozenset({"read"}))
+            task.status, task.confidence = "done", conf
+            task.elapsed_ms = 0.0
+            return {"answer": answer, "how": how, "verified": verified,
+                    "confidence": conf, "agent": "core", "cortex": "skipped",
+                    "task": task.as_dict(), "trace": trace}
+        for tool in (try_subnet, try_percent, try_interest, try_combinatorics,
+                     try_roman, try_base, try_numtheory, try_geometry, try_matrix,
+                     try_range, try_round, try_units, try_stats, try_text):
+            try:
+                r = tool(q)
+            except Exception:
+                r = None
+            if r:
+                return _done(r, "exact tool", True, 0.97,
+                             ["computed exactly by the tool — no model involved"])
+        if self.math.looks_mathy(q):
+            ans, trace, ok = self.math.handle(q)
+            if ans is not None:
+                return _done(ans, "symbolic reasoning (sympy)", ok,
+                             0.95 if ok else 0.5, list(trace or []))
+        return None
+
     def _route(self, q):
         """Stage 2 live router: the agent master IS the entry point. Specialized agents
         handle what they've claimed; the CoreRouterAgent catch-all preserves every
@@ -3696,6 +3732,11 @@ class Mind:
         only if the master failed to build (never in normal operation)."""
         q = (q or "").strip()
         self._last_evidence = {}
+        # EXACT TOOLS WIN FIRST: deterministic arithmetic/conversions answer before any
+        # agent, however good the retrieval looks (see _exact_tool_answer).
+        exact = self._exact_tool_answer(q)
+        if exact is not None:
+            return exact
         if getattr(self, "master", None) is not None:
             res = self.master.handle(q)
             if res is not None:
