@@ -183,6 +183,15 @@ def route(text):
             re.search(r"distance|midpoint|slope|line", t):
         return text
 
+    # subnetting / IP questions -> pass through RAW. normalize_math shreds an IP
+    # ("192.168.44.0/22" became "192.168 . 44.0 / 22. 30 .") and strips the words
+    # ("subnet", "usable hosts") that the exact subnet tool keys on — so a real
+    # subnetting question reached the LLM as unanswerable fragments and ground for
+    # minutes. The Mind's subnet tool answers these exactly.
+    if re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b|/\d{1,2}\b|\bsub-?net|\bnetmask|"
+                 r"\bwildcard\b|usable\s+host", t):
+        return text
+
     # explicit teaching / memory (natural phrasing)
     if t.startswith(("remember that", "remember")) or t.startswith(("تذكر",)):
         fact = re.sub(r"^(remember that|remember|تذكر ان|تذكر أن|تذكر)\s*", "", text, flags=re.I).strip(" :؟?.")
