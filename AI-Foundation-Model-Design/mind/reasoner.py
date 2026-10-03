@@ -379,6 +379,95 @@ def try_interest(q):
     return None
 
 
+def _mask_dotted(cidr):
+    """/27 → '255.255.255.224' (and None outside 0..32)."""
+    if not (0 <= cidr <= 32):
+        return None
+    mask = (0xFFFFFFFF << (32 - cidr)) & 0xFFFFFFFF if cidr else 0
+    return ".".join(str((mask >> s) & 0xFF) for s in (24, 16, 8, 0))
+
+
+def _usable_hosts(cidr):
+    """Usable host addresses in a /n block (31 → 2 point-to-point, 32 → 1)."""
+    if cidr >= 31:
+        return {31: 2, 32: 1}.get(cidr, 0)
+    return 2 ** (32 - cidr) - 2
+
+
+def try_subnet(q):
+    """IPv4 subnetting — exact, deterministic arithmetic for Vio's home domain:
+    usable-host counts, mask ⇄ CIDR ⇄ wildcard, and which subnet of a block fits a
+    host requirement with the least waste. NEVER needs a model. Returns a string or
+    None (not a subnetting question)."""
+    ql = (q or "").lower()
+    if not re.search(r"subnet|netmask|wildcard|usable|host|\b\d{1,3}(?:\.\d{1,3}){3}\b|/\d{1,2}\b", ql):
+        return None
+    cidrs = [int(c) for c in re.findall(r"/(\d{1,2})(?!\d)", q) if 0 <= int(c) <= 32]
+    ips = [ip for ip in re.findall(r"\b((?:\d{1,3}\.){3}\d{1,3})\b", q)
+           if all(0 <= int(o) <= 255 for o in ip.split("."))]
+    hosts = None
+    m = re.search(r"(\d{1,7})\s*(?:usable\s+)?hosts?\b|accommodates\s+(\d{1,7})", ql)
+    if m:
+        hosts = int(m.group(1) or m.group(2))
+    if hosts is None:
+        m = re.search(r"(\d{1,7})\s+host\s+addresse?s", ql)
+        if m:
+            hosts = int(m.group(1))
+    if not cidrs and not ips and hosts is None:
+        return None
+
+    # 1) "how many usable hosts in /26" (or "in 10.0.0.0/26")
+    if cidrs and re.search(r"how many|usable|host capacity|hosts fit|addresses", ql) \
+            and re.search(r"host|address|usable", ql) \
+            and not re.search(r"netmask|wildcard|which subnet|carve|accommodat", ql):
+        c = cidrs[0]
+        return (f"A /{c} block has {2 ** (32 - c):,} addresses, "
+                f"{_usable_hosts(c):,} usable for hosts"
+                + (f" (network + broadcast reserved)." if c <= 30 else "."))
+
+    # 2) mask ⇄ CIDR conversions ("mask for /27", "/27 in dotted", "255.255.255.224 to cidr")
+    if cidrs and re.search(r"netmask|mask|dotted|wildcard", ql) and not hosts:
+        c = cidrs[0]
+        return (f"/{c} = {_mask_dotted(c)} (wildcard 0.0.0.{(1 << (32 - c)) - 1 & 0xFF}"
+                f"{'…' if c < 24 else ''}) — {_usable_hosts(c):,} usable hosts.")
+    m = re.search(r"\b((?:\d{1,3}\.){3}\d{1,3})\b", q)
+    if m and re.search(r"to\s+cidr|cidr\s+is|what\s+prefix|in\s+cidr|slash", ql) \
+            and not cidrs:
+        octets = [int(o) for o in m.group(1).split(".")]
+        bits = "".join(f"{o:08b}" for o in octets)
+        if "01" in bits:
+            return f"{m.group(1)} is not a contiguous netmask."
+        c = bits.count("1")
+        return f"{m.group(1)} = /{c} (wildcard {'.'.join(str(255 - o) for o in octets)})"
+
+    # 3) hosts required → the least-wasteful mask, and the derived subnets of a block
+    if hosts is not None:
+        b = (hosts + 1).bit_length()               # smallest b with 2^b − 2 ≥ hosts
+        p = 32 - b
+        mask = _mask_dotted(p)
+        wc = ".".join(str(255 - int(o)) for o in mask.split("."))
+        out = (f"A /{p} (netmask {mask}, wildcard {wc}) gives exactly "
+               f"{2 ** b - 2:,} usable hosts — the least waste for {hosts:,} hosts"
+               + (f" (uses {hosts:,} of {2 ** b - 2:,})." if hosts < 2 ** b - 2 else "."))
+        if ips and cidrs:
+            base_ip, base = ips[0], cidrs[0]
+            if p < base:
+                return out + (f" A /{p} is LARGER than the /{base} block — it cannot "
+                              "be carved from it.")
+            base_int = int.from_bytes(bytes(int(o) for o in base_ip.split(".")), "big")
+            block = 2 ** b
+            n_subs = 2 ** (p - base)
+            first3 = [".".join(str(((base_int + i * block) >> s) & 0xFF)
+                               for s in (24, 16, 8, 0)) for i in range(min(3, n_subs))]
+            last = ".".join(str(((base_int + (n_subs - 1) * block) >> s) & 0xFF)
+                            for s in (24, 16, 8, 0))
+            out += (f" From {base_ip}/{base} you can carve {n_subs:,} such subnet(s): "
+                    f"{', '.join(f'{s}/{p}' for s in first3)}"
+                    + (f" … {last}/{p}." if n_subs > 3 else "."))
+        return out
+    return None
+
+
 def try_text(q):
     m = re.search(r"(?:count|how many)\s+(word|character|letter)s?\s+(?:in|of|are in)?\s*[:\-]?\s*(.+)",
                   q, re.I)
@@ -4047,8 +4136,9 @@ class Mind:
             if r:
                 return {"answer": r, "how": "quadratic analysis", "verified": True, "trace": []}
 
-        # 1a) everyday exact tools (order matters: most specific first)
-        for tool in (try_percent, try_interest, try_combinatorics, try_roman, try_base,
+        # 1a) everyday exact tools (order matters: most specific first — subnetting is
+        # Vio's home domain and pure arithmetic, so it leads)
+        for tool in (try_subnet, try_percent, try_interest, try_combinatorics, try_roman, try_base,
                      try_numtheory, try_geometry, try_matrix, try_range, try_round, try_random,
                      try_units, try_stats, try_text):
             r = tool(q)

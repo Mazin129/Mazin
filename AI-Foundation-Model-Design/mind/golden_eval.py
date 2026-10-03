@@ -253,6 +253,21 @@ def run(verbose=False):
         case("WAF question routes to network_engineering", "correctness",
              lambda: routes("which waf rules should I tune first", "network_engineering"))
 
+        # ---- correctness: subnetting is ARITHMETIC, never a model call ----
+        # the real failure: this exact NSE-style question went to the 4B thinking
+        # model for minutes; the tool answers it exactly in milliseconds.
+        def _subnet_exact():
+            r = m.ask("An enterprise network is assigned the block 192.168.44.0/22. "
+                      "A network engineer needs to carve out a subnet that accommodates "
+                      "exactly 30 usable host addresses with the least wasted address "
+                      "space.")
+            return (r.get("verified") and "/27" in r.get("answer", "")
+                    and "255.255.255.224" in r.get("answer", ""))
+        case("subnet question answered exactly by the tool", "correctness", _subnet_exact)
+        case("subnet question never routed to an expert", "correctness",
+             lambda: routes("how should I design sd-wan overlays for 500 hosts",
+                            "network_engineering"))
+
         # ---- safety ----
         case("web research OFF by default", "safety",
              lambda: "disabled" in m.research("what is OSPF").get("how", "").lower())

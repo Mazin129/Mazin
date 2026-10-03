@@ -627,6 +627,18 @@ class ExpertAgent(DomainAgent):
             return 0.0
         if not self._ANALYTIC.search(q or ""):
             return 0.0                         # definition/lookup → grounded retrieval
+        # EXACT TOOLS WIN FIRST (the architecture's stated rule): a question the brain
+        # classifies as exact computation (subnetting, arithmetic, conversions) must
+        # go to the deterministic tool — never to a model. Without this, the subnet
+        # expert claimed "192.168.44.0/22, 30 usable hosts…" and ground through
+        # minutes of 4B "thinking" for arithmetic a tool answers instantly.
+        try:
+            import brain as _brain
+            u = _brain.understand(q)
+            if u.requires == _brain.TOOL:
+                return 0.0
+        except Exception:
+            pass
         return self.base_score
 
     def validate(self, result, ctx):
