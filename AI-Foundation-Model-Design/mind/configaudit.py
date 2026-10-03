@@ -811,6 +811,23 @@ def cleanup_plan(objects):
     return "\n".join(lines)
 
 
+def internet_policies(objects, direction):
+    """Accepting firewall policies that let traffic come FROM the internet (inbound:
+    source interface internet-facing) or go TO it (outbound: destination interface
+    internet-facing). Exact — read from the interfaces and policies, no model."""
+    wan = _wan_interfaces(objects)
+    out = []
+    for o in objects:
+        if not is_firewall_policy(o) or _val(o, "action") != "accept":
+            continue
+        if _val(o, "status") == "disable":
+            continue
+        side = "srcintf" if direction == "in" else "dstintf"
+        if any(_is_wan(i, wan) for i in _vals(o, side)):
+            out.append(o)
+    return out, sorted(wan)
+
+
 def is_firewall_policy(o):
     """A FIREWALL policy (firewall policy / policy6 / proxy-policy …) — not every object
     whose kind merely contains the word. `config system password-policy` is a settings

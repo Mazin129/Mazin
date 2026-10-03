@@ -22,3 +22,6 @@ diagrams/
 trainpipe_out/
 corrections.json
 transcript.jsonl
+
+# real-world test reports (machine-specific)
+reports/

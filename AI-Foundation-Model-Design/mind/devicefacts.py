@@ -143,8 +143,14 @@ def _inventory(mind):
     # 3. tables: an inventory sheet with a serial / model / version column
     for tbl in getattr(mind, "tables", []) or []:
         heads = {h.lower(): h for h in tbl.headers}
-        namecol = next((heads[h] for h in heads if re.search(
-            r"host|device|name|site|firewall|location", h)), tbl.headers[0])
+        # the column that NAMES the device: hostname/device first, a site only last
+        namecol = None
+        for pat in (r"host\s*name|hostname", r"device|firewall|appliance", r"\bname\b",
+                    r"site|location|branch"):
+            namecol = next((heads[h] for h in heads if re.search(pat, h)), None)
+            if namecol:
+                break
+        namecol = namecol or tbl.headers[0]
         for attr, pat in ATTRS.items():
             col = next((heads[h] for h in heads if re.search(pat, h)), None)
             if not col:
