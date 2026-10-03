@@ -163,7 +163,7 @@ def build_skills(out=None, repeat=3):
     return out
 
 
-def pull_huggingface(name, config, fields, limit):
+def pull_huggingface(name, config, fields, limit, skip=0):
     try:
         from datasets import load_dataset
     except Exception:
@@ -171,6 +171,8 @@ def pull_huggingface(name, config, fields, limit):
     print(f"→ streaming Hugging Face dataset '{name}'"
           f"{f' ({config})' if config else ''} …")
     ds = load_dataset(name, config, split="train", streaming=True)
+    if skip:
+        ds = ds.skip(skip)          # resume past records an earlier batch already taught
     return records_to_passages(ds, fields, limit)
 
 
@@ -351,6 +353,8 @@ def main(argv=None):
     p_hf = sub.add_parser("hf", help="Hugging Face dataset")
     p_hf.add_argument("name"); p_hf.add_argument("--config", default=None)
     p_hf.add_argument("--fields", default="text"); p_hf.add_argument("--n", type=int, default=1000)
+    p_hf.add_argument("--skip", type=int, default=0, help="skip the first N records "
+                      "(resume past an earlier batch — the library dedupes anyway)")
 
     p_kg = sub.add_parser("kaggle", help="Kaggle dataset (owner/slug)")
     p_kg.add_argument("slug"); p_kg.add_argument("--fields", default="")
@@ -370,6 +374,7 @@ def main(argv=None):
 
     p_pre = sub.add_parser("preset", help="one of the curated datasets")
     p_pre.add_argument("name"); p_pre.add_argument("--n", type=int, default=1000)
+    p_pre.add_argument("--skip", type=int, default=0, help="skip the first N records")
     sub.add_parser("list", help="show curated datasets")
 
     a = ap.parse_args(argv)
@@ -390,10 +395,11 @@ def main(argv=None):
         return
     if a.cmd == "preset":
         src, nm, cfg, fields, _ = CURATED[a.name]
-        passages = pull_huggingface(nm, cfg, fields, a.n)
+        passages = pull_huggingface(nm, cfg, fields, a.n, skip=getattr(a, "skip", 0))
         teach_into_vio(passages, f"huggingface:{nm}")
     elif a.cmd == "hf":
-        passages = pull_huggingface(a.name, a.config, tuple(a.fields.split(",")), a.n)
+        passages = pull_huggingface(a.name, a.config, tuple(a.fields.split(",")),
+                                    a.n, skip=getattr(a, "skip", 0))
         teach_into_vio(passages, f"huggingface:{a.name}")
     elif a.cmd == "kaggle":
         fields = tuple(f for f in a.fields.split(",") if f) or None
