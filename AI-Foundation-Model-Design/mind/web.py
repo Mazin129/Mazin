@@ -955,6 +955,26 @@ class H(BaseHTTPRequestHandler):
                                      "library": lib}, ensure_ascii=False))
         elif path == "/api/skills":
             self._s(200, json.dumps({"skills": MIND.skills.list()}, ensure_ascii=False))
+        elif path == "/api/library":
+            # structured provenance report (redesign prompt §5): passages per origin
+            # with the validated/unvalidated split — the dashboard's brain-composition view
+            from collections import Counter
+            origins, unval = Counter(), Counter()
+            meta = getattr(MIND.lib, "meta", {}) or {}
+            for d in MIND.lib.docs:
+                m = meta.get(d) or {"origin": "legacy", "validated": True}
+                o = m.get("origin", "legacy")
+                origins[o] += 1
+                if not m.get("validated", True):
+                    unval[o] += 1
+            self._s(200, json.dumps({
+                "total": len(MIND.lib.docs),
+                "origins": [{"origin": o, "count": n,
+                             "unvalidated": unval.get(o, 0)}
+                            for o, n in origins.most_common()]}, ensure_ascii=False))
+        elif path == "/api/autonomy":
+            from agents import autonomy_level
+            self._s(200, json.dumps({"level": autonomy_level()}, ensure_ascii=False))
         elif path == "/api/agents":
             rep = MIND.agents_report() if hasattr(MIND, "agents_report") else {"agents": []}
             self._s(200, json.dumps(rep, ensure_ascii=False))
@@ -1064,6 +1084,17 @@ class H(BaseHTTPRequestHandler):
             on = bool(body.get("on"))
             self._s(200, json.dumps({"answer": MIND.set_web(on), "web": _web_research_on()},
                                     ensure_ascii=False))
+
+        elif self.path == "/api/autonomy":               # human-control level (§22)
+            from agents import autonomy_level, _LEVELS
+            lvl = str(body.get("level", "")).strip().lower()
+            if lvl in _LEVELS:
+                os.environ["VIO_AUTONOMY"] = lvl
+                self._s(200, json.dumps({"ok": True, "level": autonomy_level()},
+                                        ensure_ascii=False))
+            else:
+                self._s(400, json.dumps({"ok": False, "level": autonomy_level(),
+                                         "allowed": list(_LEVELS)}, ensure_ascii=False))
 
         elif self.path == "/api/learn":
             # every file type goes through one reader (readers.py): Word, Excel,
