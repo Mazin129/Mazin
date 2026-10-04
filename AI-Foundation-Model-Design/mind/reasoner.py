@@ -430,6 +430,21 @@ def try_subnet(q):
         c = cidrs[0]
         return (f"/{c} = {_mask_dotted(c)} (wildcard 0.0.0.{(1 << (32 - c)) - 1 & 0xFF}"
                 f"{'…' if c < 24 else ''}) — {_usable_hosts(c):,} usable hosts.")
+
+    # 2b) "carve a /26 from 10.9.0.0/24" / "is /26 enough for a subnet" — describe
+    # the named prefix exactly (usable hosts, mask, how many fit in the base block)
+    if cidrs and re.search(r"carve|subnet|least waste|fit|block", ql) and not hosts:
+        c = max(cidrs)                       # the most specific prefix is the carve
+        base = min(cidrs)                    # the block it's carved from (may equal)
+        out = (f"A /{c} (netmask {_mask_dotted(c)}) has {_usable_hosts(c):,} usable "
+               f"host addresses.")
+        if ips and c > base:
+            base_int = int.from_bytes(bytes(int(o) for o in ips[0].split(".")), "big")
+            n_subs = 2 ** (c - base)
+            first = ".".join(str((base_int >> s) & 0xFF) for s in (24, 16, 8, 0))
+            out += (f" From {ips[0]}/{base} you can carve {n_subs:,} such subnet(s): "
+                    f"{first}/{c}, then consecutive /{c} blocks.")
+        return out
     m = re.search(r"\b((?:\d{1,3}\.){3}\d{1,3})\b", q)
     if m and re.search(r"to\s+cidr|cidr\s+is|what\s+prefix|in\s+cidr|slash", ql) \
             and not cidrs:
@@ -3270,7 +3285,10 @@ class Mind:
                         "how": "device facts (stored)", "verified": True,
                         "cortex": "skipped", "trace": ["command output stored"]}, pre)
             df = devicefacts.answer(self, raw)
-            if df:
+            if df and not re.match(r"^\s*device\s*[:\-]\s*\S+\s+\S+", raw):
+                # "device: NAME <command>" is a live netdev command (read-only,
+                # allowlisted) — handled by _core_front's device intent, never by
+                # the taught-facts lookup.
                 return self._after_ask(raw, df, pre, answered=True)
         except Exception as e:
             pre.append(f"device facts unavailable: {type(e).__name__}")
@@ -3818,7 +3836,16 @@ class Mind:
         could preempt the tool that answers the same question exactly and instantly.
         Returns a result dict or None; never calls the LLM, never writes anything."""
         q = (q or "").strip()
+        # WRITE COMMANDS and COMMAND-FORM inputs route through their own handlers
+        # (teach:/remember:/skill:, _core_front's sql:/device: intents, the
+        # SandboxAgent) — the pure tools must not preempt them (try_stats saw
+        # "sum(range(101))" and answered a stats question!).
         if not q or re.match(r"^\s*(?:teach|remember|skill)\s*:", q, re.I):
+            return None
+        if re.match(r"^\s*(?:run\s+|compute\s+|execute\s+)?python\s*[:\-]", q, re.I) \
+                or q.startswith("```python") \
+                or re.match(r"^\s*sql\s*[:\-]", q, re.I) \
+                or re.match(r"^\s*device\s*[:\-]\s*\S+\s+\S+", q, re.I):
             return None
         from agents import Task
 
