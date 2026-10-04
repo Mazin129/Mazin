@@ -133,6 +133,17 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
        border-radius:12px;padding:11px;font-size:14px;font-weight:600;cursor:pointer;transition:.15s}
  .newchat:hover{border-color:var(--accent);background:var(--panel2)}
  .nav{display:flex;flex-direction:column;gap:3px}
+ .histwrap{display:flex;flex-direction:column;min-height:0;flex:1;margin-top:2px}
+ .hist-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+       padding:2px 11px 6px;font-weight:600}
+ .hist-list{overflow-y:auto;min-height:0;display:flex;flex-direction:column;gap:2px;padding-right:2px}
+ .hist-item{border:0;background:transparent;color:var(--txt);text-align:left;border-radius:10px;
+       padding:9px 11px;font-size:13px;cursor:pointer;font-family:inherit;line-height:1.35;
+       display:flex;flex-direction:column;gap:2px;transition:.13s}
+ .hist-item:hover{background:var(--panel2)}
+ .hist-item.on{background:var(--panel2);box-shadow:inset 2px 0 0 var(--accent)}
+ .hist-item .q{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .hist-item .when{font-size:10.5px;color:var(--dim);font-family:var(--mono)}
  .navbtn{display:flex;align-items:center;gap:11px;text-decoration:none;text-align:left;
        border:0;background:transparent;color:var(--dim);border-radius:10px;padding:10px 11px;
        font-size:14px;cursor:pointer;transition:.13s;font-family:inherit}
@@ -285,6 +296,10 @@ PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
      <button class="navbtn" onclick="teachFolder()"><span>📁</span> Teach a folder</button>
      <input type="file" id="file" multiple accept=".pdf,.docx,.docm,.odt,.rtf,.txt,.text,.md,.rst,.html,.htm,.xlsx,.xlsm,.ods,.csv,.tsv,.pptx,.odp,.eml,.json,.yaml,.yml,.xml,.ini,.cfg,.conf,.config,.log,.toml,.drawio,.vsdx,.png,.jpg,.jpeg,.gif,.bmp,.tif,.tiff,.webp,.zip,.doc,.xls,.ppt,.msg" hidden onchange="upload()">
    </nav>
+   <div class="histwrap">
+     <div class="hist-title">History</div>
+     <div class="hist-list" id="histList"><div class="empty" style="padding:8px 11px;text-align:left">…</div></div>
+   </div>
    <div class="side-foot">
      <div class="brain-card" id="brain" title="reasoning cortex">🧠 …</div>
      <div class="stat" id="status">…</div>
@@ -389,7 +404,10 @@ function askCard(i){inp.value=CARDS[i].q;send();}
 function chip(e){inp.value=e.textContent;inp.focus();autosize()}
 function hideEmpty(){const e=document.getElementById('empty');if(e)e.style.display='none';}
 function newChat(){[...log.querySelectorAll('.row')].forEach(r=>r.remove());
- const e=document.getElementById('empty');if(e)e.style.display='';inp.focus();
+ try{sessionStorage.setItem('vio-fresh','1')}catch(e){}
+ const e=document.getElementById('empty');if(e)e.style.display='';
+ document.querySelectorAll('.hist-item').forEach(h=>h.classList.remove('on'));
+ inp.focus();
  document.getElementById('side').classList.remove('open');}
 function toggleTheme(){const r=document.documentElement;
  const cur=r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
@@ -455,13 +473,14 @@ async function send(){
  const rawLines=raw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
  const isCmd=l=>/^(teach|remember|skill)\s*:/i.test(l);
  const lines=(rawLines.length>1 && rawLines.every(isCmd))?rawLines:[raw];
+ try{sessionStorage.removeItem('vio-fresh')}catch(e){}
  inp.value='';autosize();busy=true;sendBtn.disabled=true;
  for(const t of lines){
    addUser(t);
    const {b}=bubble('bot');
    if(deep){await solveStream(t,b)} else {await ask(t,b)}
  }
- busy=false;sendBtn.disabled=false;loadStatus();inp.focus();
+ busy=false;sendBtn.disabled=false;loadStatus();loadConvos();inp.focus();
 }
 async function ask(t,b){
  b.innerHTML='<span class="dots"><span></span><span></span><span></span></span>';
@@ -665,9 +684,13 @@ try{const th=localStorage.getItem('vio-theme');
  if(th){document.documentElement.setAttribute('data-theme',th);
    document.getElementById('themeBtn').textContent=th==='dark'?'🌙':'☀️';}}catch(e){}
 renderChips();loadStatus();
-// Restore earlier conversation so history survives reloads and new devices.
+// Restore earlier conversation so history survives reloads and new devices —
+// UNLESS you pressed "＋ New chat" this session: then you get the clean page you
+// asked for, and old conversations stay one click away in the History sidebar.
 async function loadHistory(){
- try{const j=await(await fetch('/api/history?n=60')).json();const turns=j.turns||[];
+ try{
+  if(sessionStorage.getItem('vio-fresh')==='1')return;
+  const j=await(await fetch('/api/history?n=60')).json();const turns=j.turns||[];
   if(!turns.length)return;
   for(const t of turns){
     addUser(t.q||'');
@@ -684,7 +707,59 @@ async function loadHistory(){
   log.appendChild(d);log.scrollTop=log.scrollHeight;
  }catch(e){}
 }
+
+// ---- History sidebar: past conversations, grouped by quiet gaps, click to open ----
+let _convs=[];
+function timeAgo(t){
+ const s=Date.now()/1000-t;
+ if(s<3600)return Math.max(1,Math.round(s/60))+'m ago';
+ if(s<86400)return Math.round(s/3600)+'h ago';
+ if(s<172800)return 'yesterday';
+ return new Date(t*1000).toLocaleDateString();
+}
+function renderTurn(t){
+ addUser(t.q||'');
+ const {b}=bubble('bot');
+ b.classList.toggle('rtl',isAr(t.a||''));
+ b.innerHTML=fmt(t.a||'');
+ const m=document.createElement('div');m.className='meta';
+ m.innerHTML=badge({verified:t.verified,how:t.how,cortex:t.cortex,agent:t.agent});
+ b.appendChild(m);
+}
+async function loadConvos(){
+ try{
+  const j=await(await fetch('/api/history?n=300')).json();
+  const turns=(j.turns||[]).filter(t=>t&&t.q);
+  _convs=[];
+  for(const t of turns){                       // oldest → newest; 30-min gap = new chat
+    if(!_convs.length||t.t-(_convs[_convs.length-1].end)>1800)
+      _convs.push({title:t.q,turns:[t],start:t.t,end:t.t});
+    else{_convs[_convs.length-1].turns.push(t);_convs[_convs.length-1].end=t.t;}
+  }
+  const list=$('histList');
+  if(!_convs.length){list.innerHTML='<div class="empty" style="padding:8px 11px;text-align:left">No conversations yet.</div>';return}
+  list.innerHTML=[..._convs].reverse().map((c,i)=>{
+    const live=i===0;
+    return `<button class="hist-item" data-i="${_convs.indexOf(c)}" onclick="openConversation(${_convs.indexOf(c)})">`+
+      `<span class="q">${esc(c.title.slice(0,60))}</span>`+
+      `<span class="when">${c.turns.length} msg · ${timeAgo(c.start)}</span></button>`;
+  }).join('');
+ }catch(e){}
+}
+function openConversation(i){
+ const c=_convs[i];if(!c)return;
+ try{sessionStorage.removeItem('vio-fresh')}catch(e){}
+ log.innerHTML='';const e=document.getElementById('empty');if(e)e.style.display='none';
+ for(const t of c.turns)renderTurn(t);
+ const d=document.createElement('div');d.className='meta';
+ d.style.cssText='text-align:center;margin:10px 0;opacity:.6';
+ d.textContent='— conversation from '+new Date(c.start*1000).toLocaleString()+' —';
+ log.appendChild(d);log.scrollTop=log.scrollHeight;
+ document.querySelectorAll('.hist-item').forEach(h=>h.classList.toggle('on',+h.dataset.i===i));
+ document.getElementById('side').classList.remove('open');
+}
 loadHistory();
+loadConvos();
 // If a training run is already going (page was reloaded / reopened), re-attach it.
 (async()=>{try{const s=await(await fetch('/api/train_all/status')).json();
   if(s.running){const {b}=bubble('bot');
