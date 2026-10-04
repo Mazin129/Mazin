@@ -2781,6 +2781,41 @@ class Mind:
         self._retrain()
         return f"I'll remember: {fact}"
 
+    def data_report(self):
+        """'data report' — what the brain is made of, by provenance: passages per
+        origin and the validated/unvalidated split (redesign prompt §5 observability).
+        A one-pass count over the meta index; cheap enough to run on command."""
+        from collections import Counter
+        docs = self.lib.docs
+        meta = getattr(self.lib, "meta", {}) or {}
+        origins, unval_by_origin = Counter(), Counter()
+        for d in docs:
+            m = meta.get(d) or {"origin": "legacy", "validated": True}
+            o = m.get("origin", "legacy")
+            origins[o] += 1
+            if not m.get("validated", True):
+                unval_by_origin[o] += 1
+        total = len(docs)
+        unval_total = sum(unval_by_origin.values())
+        label = {"dataset": "Hugging Face datasets", "web": "web research",
+                 "file": "files & folders", "github": "GitHub repos",
+                 "builtin": "built-in knowledge", "seed": "starter knowledge",
+                 "teach": "taught in chat", "legacy": "taught before provenance"}
+        lines = [f"📊 My library holds {total:,} passages:"]
+        for o, n in origins.most_common():
+            u = unval_by_origin.get(o, 0)
+            tail = (f" — {n - u:,} validated"
+                    + (f", {u:,} unvalidated lead(s)" if u else ""))
+            lines.append(f"  • {label.get(o, o)}: {n:,}{tail}")
+        if unval_total:
+            lines.append(f"\n⚠️ {unval_total:,} unvalidated lead(s) — they ground answers "
+                         "only as flagged leads, never as verified facts. `teach:` me the "
+                         "confirmed fact (or corroborate with a trusted source) and I'll "
+                         "store it as knowledge.")
+        else:
+            lines.append("\nEverything stored is validated knowledge.")
+        return "\n".join(lines)
+
     def _library_summary(self):
         """'What have I taught you?' — Vio summarises its whole library + memory."""
         docs = self.lib.docs
@@ -4113,6 +4148,12 @@ class Mind:
                      r"summari[sz]e (your |the )?(library|knowledge|memory)", low):
             return {"answer": self._library_summary(), "how": "library summary",
                     "verified": True, "trace": []}
+
+        # "data report" / "library report" — what the brain is made of, by provenance
+        # (origin + validated split). Makes the knowledge-provenance layer visible.
+        if re.match(r"^\s*(?:data|library|brain)\s+(?:report|stats|composition)\s*\??\s*$", low):
+            return {"answer": self.data_report(), "how": "data report",
+                    "verified": True, "cortex": "skipped", "trace": []}
 
         # 0=) conversational INTENT: the user is telling me they will give me data /
         #     teach me — that is a statement, not a question. Retrieving facts at it is
