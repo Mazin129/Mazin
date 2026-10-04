@@ -231,13 +231,33 @@ class Coordinator:
             return False
         if float(board.items.get("_top") or 0.0) < self.GAP:
             return True
-        # covered = the question's own key terms appear in what the library returned;
-        # a generic passage on the same topic is not an answer to a specific question
+        # covered = the question's own key terms appear in what the library returned.
+        # A generic passage on the same topic is not an answer to a specific question,
+        # so beside the word-overlap ratio there is a DISTINCTIVE-TERM GATE: the two
+        # rarest content words of the question (by library IDF; out-of-vocabulary
+        # counts as maximally rare) must actually appear in what was retrieved.
+        # Generic passages share "network"/"virtual"/"firewall" with an Azure Virtual
+        # WAN question without covering it — which used to hide the gap and skip the
+        # web fill entirely.
         want = content_words(q)
         have = content_words(" ".join(board.passages()[:4]))
         stem = lambda w: w[:6]                                     # noqa: E731
-        hit = {w for w in want if w in have or stem(w) in {stem(h) for h in have}}
-        return bool(want) and len(hit) / len(want) < 0.6
+        stems = {stem(h) for h in have}
+        hit = {w for w in want if w in have or stem(w) in stems}
+        if not want:
+            return False
+        vec = getattr(self.mind.lib, "vec", None)
+        vocab = getattr(vec, "vocabulary_", {}) or {}
+        idf = getattr(vec, "idf_", None)
+
+        def _rarity(w):
+            j = vocab.get(stem(w))
+            return 1e9 if (j is None or idf is None) else float(idf[j])
+
+        rarest = sorted(want, key=_rarity, reverse=True)[:2]
+        covered = (len(hit) / len(want) >= 0.6 and
+                   all(w in have or stem(w) in stems for w in rarest))
+        return not covered
 
     # --------------------------------------------------------------- reporting --
     def footer(self, board):
