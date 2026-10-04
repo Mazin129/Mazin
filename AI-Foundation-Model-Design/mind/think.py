@@ -91,12 +91,18 @@ class Thinker:
         return self._trained_on
 
     def stats(self):
-        """Real, inspectable size of the trained language model."""
+        """Real, inspectable size of the trained language model. Iterates SNAPSHOT
+        COPIES: the background (re)training thread rebuilds self.models while the
+        dashboard polls this, and 'dictionary changed size during iteration' was
+        500-ing /api/status and /api/telemetry mid-retrain."""
         contexts = sum(len(m) for m in self.models)
         vocab = set()
         for m in self.models:
-            for ctx, dist in m.items():
-                vocab.update(dist.keys())
+            for ctx, dist in list(m.items()):      # snapshot: train() may mutate now
+                try:
+                    vocab.update(list(dist.keys()))
+                except RuntimeError:
+                    continue
         return {"passages": self._trained_on, "contexts": contexts,
                 "vocab": len(vocab), "order": self.order}
 
