@@ -316,6 +316,15 @@ def _run_isolated(verbose=False):
     env = dict(os.environ, VIO_GOLDEN_CHILD="1",
                VIO_DATA_DIR=tempfile.mkdtemp(prefix="vio_golden_iso_"),
                VIO_SEMANTIC_ASYNC="0", VIO_TRAIN_ASYNC="0", PYTHONIOENCODING="utf-8")
+    # The child builds the semantic model SYNCHRONOUSLY on its first teach (async off,
+    # above) — a one-time load that measured 9.4s under CPU contention. That is setup,
+    # not a deterministic-path regression, so the isolated child gets a realistic
+    # latency budget; real regressions (normal cases <100 ms) are still caught.
+    env["VIO_GOLDEN_MAX_MS"] = "30000"
+    # The suite is deterministic and LLM-FREE by design — pin the child's cortex OFF
+    # so a live Ollama in the parent's environment can't turn 40ms cases into
+    # minutes and trip the gate (found when the test ran without VIO_LLM_URL set).
+    env["VIO_LLM_URL"] = "http://127.0.0.1:9"
     env.pop("VIO_ALLOW_NET", None)
     here = os.path.dirname(os.path.abspath(__file__))
     try:
