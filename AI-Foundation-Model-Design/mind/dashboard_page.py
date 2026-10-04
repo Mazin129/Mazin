@@ -423,11 +423,19 @@ async function proposal(id,what){
 // ---- agents + coordinator ----
 async function loadAgents(){
  try{const j=await(await fetch('/api/agents')).json();
-  const ag=j.agents||[];
-  $('agentsGrid').innerHTML=ag.map(a=>
-    `<div class="ag ${a.acts?'acting':''}"><div class="an"><span>${esc(a.name)}</span>`+
+  const ag=j.agents||[], q=j.quality||{};
+  $('agentsGrid').innerHTML=ag.map(a=>{
+    const s=q[a.name]||{};
+    let qual='';
+    if(s.answers){
+      const parts=[`${Math.round((s.verified_rate||0)*100)}% verified`];
+      if(s.approve_rate!=null) parts.push(`👍${Math.round(s.approve_rate*100)}%`);
+      qual=`<div class="ad" style="margin-top:4px;color:var(--ok)">${parts.join(' · ')} (${s.answers} ans)</div>`;
+    }
+    return `<div class="ag ${a.acts?'acting':''}"><div class="an"><span>${esc(a.name)}</span>`+
     `<span class="tag">${a.acts?'⚙️ acting':'💬 advisory'}</span></div>`+
-    `<div class="ad">${esc((a.domains||[]).join(', ')||'—')}</div></div>`).join('')
+    `<div class="ad">${esc((a.domains||[]).join(', ')||'—')}</div>${qual}</div>`;
+  }).join('')
    ||'<span class="cap">No agents registered.</span>';
   const s=j.shared_brain||{}, c=j.coordinator||{};
   $('sharedBrain').innerHTML=`<span><span class="dot" style="background:var(--accent)"></span>shared brain:

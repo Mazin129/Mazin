@@ -108,6 +108,32 @@ class TraceLog:
             "by_agent": dict(Counter(r.get("agent") or "?" for r in inter)),
         }
 
+    def agent_stats(self):
+        """Per-agent quality (§21): answers, verified rate, 👍/👎 per agent — the
+        measurable side of 'agent quality'. One pass over the trace log."""
+        recs = self.read()
+        fb_by_ref = {r.get("ref"): r.get("good")
+                     for r in recs if r.get("type") == "feedback" and r.get("ref")}
+        per = {}
+        for r in recs:
+            if r.get("type") == "feedback":
+                continue
+            a = r.get("agent") or "?"
+            s = per.setdefault(a, {"answers": 0, "verified": 0, "up": 0, "down": 0})
+            s["answers"] += 1
+            if r.get("verified"):
+                s["verified"] += 1
+            good = fb_by_ref.get(r.get("id"))
+            if good is True:
+                s["up"] += 1
+            elif good is False:
+                s["down"] += 1
+        for a, s in per.items():
+            graded = s["up"] + s["down"]
+            s["approve_rate"] = round(s["up"] / graded, 2) if graded else None
+            s["verified_rate"] = round(s["verified"] / s["answers"], 2) if s["answers"] else 0
+        return per
+
 
 # --------------------------------------------------------------------------- #
 # 2) Data Curator  — turn traces + feedback into CLEAN training data

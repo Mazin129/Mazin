@@ -337,11 +337,16 @@ GROUNDED_SYSTEM_D = GROUNDED_SYSTEM
 REASON_SYSTEM_D = REASON_SYSTEM
 
 
-def grounded_prompt(question, passages, unvalidated=None):
+def grounded_prompt(question, passages, unvalidated=None, tagger=None):
     """Build the grounding prompt with a provenance split (redesign prompt §5/§12):
     `passages` are validated knowledge (authoritative); `unvalidated` are auto-learned
-    web notes the model may use only as clearly-flagged leads — never as facts."""
+    web notes the model may use only as clearly-flagged leads — never as facts.
+    `tagger(doc)` optionally prefixes each passage with its origin tag
+    ("[taught]", "[dataset]", "[web ⚠ unvalidated]" …) so the model can attribute
+    trust instead of treating every line as equally true."""
     un = [p for p in (unvalidated or []) if p]
+    fmt = lambda ps: "\n".join(f"- {tagger(p) if tagger else ''}{p}"
+                               .strip() for p in ps)
     if not passages and not un:
         return (
             f"Question: {question}\n\n"
@@ -351,13 +356,13 @@ def grounded_prompt(question, passages, unvalidated=None):
         )
     head = ""
     if passages:
-        head += ("Facts from the user's knowledge base (authoritative):\n"
-                 + "\n".join(f"- {p}" for p in passages) + "\n\n")
+        head += ("Facts from the user's knowledge base (authoritative; the [tag] shows "
+                 "where each came from):\n" + fmt(passages) + "\n\n")
     if un:
         head += ("Unvalidated research notes (auto-collected from the web — NOT verified. "
                  "Treat as leads only: never state them as certain facts, and say "
                  "explicitly when your answer relies on them):\n"
-                 + "\n".join(f"- {p}" for p in un) + "\n\n")
+                 + fmt(un) + "\n\n")
     return (
         head
         + f"Question: {question}\n\n"

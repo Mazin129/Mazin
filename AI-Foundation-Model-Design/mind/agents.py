@@ -495,6 +495,31 @@ class KnowledgeAgent(Agent):
 # retrieved facts; without a local LLM it self-skips (falls back to the base path),
 # so it can never regress existing behaviour.
 # --------------------------------------------------------------------------- #
+def answer_off_topic(q, ans):
+    """True when an expert answer ignores the question's distinctive terms — the
+    anti-drift quality gate (prompt §10: verify the answer addresses the question).
+    Uses the two rarest content words of the question (longest two as a cheap
+    rarity proxy); a short or generic reply that never mentions either is flagged.
+    Deliberately conservative: only flags when the question HAS extractable terms
+    and the answer is substantive enough to have addressed them."""
+    q = (q or "").strip()
+    a = (ans or "").strip()
+    if len(a) < 40:
+        return False
+    STOP = set("the and for with from that this what which when where why how does do did "
+               "are was were is be been can could should would will your our my mine "
+               "their there about into than then them they have has had not but all any "
+               "each more most some such only very also difference between versus compare "
+               "explain describe tell show give please using use used a an i we you it "
+               "its if on of in to".split())
+    words = [w for w in re.findall(r"[a-z0-9][a-z0-9-]{2,}", q.lower()) if w not in STOP]
+    if len(words) < 2:
+        return False
+    key = sorted(set(words), key=len, reverse=True)[:2]
+    al = a.lower()
+    return not any(k in al or k[:5] in al for k in key)
+
+
 class DomainAgent(Agent):
     intent = None            # compiled regex — the query shape this expert owns
     system = ""              # domain system prompt
@@ -543,7 +568,8 @@ class DomainAgent(Agent):
             (board_val if self.mind.lib.is_validated(d) else board_unval).append(d)
         try:
             from llm import grounded_prompt
-            prompt = grounded_prompt(q, board_val, unvalidated=board_unval)
+            prompt = grounded_prompt(q, board_val, unvalidated=board_unval,
+                                     tagger=getattr(self.mind, "_passage_tag", None))
         except Exception:
             prompt = q
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
@@ -552,6 +578,11 @@ class DomainAgent(Agent):
         ans = llm.generate(prompt, system=self.system, max_tokens=budget, think=think)
         if not ans:
             return None
+        # ANTI-DRIFT GATE (answer quality): an expert answer that ignores the
+        # question's distinctive terms is probably about something else. It is kept
+        # (the user still sees it) but marked unverified with a visible note — never
+        # silently passed off as a real expert answer.
+        drift = answer_off_topic(q, ans)
         # publish the evidence this expert used, so the quality gate can cite it and
         # decide 'verified' correctly (a security answer standing only on unvalidated
         # web notes is NOT verified).
@@ -562,10 +593,16 @@ class DomainAgent(Agent):
                                         "excerpts": (board_val + board_unval)[:3]}
         except Exception:
             pass
-        return Result(ans, how=f"{self.name} (LLM)", verified=bool(board_val),
-                      confidence=0.72 if board_val else 0.55,
-                      trace=[f"{self.name} agent grounded on {len(board_val)} validated "
-                             f"+ {len(board_unval)} unvalidated passage(s)"]
+        verified = bool(board_val) and not drift
+        conf = 0.72 if board_val else 0.55
+        trace = [f"{self.name} agent grounded on {len(board_val)} validated "
+                 f"+ {len(board_unval)} unvalidated passage(s)"]
+        if drift:
+            verified, conf = False, min(conf, 0.3)
+            trace.append("anti-drift: answer does not address the question's key "
+                         "terms — marked unverified")
+        return Result(ans, how=f"{self.name} (LLM)", verified=verified,
+                      confidence=conf, trace=trace
                       + ([f"{self.name} agent thought it through first "
                           f"({len(llm.last_thinking.split())} words of reasoning)"]
                          if getattr(llm, "last_thought", False) else []))

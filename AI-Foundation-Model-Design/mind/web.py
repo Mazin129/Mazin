@@ -977,6 +977,11 @@ class H(BaseHTTPRequestHandler):
             self._s(200, json.dumps({"level": autonomy_level()}, ensure_ascii=False))
         elif path == "/api/agents":
             rep = MIND.agents_report() if hasattr(MIND, "agents_report") else {"agents": []}
+            try:                                   # per-agent quality (§21)
+                rep["quality"] = (MIND.si.traces.agent_stats()
+                                  if getattr(MIND, "si", None) else {})
+            except Exception:
+                rep["quality"] = {}
             self._s(200, json.dumps(rep, ensure_ascii=False))
         elif path == "/api/history":
             from urllib.parse import urlparse as _up, parse_qs as _pq

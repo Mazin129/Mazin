@@ -2832,6 +2832,20 @@ class Mind:
         self._retrain()
         return f"I'll remember: {fact}"
 
+    def _passage_tag(self, doc):
+        """One-line trust tag for a passage, shown to the LLM in grounding prompts:
+        the model can attribute where a fact came from instead of treating every
+        line as equally true (answer-quality: provenance-aware answers)."""
+        m = self.lib.meta_for(doc)
+        o = m.get("origin", "legacy")
+        label = {"teach": "taught by you", "file": "your files", "dataset": "dataset",
+                 "github": "github docs", "builtin": "built-in",
+                 "seed": "built-in", "web": "web",
+                 "legacy": "taught by you"}.get(o, o)
+        if not m.get("validated", True):
+            return f"[{label} ⚠ unvalidated] "
+        return f"[{label}] "
+
     def data_report(self):
         """'data report' — what the brain is made of, by provenance: passages per
         origin and the validated/unvalidated split (redesign prompt §5 observability).
@@ -4524,7 +4538,8 @@ class Mind:
                 ctx_val = [d for d, _ in val_hits] + list(facts)
                 ctx_unval = [d for d, _ in unval_hits]
                 budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
-                ans = self.llm.generate(grounded_prompt(q, ctx_val, unvalidated=ctx_unval),
+                ans = self.llm.generate(grounded_prompt(q, ctx_val, unvalidated=ctx_unval,
+                                                        tagger=self._passage_tag),
                                         system=GROUNDED_SYSTEM_D,
                                         max_tokens=budget)
                 if ans:
