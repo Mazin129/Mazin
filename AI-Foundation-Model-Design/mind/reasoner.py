@@ -3688,6 +3688,10 @@ class Mind:
         # with its own reading, and the parts are returned together.
         if self._intents and self._evidence_survey is not None:
             cfg_parts = [u for u in self._intents if u.requires == brain.CONFIG]
+            # "device: NAME <command>" is a LIVE netdev command (read-only, allowlisted
+            # in netdev.py) — never a question about the taught configuration.
+            if re.match(r"^\s*device\s*[:\-]\s*\S+\s+\S+", q):
+                cfg_parts = []
             if cfg_parts and len(cfg_parts) == len(self._intents):
                 answers, ok = [], True
                 for u in self._intents:
