@@ -1507,7 +1507,32 @@ class Mind:
             return self._chunk_config(text)
         return self._chunk(self._denoise(text))
 
+    def _supersede_leads(self, text):
+        """User confirms a fact → matching UNVALIDATED web leads become validated
+        knowledge (redesign prompt §5: how conflicts are resolved and incorrect
+        information superseded). Matching = ≥60% of the lead's content words appear
+        in the taught text. Returns how many leads were promoted."""
+        meta = getattr(self.lib, "meta", {})
+        promoted = 0
+        taught = set(re.findall(r"[a-z0-9][a-z0-9-]{2,}", (text or "").lower()))
+        for doc, m in list(meta.items()):
+            if m.get("validated") or m.get("origin") != "web":
+                continue
+            words = re.findall(r"[a-z0-9][a-z0-9-]{2,}", doc.lower())
+            if not words:
+                continue
+            overlap = sum(1 for w in set(words) if w in taught) / len(set(words))
+            if overlap >= 0.6:
+                m["validated"] = True
+                m["confirmed_by"] = "user-teach"
+                m["confirmed_ts"] = time.time()
+                promoted += 1
+        if promoted:
+            self.lib._save_meta()
+        return promoted
+
     def teach(self, text):                 # add durable knowledge to the library
+        superseded = self._supersede_leads(text)
         chunks = self._smart_chunks(text)
         self.lib.add_many(chunks, origin="teach")
         self.graph.learn_text(text)        # extract relational edges (cheap, teach-time)
@@ -1516,12 +1541,38 @@ class Mind:
         # retrieved before saying so.
         found = {d.strip() for d, _s in self.lib.search(text[:300], k=5)}
         ok = any(c.strip() in found for c in chunks)
+        note = (f" Also validated {superseded} matching web-research lead(s) — your "
+                "confirmation makes them trusted knowledge." if superseded else "")
         if len(chunks) > 1:
             return (f"Stored {len(chunks)} passages in the library"
                     + (" and verified I can retrieve them." if ok
-                       else ", but I could not retrieve them yet — ask about it to check."))
-        return (f"Stored and verified: “{chunks[0]}”" if ok
-                else f"Stored “{chunks[0]}”, but I could not retrieve it yet.")
+                       else ", but I could not retrieve them yet — ask about it to check.")
+                    + note)
+        return ((f"Stored and verified: “{chunks[0]}”" if ok
+                 else f"Stored “{chunks[0]}”, but I could not retrieve it yet.") + note)
+
+    def forget_leads(self):
+        """'forget leads' — remove every UNVALIDATED web-research passage. Prunes the
+        noise research collected without user confirmation; validated knowledge and
+        user-confirmed leads are untouched."""
+        meta = getattr(self.lib, "meta", {}) or {}
+        keep, dropped = [], 0
+        for d in self.lib.docs:
+            m = meta.get(d) or {}
+            if m.get("origin") == "web" and not m.get("validated", True):
+                dropped += 1
+                continue
+            keep.append(d)
+        if not dropped:
+            return {"answer": "No unvalidated web leads to forget — everything stored "
+                    "is validated knowledge.", "how": "library-write",
+                    "verified": True, "cortex": "skipped", "trace": []}
+        self.lib.replace(keep)
+        self._retrain()
+        return {"answer": f"Forgot {dropped} unvalidated web-research lead(s). "
+                f"Library now holds {len(keep):,} passages — all validated knowledge.",
+                "how": "library-write", "verified": True, "cortex": "skipped",
+                "trace": [f"pruned {dropped} unvalidated lead(s)"]}
 
     def load_csv(self, text, name="table"):
         """Load a CSV as an analyzable data table (not memorized text). Returns a
@@ -4112,6 +4163,14 @@ class Mind:
                 re.match(r"^\s*remove\s+(?:the\s+)?(?:empty|stub|junk|noise|useless)\s+"
                          r"(?:passages?|lines?|entries)\b", low):
             return self.clean_library()
+
+        # forget every unvalidated web-research lead ("forget leads" / "forget
+        # unvalidated") — validated knowledge is never touched (prompt §5 supersession)
+        if re.match(r"^\s*forget\s+(?:the\s+)?(?:unvalidated\s+)?"
+                    r"(?:web\s+)?leads?\s*\??\s*$", low) or \
+                re.match(r"^\s*(?:delete|remove|drop)\s+(?:the\s+)?unvalidated\s+"
+                         r"(?:web\s+)?leads?\s*\??\s*$", low):
+            return self.forget_leads()
 
         # load the built-in network/security knowledge base (offline, instant)
         if re.match(r"^\s*(?:load|add|install|import)\s+(?:the\s+)?(?:built-?in\s+)?"
