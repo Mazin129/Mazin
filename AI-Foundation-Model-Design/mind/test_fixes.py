@@ -158,5 +158,99 @@ check("council returns valid contributions",
 check("council excluded acting agents",
       all(n != "research" for n, _ in contribs))
 
+
+# ---- 10. subnetting is exact tool arithmetic (the stuck-question regression) ----
+from reasoner import try_subnet
+sub = try_subnet("carve a subnet from 192.168.44.0/22 for exactly 30 usable hosts "
+                 "with the least waste")
+check("subnet: /27 + mask + carve list",
+      sub and "/27" in sub and "255.255.255.224" in sub and "192.168.44.32/27" in sub, sub)
+check("subnet: /26 usable count", "62 usable" in try_subnet("how many usable hosts in /26"))
+check("subnet: mask lookup", "255.255.255.224" in try_subnet("netmask for /27"))
+check("subnet: 500 hosts -> /23", "/23" in try_subnet("I need a subnet for 500 hosts"))
+check("subnet: not a subnet question", try_subnet("what is a firewall policy") is None)
+
+# ---- 11. data report: provenance made visible (redesign prompt section 5) ----
+m.lib.add_many(["Data report probe passage one-of-a-kind."], origin="web",
+               source="http://example.com/probe", validated=False)
+rep = m._core_front("data report")
+check("data report routes and shows origins",
+      (rep or {}).get("how") == "data report" and "web research" in (rep or {}).get("answer", "")
+      and "unvalidated" in (rep or {}).get("answer", "").lower(), str(rep)[:160])
+
+# ---- 12. supersession: teach validates matching web leads ----
+m.lib.add_many(["The Zeta-9 firewall syncs its table every 45 seconds over UDP 4512."],
+               origin="web", source="http://blog.example.com/zeta9", validated=False)
+lead = "The Zeta-9 firewall syncs its table every 45 seconds over UDP 4512."
+check("lead starts unvalidated", m.lib.is_validated(lead) is False)
+m.teach("The Zeta-9 firewall syncs its table every 45 seconds over UDP 4512, per vendor docs.")
+check("teaching the fact validates the matching lead", m.lib.is_validated(lead) is True)
+check("lead provenance records the confirmation",
+      m.lib.meta_for(lead).get("confirmed_by") == "user-teach")
+m.lib.add_many(["Unrelated lorem-lead-xyz passage about quantum ferrets."],
+               origin="web", source="http://blog.example.com/x", validated=False)
+r_forget = m._core_front("forget leads")
+check("forget leads removes only unvalidated leads",
+      "validated knowledge" in (r_forget or {}).get("answer", "")
+      and m.lib.is_validated(lead) is True
+      and not any("lorem-lead-xyz" in d for d in m.lib.docs), str(r_forget)[:140])
+
+# ---- 13. answer-quality: provenance tags, anti-drift, per-agent telemetry ----
+from llm import grounded_prompt
+tagged = grounded_prompt("q", ["OSPF uses cost metrics."], tagger=lambda p: "[taught] ")
+check("grounded prompt tags passages", "[taught] OSPF" in tagged, tagged[:120])
+from agents import answer_off_topic
+check("anti-drift: off-topic answer flagged",
+      answer_off_topic("how does BGP path selection work with local preference",
+                       "Python is a popular programming language used worldwide by developers.") is True)
+check("anti-drift: on-topic answer passes",
+      answer_off_topic("how does BGP path selection work with local preference",
+                       "BGP chooses the path with the highest local preference first, then shortest AS-path.") is False)
+qa = m.si.traces.agent_stats()
+check("agent_stats shape", isinstance(qa, dict) and all(
+      ("answers" in s and "verified_rate" in s) for s in qa.values()), str(qa)[:120])
+
+# ---- 14. roadmap batch: sandbox, DuckDB, tool schemas, netdev, MCP, scheduler ----
+from tools.sandbox import run as sb_run
+_r = sb_run("print(sum(range(101)))")
+check("sandbox executes isolated code", _r["ok"] and _r["stdout"].strip() == "5050")
+check("sandbox blocks network patterns", not sb_run("import socket")["ok"])
+from agents import EXECUTE, Agent as _A, Guardrail as _G, Result as _Res
+class _Py(_A):
+    name = "py"
+    permissions = frozenset({READ, EXECUTE})
+_g = _G()
+check("guardrail gates EXECUTE",
+      "confirm" in (_g.check("q", _Py(None), _Res("out", how="sandbox"), {}).answer or "").lower())
+check("confirmed EXECUTE passes",
+      (_g.check("q", _Py(None), _Res("out", how="sandbox"), {"confirmed": True}).answer or "") == "out")
+from datatable import DataTable as _DT
+_dt = _DT.from_csv("region,sales\nEA,120\nEA,80\nWE,200\n", "sales_q3")
+check("duckdb scalar", _dt.sql("SELECT sum(sales) FROM t") == "400")
+check("duckdb group-by", "EA" in (_dt.sql("SELECT region, count(*) n FROM t GROUP BY region") or ""))
+check("duckdb read-only", _dt.sql("DELETE FROM t") is None)
+from cognition import toolcall
+check("tool schemas: 5 read-only tools",
+      len(toolcall.TOOLS_SCHEMA) == 5
+      and {x["function"]["name"] for x in toolcall.TOOLS_SCHEMA} ==
+      {"subnet", "config_summary", "table_sql", "device_facts", "web_search"})
+check("toolcall exec subnet exact",
+      "/27" in (toolcall._exec(None, "subnet", {"question": "subnet for 30 usable hosts"}) or ""))
+import netdev
+check("netdev refuses unconfigured device", not netdev.run("ghost", "show version")["ok"])
+import os as _os
+_os.environ.pop("VIO_ALLOW_DEVICES", None)
+dv = m._core_front("device: HQ-FGT show version")
+check("device intent gated without opt-in", (dv or {}).get("how") == "device (disabled)")
+import tools.mcp_server as mcp
+check("mcp server lists 4 tools",
+      {x["name"] for x in mcp.tools()} ==
+      {"vio_ask", "vio_subnet", "vio_research", "vio_config_audit"})
+txt, err = mcp.call("vio_subnet", {"question": "mask for /27"})
+check("mcp calls vio tools", "255.255.255.224" in txt and not err, txt[:80])
+import scheduler
+_os.environ["VIO_SCHED"] = "1"
+check("scheduler starts when enabled", scheduler.start(m) is not None)
+_os.environ["VIO_SCHED"] = ""
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

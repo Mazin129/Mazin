@@ -1379,6 +1379,10 @@ if __name__ == "__main__":
         print(f"      ⚠️  {_llm.note}")
     print(f"   🌐 web research: {'ON' if _net else 'OFF (set VIO_ALLOW_NET=1)'}")
     threading.Thread(target=_idle_consolidator, daemon=True).start()   # §14 idle "sleep"
+    import scheduler as _sched                                          # §12 proactive
+    if _sched.start(MIND) is not None:
+        print("   ⏱ scheduler: ON (nightly cover gaps · weekly consolidate)")
+
     try:
         ThreadingHTTPServer((HOST, PORT), H).serve_forever()
     except KeyboardInterrupt:

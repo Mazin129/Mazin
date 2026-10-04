@@ -47,6 +47,45 @@ class DataTable:
             if sum(v is not None for v in vals) > 0.6 * max(1, len(rows)):
                 self.numeric.append(h)
 
+    def sql(self, query):
+        """Run a read-only SQL SELECT over this table via DuckDB (roadmap T7) —
+        group-by/join/window power the row-filter engine can't express. The table is
+        registered as `t` (and by its own name); only SELECT is allowed; results are
+        computed exactly → the caller keeps the 'exact tool' verified contract."""
+        try:
+            import duckdb
+        except Exception:
+            return None
+        q = (query or "").strip().rstrip(";")
+        if not q.lower().lstrip("( ").startswith("select") and \
+                not q.lower().startswith("with"):
+            return None                                   # read-only, by contract
+        safe = "".join(c if c.isalnum() else "_" for c in self.name)[:40] or "t"
+        try:
+            import pandas as pd
+            con = duckdb.connect(database=":memory:")
+            df = pd.DataFrame(self.rows, columns=self.headers)
+            for h in self.numeric:                    # CSV strings → numbers, so
+                try:                                  # sum()/avg() bind correctly
+                    df[h] = pd.to_numeric(df[h], errors="coerce")
+                except Exception:
+                    pass
+            con.register("t", df)
+            con.register(safe, df)
+            cur = con.execute(q)
+            cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+            if len(rows) == 1 and len(cols) == 1:         # a scalar answer
+                return f"{rows[0][0]}"
+            out = " | ".join(cols) + "\n"
+            for r in rows[:50]:
+                out += " | ".join("" if v is None else str(v) for v in r) + "\n"
+            if len(rows) > 50:
+                out += f"… {len(rows) - 50} more row(s)"
+            return out.strip()
+        except Exception as e:
+            return f"SQL error: {e}"
+
     # ---- loading ----------------------------------------------------------
     @classmethod
     def from_csv(cls, text, name="table"):

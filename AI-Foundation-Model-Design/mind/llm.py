@@ -294,6 +294,38 @@ class LLM:
         self.usage_counts["completion_tokens"] += int((out or {}).get("eval_count") or 0)
         return text
 
+    # ---- native tool-calling (roadmap T2) -----------------------------------
+    def chat_tools(self, messages, tools, timeout=None):
+        """One /api/chat turn with tool schemas (Ollama native function calling).
+        Returns {'text': str|None, 'tool_calls': [{name, arguments}]} — never raises.
+        Unsupported models/servers return text=None, tool_calls=[] so callers fall
+        back to the plain reasoning path."""
+        try:
+            body = {"model": self.model, "messages": messages, "stream": False,
+                    "tools": tools,
+                    "options": {"temperature": 0.2,
+                                "num_ctx": int(os.environ.get("VIO_LLM_CTX", "8192"))}}
+            self.attempts += 1
+            t0 = time.time()
+            out = self._post("/api/chat", body, timeout=timeout or self.gen_timeout)
+            self.last_ms = (time.time() - t0) * 1000.0
+            self.total_ms += self.last_ms
+            msg = (out or {}).get("message", {}) or {}
+            text = (msg.get("content") or "").strip() or None
+            calls = [{"name": tc.get("function", {}).get("name", ""),
+                      "arguments": tc.get("function", {}).get("arguments") or {}}
+                     for tc in (msg.get("tool_calls") or [])]
+            if text or calls:
+                self.calls += 1
+                self.last_model = self.model
+                self.usage_counts["calls"] += 1
+                self.usage_counts["prompt_tokens"] += int((out or {}).get("prompt_eval_count") or 0)
+                self.usage_counts["completion_tokens"] += int((out or {}).get("eval_count") or 0)
+            return {"text": text, "tool_calls": calls}
+        except Exception as ex:
+            self.last_error = f"chat_tools: {type(ex).__name__}: {ex}"[:200]
+            return {"text": None, "tool_calls": []}
+
     # ---- http (stdlib) ----
     def _get(self, path, timeout=None):
         req = urllib.request.Request(self.url + path, method="GET")

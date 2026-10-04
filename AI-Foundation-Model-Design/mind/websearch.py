@@ -148,12 +148,23 @@ def html_to_text(markup: str) -> str:
 # Public API
 # --------------------------------------------------------------------------- #
 def fetch(url: str) -> dict:
-    """Fetch one page → {url, title, text}. Raises NetError on any refusal/failure."""
+    """Fetch one page → {url, title, text}. Raises NetError on any refusal/failure.
+    Thin pages get one retry through the Jina Reader (r.jina.ai) — JS-heavy vendor
+    docs (roadmap T9) often render empty via plain HTTP."""
     raw = _open(url)
     markup = raw.decode("utf-8", "replace")
     m = re.search(r"(?is)<title[^>]*>(.*?)</title>", markup)
     title = html.unescape(re.sub(r"\s+", " ", m.group(1)).strip()) if m else url
-    return {"url": url, "title": title or url, "text": html_to_text(markup)}
+    text = html_to_text(markup)
+    if len(text) < 400:                            # probably JS-rendered — try the reader
+        try:
+            jr = _open("https://r.jina.ai/" + url)
+            jtext = html_to_text(jr.decode("utf-8", "replace"))
+            if len(jtext) > len(text):
+                text = jtext
+        except NetError:
+            pass
+    return {"url": url, "title": title or url, "text": text}
 
 
 def _ddg_unwrap(href: str) -> str:
@@ -232,6 +243,8 @@ def _generic_links(markup: str, k: int, skip_hosts=()) -> list:
 
 
 # search backends, tried in order until one returns results. Each is (name, fn).
+# Real search APIs (roadmap T9) slot in FIRST when their key is present — production
+# agents use APIs, not HTML scraping; the keyless engines remain the fallback chain.
 def _src_ddg(query, k):
     data = urllib.parse.urlencode({"q": query, "kl": "us-en"}).encode()
     m = _open("https://html.duckduckgo.com/html/", data=data, engine=True).decode("utf-8", "replace")
@@ -250,16 +263,69 @@ def _src_ddg_lite(query, k):
     return _generic_links(m, k)
 
 
-_SOURCES = (("duckduckgo", _src_ddg), ("bing", _src_bing), ("duckduckgo-lite", _src_ddg_lite))
+def _tavily_key():
+    return os.environ.get("TAVILY_API_KEY", "").strip()
+
+
+def _brave_key():
+    return os.environ.get("BRAVE_API_KEY", "").strip()
+
+
+def _src_tavily(query, k):
+    import json as _json
+    data = _json.dumps({"query": query, "max_results": k, "search_depth": "basic"}).encode()
+    req = urllib.request.Request("https://api.tavily.com/search", data=data, method="POST",
+                                 headers={"Content-Type": "application/json",
+                                          "Authorization": f"Bearer {_tavily_key()}"})
+    with urllib.request.urlopen(req, timeout=_timeout()) as r:
+        out = _json.loads(r.read().decode("utf-8"))
+    res = []
+    for item in (out or {}).get("results", [])[:k]:
+        url = item.get("url", "")
+        try:
+            check_url(url)
+        except NetError:
+            continue
+        res.append({"url": url, "title": item.get("title") or url})
+    return res
+
+
+def _src_brave(query, k):
+    import json as _json
+    u = ("https://api.search.brave.com/res/v1/web/search?"
+         + urllib.parse.urlencode({"q": query, "count": k}))
+    req = urllib.request.Request(u, headers={"X-Subscription-Token": _brave_key(),
+                                             "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=_timeout()) as r:
+        out = _json.loads(r.read().decode("utf-8"))
+    res = []
+    for item in ((out or {}).get("web") or {}).get("results", [])[:k]:
+        url = item.get("url", "")
+        try:
+            check_url(url)
+        except NetError:
+            continue
+        res.append({"url": url, "title": item.get("title") or url})
+    return res
+
+
+def _search_backends(query, k):
+    chain = []
+    if _tavily_key():
+        chain.append(("tavily", _src_tavily))
+    if _brave_key():
+        chain.append(("brave", _src_brave))
+    chain += [("duckduckgo", _src_ddg), ("bing", _src_bing), ("duckduckgo-lite", _src_ddg_lite)]
+    return chain
 
 
 def search(query: str, k: int = 5) -> list:
-    """Keyless web search → [{url, title}]. Tries several engines so a single blocked
-    source doesn't break research. Raises NetError only if ALL sources fail."""
+    """Search → [{url, title}]. Tries several backends so a single blocked source
+    doesn't break research. Raises NetError only if ALL sources fail."""
     if not net_enabled():
         raise NetError("internet access is off (set VIO_ALLOW_NET=1 to enable)")
     errors = []
-    for name, fn in _SOURCES:
+    for name, fn in _search_backends(query, k):
         try:
             res = fn(query, k)
         except Exception as e:                 # any source may fail; try the next one

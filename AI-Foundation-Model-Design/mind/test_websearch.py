@@ -110,11 +110,11 @@ def test_bing_and_fallback(monkeypatch):
     def good(q, k):
         return [{"url": "https://ok.example/x", "title": "ok"}]
 
-    monkeypatch.setattr(websearch, "_SOURCES", (("s1", boom), ("s2", good)))
+    monkeypatch.setattr(websearch, "_search_backends", lambda q, k: (("s1", boom), ("s2", good)))
     _ok("falls through to next source", websearch.search("q", 3)[0]["url"] == "https://ok.example/x")
 
     # all sources fail → NetError (never a silent crash)
-    monkeypatch.setattr(websearch, "_SOURCES", (("s1", boom), ("s2", boom)))
+    monkeypatch.setattr(websearch, "_search_backends", lambda q, k: (("s1", boom), ("s2", boom)))
     try:
         websearch.search("q", 3); _ok("all-fail raises NetError", False)
     except websearch.NetError:

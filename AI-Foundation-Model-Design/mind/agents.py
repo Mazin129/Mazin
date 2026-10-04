@@ -99,8 +99,11 @@ class Task:
 
 
 # permission tokens — an agent declares what it may do. Advisory agents are read-only
-# and always safe; write/network make an agent an ACTING agent, gated by the guardrail.
+# and always safe; the others make an agent an ACTING agent, gated by the guardrail
+# (the redesign prompt's five action classes: READ/ANALYZE/WRITE/EXECUTE/DESTRUCTIVE —
+# ANALYZE is covered by READ; EXECUTE = run code; DEVICE = reach network equipment).
 READ, WRITE, NETWORK = "read", "write", "network"
+EXECUTE, DEVICE = "execute", "device"
 
 
 class Agent:
@@ -146,6 +149,37 @@ class SkillAgent(Agent):
 # NOTE: there is deliberately NO math agent — exact math is a TOOL of the core front
 # (MathReasoner inside _core_front), not a dedicated agent. The redesign prompt forbids
 # a `math` agent, and the front's exact-tool branch already owns it end to end.
+
+
+class SandboxAgent(Agent):
+    """Code-interpreter tool (roadmap T1): runs a generated Python snippet in the
+    restricted sandbox. Holds EXECUTE — the Guardrail gates every run behind
+    confirmation (or AUTONOMY=autonomous) and the Task record audits it."""
+    name, domains = "python_sandbox", ("code", "compute")
+    permissions = frozenset({READ, EXECUTE})
+
+    def score(self, q, ctx):
+        import tools.sandbox as sb
+        return 0.9 if sb.looks_like_run_request(q) else 0.0
+
+    def run(self, q, ctx):
+        import tools.sandbox as sb
+        import re
+        code = re.sub(r"^\s*(?:run\s+|compute\s+|execute\s+)?python\s*[:\-]\s*", "",
+                      q.strip(), flags=re.I).strip()
+        code = re.sub(r"^```python\s*|\s*```$", "", code).strip()
+        r = sb.run(code, timeout=int(os.environ.get("VIO_SANDBOX_TIMEOUT", "30")))
+        if not r.get("ok") and not (r.get("stdout") or r.get("stderr")):
+            return Result(f"Sandbox error: {r.get('error')}", how="sandbox (error)",
+                          verified=False, confidence=0.1)
+        body = ""
+        if r.get("stdout"):
+            body += f"```\n{r['stdout'].rstrip()}\n```"
+        if r.get("stderr"):
+            body += f"\nstderr:\n```\n{r['stderr'].rstrip()}\n```"
+        return Result(body or "(no output)", how="sandbox (executed)", verified=True,
+                      confidence=0.9,
+                      trace=[f"ran in isolated subprocess ({r.get('ms')} ms)"])
 
 
 class DataAgent(Agent):
@@ -785,9 +819,9 @@ class NetworkEngineeringAgent(ExpertAgent):
 # NOTE: 'core' (CoreRouterAgent) is intentionally NOT merged — it dispatches every command
 # (teach:/math/tools/research/draw/agents/…); folding it in would break those.
 DEFAULT_AGENTS = (LearningAgent, SelfImprovementAgent, WebResearchAgent, SkillGrowAgent,
-                  DiagramAgent, SkillAgent, DataAgent, PlannerAgent, WorldModelAgent,
-                  ReasoningAgent, NetworkEngineeringAgent, MemoryAgent, CoreRouterAgent,
-                  KnowledgeAgent)
+                  DiagramAgent, SkillAgent, DataAgent, SandboxAgent, PlannerAgent,
+                  WorldModelAgent, ReasoningAgent, NetworkEngineeringAgent, MemoryAgent,
+                  CoreRouterAgent, KnowledgeAgent)
 
 
 class Registry:
@@ -853,16 +887,17 @@ class Guardrail:
 
     def check(self, q, agent, result, ctx):
         perms = set(getattr(agent, "permissions", ()))
-        acts = perms & {WRITE, NETWORK}
+        acts = perms & {WRITE, NETWORK, EXECUTE}
         if not acts or ctx.get("confirmed"):
             return result                       # advisory, or already approved
-        scope = "reach outside Vio" if NETWORK in perms else "change something"
+        scope = ("run code on this machine" if EXECUTE in perms else
+                 "reach outside Vio" if NETWORK in perms else "change something")
         net_only = acts == {NETWORK}
         if net_only:
             if autonomy_level() == "advisory":  # §22 advisory: ask EVERY time
                 return self._gate(q, agent, result, scope)
             # A purely-network action the user has explicitly opted into (VIO_ALLOW_NET) is
-            # standing consent — don't nag on every web lookup. WRITE always still gates.
+            # standing consent — don't nag on every web lookup. WRITE/EXECUTE always gate.
             if os.environ.get("VIO_ALLOW_NET", "").strip():
                 return result
         return self._gate(q, agent, result, scope)

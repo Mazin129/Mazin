@@ -754,8 +754,32 @@ class Library:
                 combined = sims + w * s * (sims > 0.0)
         idx = np.argsort(-combined)[:k]
         n = len(docs)
-        return [(docs[i], float(combined[i]))
+        hits = [(docs[i], float(combined[i]))
                 for i in idx if i < n and combined[i] > 0.05]
+        return self._rerank(q, hits, k)
+
+    _reranker = None                        # lazy cross-encoder (roadmap T8)
+
+    def _rerank(self, q, hits, k):
+        """Cross-encoder re-rank (roadmap T8), opt-in with VIO_RERANK=1: the top
+        candidates are scored pairwise (query, passage) by a local cross-encoder
+        (ms-marco-TinyBERT — CPU-fast) and reordered. Production-RAG's final stage;
+        gracefully absent when the package/model isn't installed."""
+        if os.environ.get("VIO_RERANK", "") != "1" or len(hits) < 2:
+            return hits[:k]
+        try:
+            if Library._reranker is None:
+                from sentence_transformers import CrossEncoder
+                Library._reranker = CrossEncoder("cross-encoder/ms-marco-TinyBERT-L-2-v2")
+            top = hits[:max(k * 4, 8)]
+            scores = Library._reranker.predict([(q, d) for d, _ in top])
+            ranked = [d for _, d in sorted(zip(scores, [d for d, _ in top]),
+                                           key=lambda p: -float(p[0]))]
+            by_score = {d: s for d, s in hits}
+            out = [(d, by_score.get(d, 0.0)) for d in ranked[:k]]
+            return out if out else hits[:k]
+        except Exception:
+            return hits[:k]                 # rerank is an enhancement, never a dependency
 
 
 # --------------------------------------------------------------------------- #
@@ -4212,6 +4236,48 @@ class Mind:
         # (Live/real-time abstention now lives in brain.decide — a question needing a
         # data feed Vio has no access to is refused before routing, for every path.)
 
+        # live device command via netmiko (roadmap T4): "device: <name> show …" —
+        # READ-ONLY allowlist enforced in netdev; needs VIO_ALLOW_DEVICES=1 opt-in
+        mdev = re.match(r"^\s*device\s*[:\-]\s*(\S+)\s+(.+)$", q, re.I | re.S)
+        if mdev:
+            if os.environ.get("VIO_ALLOW_DEVICES", "").strip() not in ("1", "true", "yes"):
+                return {"answer": "Device access is OFF. To let me read from real "
+                        "equipment, configure devices in a JSON file (VIO_DEVICES=path) "
+                        "and start with VIO_ALLOW_DEVICES=1. Read-only commands only.",
+                        "how": "device (disabled)", "verified": False,
+                        "cortex": "skipped", "trace": []}
+            import netdev
+            r = netdev.run(mdev.group(1), mdev.group(2).strip())
+            if r.get("ok"):
+                return {"answer": f"```\n{r.get('output', '').rstrip()}\n```",
+                        "how": f"device ({r.get('device')}, read-only)",
+                        "verified": True, "confidence": 0.95, "cortex": "skipped",
+                        "trace": [f"{r.get('command')} on {r.get('device')} "
+                                  f"({r.get('ms')} ms)"]}
+            return {"answer": f"Device command failed: {r.get('error')}",
+                    "how": "device (error)", "verified": False, "cortex": "skipped",
+                    "trace": []}
+
+        # SQL over uploaded tables via DuckDB (roadmap T7): "sql: SELECT …" —
+        # computed exactly, verified, same contract as the rest of the tool chain.
+        msql = re.match(r"^\s*sql\s*[:\-]\s*(.+)$", q, re.I | re.S)
+        if msql:
+            if not self.tables:
+                return {"answer": "No data table is loaded — upload a CSV/Excel first "
+                        "(📄), then run SQL over it (tables are registered as `t` and "
+                        "by their own name).", "how": "exact tool", "verified": True,
+                        "cortex": "skipped", "trace": []}
+            query = msql.group(1).strip()
+            for tbl in reversed(self.tables):
+                r = tbl.sql(query)
+                if r is not None:
+                    return {"answer": f"```sql\n{r}\n```", "how": "exact tool (SQL)",
+                            "verified": True, "confidence": 0.97, "cortex": "skipped",
+                            "trace": [f"DuckDB over “{tbl.name}” ({len(tbl.rows)} rows)"]}
+            return {"answer": "That query ran against no loaded table (only SELECT "
+                    "queries over uploaded tables are allowed).", "how": "exact tool",
+                    "verified": False, "cortex": "skipped", "trace": []}
+
         # 0) "what have I taught you / what did you learn / what's in your library"
         #    (NOT "what do you know about X" — that is a topic query -> retrieval below)
         if re.search(r"what (have i|did i) (taught|told)|what do you know$|"
@@ -4500,6 +4566,24 @@ class Mind:
 
         # Analytic / multi-hop: always open LLM when available (hits already cleared).
         if analytic and self.llm is not None and self.llm.available and not facts:
+            # NATIVE TOOL-CALLING FIRST (roadmap T2): on the analytic path the model
+            # may CALL Vio's deterministic tools (subnet, config summary, table SQL,
+            # device facts, web search) before answering. Opt-out with
+            # VIO_TOOLS=0; models/servers without tool support fall through to the
+            # plain reasoning path unchanged.
+            if os.environ.get("VIO_TOOLS", "1") != "0":
+                try:
+                    from cognition import toolcall
+                    tc = toolcall.run(self, q)
+                    if tc.get("text"):
+                        return {"answer": tc["text"], "how": "reasoning (LLM, tools)",
+                                "verified": False,
+                                "trace": [f"tool-calling ({self.llm.model}): "
+                                          + "; ".join(tc["steps"][:6])
+                                          if tc["steps"] else
+                                          f"tool-calling ({self.llm.model}): no tool needed"]}
+                except Exception:
+                    pass
             from llm import REASON_SYSTEM_D
             budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
             ans = self.llm.generate(q, system=REASON_SYSTEM_D, temperature=0.3,
