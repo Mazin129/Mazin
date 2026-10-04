@@ -69,6 +69,7 @@ class Thinker:
         self.models = [defaultdict(Counter) for _ in range(self.order)]  # backoff n-grams
         self.starts = []            # sentence-start contexts, for seeding generation
         self._trained_on = 0
+        self._stats_cache = None    # stats computed once per train (never per poll)
 
     # ---- learning: build the n-gram language model from the library text ----
     def train(self, docs):
@@ -88,13 +89,21 @@ class Thinker:
                         ctx = tuple(toks[i - o:i])
                         self.models[o - 1][ctx][toks[i]] += 1
         self._trained_on = len(docs)
+        self._stats_cache = None          # model rebuilt → stats recompute once
         return self._trained_on
 
     def stats(self):
-        """Real, inspectable size of the trained language model. Iterates SNAPSHOT
-        COPIES: the background (re)training thread rebuilds self.models while the
-        dashboard polls this, and 'dictionary changed size during iteration' was
-        500-ing /api/status and /api/telemetry mid-retrain."""
+        """Real, inspectable size of the trained language model.
+
+        COMPUTED ONCE PER TRAIN, then cached (senior-review blocker #1): this used to
+        walk every context of the model on EVERY call — 2.3–2.9s on a 77k-passage
+        brain — and the dashboard polls it every 4s, starving live requests of the
+        GIL (a 0.1s solve measured 52s under polling). The cache invalidates when
+        train() rebuilds the model; cost moves to train time, off the hot path.
+        Snapshot iteration retained for the mid-train race."""
+        cached = getattr(self, "_stats_cache", None)
+        if cached is not None:
+            return cached
         contexts = sum(len(m) for m in self.models)
         vocab = set()
         for m in self.models:
@@ -103,8 +112,10 @@ class Thinker:
                     vocab.update(list(dist.keys()))
                 except RuntimeError:
                     continue
-        return {"passages": self._trained_on, "contexts": contexts,
-                "vocab": len(vocab), "order": self.order}
+        cached = {"passages": self._trained_on, "contexts": contexts,
+                  "vocab": len(vocab), "order": self.order}
+        self._stats_cache = cached
+        return cached
 
     def _next(self, history):
         """Pick the next word using the longest context we have data for (backoff)."""

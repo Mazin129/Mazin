@@ -60,6 +60,16 @@ class TraceLog:
         }
         try:
             with self._lock:
+                # rotate at ~5 MB (senior-review blocker #2): the trace log grew
+                # unbounded and read()/stats() parse the whole file each call.
+                try:
+                    if os.path.getsize(self.path) > 5_000_000:
+                        rot = self.path + ".1"
+                        if os.path.exists(rot):
+                            os.remove(rot)
+                        os.replace(self.path, rot)
+                except OSError:
+                    pass
                 with open(self.path, "a", encoding="utf-8") as f:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 self._last_id = rec["id"]

@@ -59,6 +59,16 @@ KB_FILE = os.path.join(DATA_DIR, "knowledge.json")
 # validated flag. Passages missing here (a pre-meta library) are legacy user-taught
 # content → validated.
 META_FILE = os.path.join(DATA_DIR, "knowledge_meta.json")
+
+
+def _atomic_write(path, text):
+    """Write-then-rename (atomic on the same volume) for the brain files
+    (senior-review blocker #3): a crash mid-write of knowledge.json used to be able
+    to destroy the whole library — 9 MB of full-file rewrites on every teach."""
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
 TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
 X = sp.symbols("x")
 
@@ -700,8 +710,7 @@ class Library:
                                 "validated": bool(validated)}
             self._prune_meta()
             self._save_meta()
-            json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
-                      ensure_ascii=False, indent=2)
+            _atomic_write(KB_FILE, json.dumps(self.docs, ensure_ascii=False, indent=2))
             self._fit()
             return len(fresh)
 
@@ -731,8 +740,7 @@ class Library:
 
     def _save_meta(self):
         try:
-            json.dump(self.meta, open(META_FILE, "w", encoding="utf-8"),
-                      ensure_ascii=False)
+            _atomic_write(META_FILE, json.dumps(self.meta, ensure_ascii=False))
         except Exception:
             pass
 
@@ -743,8 +751,7 @@ class Library:
             self.docs = list(texts)
             self._prune_meta()
             self._save_meta()
-            json.dump(self.docs, open(KB_FILE, "w", encoding="utf-8"),
-                      ensure_ascii=False, indent=2)
+            _atomic_write(KB_FILE, json.dumps(self.docs, ensure_ascii=False, indent=2))
             self._fit()
 
     def search(self, q, k=3):
@@ -1000,7 +1007,7 @@ class Mind:
         self._save()
 
     def _save(self):
-        json.dump(self.mem, open(MEM_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+        _atomic_write(MEM_FILE, json.dumps(self.mem, ensure_ascii=False, indent=2))
 
     @staticmethod
     def _match_fact(fact, words):
