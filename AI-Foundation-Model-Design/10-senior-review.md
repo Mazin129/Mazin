@@ -50,12 +50,17 @@ graph stores still plain writes; the TF-IDF refit remains synchronous (acceptabl
 current size — ~1–2 s — but the right fix is the documented SQLite/SQLite-FTS migration
 in the debt register).
 
-### B4 — Test flake under load: embedded golden latency gate — **FILED**
-`test_selfimprove`'s "orchestrator promotes" case runs the full golden suite in-process;
-its latency gate (8 s max) intermittently trips **while GPU training saturates the
-CPU**. It passes standalone and passed twice earlier today. Recommendation: run the
-golden gate out-of-process with a generous latency budget when `VIO_TRAINING` is set, or
-pin the flake with a retry. Not fixed (test-infrastructure, not product).
+### B4 — Golden gate failing under load — **ROOT-CAUSED & FIXED**
+The "orchestrator promotes" case in `test_selfimprove` intermittently failed. Root
+cause, found by running the gate's child exactly as the gate does: the isolated golden
+child **inherited the parent's live Ollama URL**, so the suite that is deterministic
+and LLM-free by design was calling the real 4B model — minutes per case — until the
+600 s child timeout returned fail-closed (`promotable: false`, empty cases). Fixes
+shipped: the child's env pins `VIO_LLM_URL` to a dead port (restoring the suite's own
+contract) and carries a 30 s latency budget (its synchronous semantic-model load
+measured 9.4 s under CPU contention — setup, not regression). The gate failing closed
+was the safe direction; now it also fails *accurately*. test_selfimprove: ALL PASS
+under real conditions (live Ollama + training running).
 
 ---
 
