@@ -994,6 +994,11 @@ class Master:
                 res = None
                 task.status = "failed"
                 task.error = f"{type(e).__name__}: {e}"[:200]
+                try:
+                    from guards import FAULTS
+                    FAULTS.note(f"agent:{agent.name}", task.error)
+                except Exception:
+                    pass
             task.elapsed_ms = round((time.time() - task.started) * 1000, 1)
             if res and agent.validate(res, ctx):
                 if not res.agent:               # keep a finer name the agent already set

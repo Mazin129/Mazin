@@ -132,6 +132,7 @@ class LLM:
     # ---- discovery ----
     def _detect(self):
         """Is a local Ollama server up, and which model should we use?"""
+        self._last_detect = time.time()   # watchdog: rate-limits recovery probes
         try:
             tags = self._get("/api/tags", timeout=2)
         except Exception as ex:
@@ -212,8 +213,13 @@ class LLM:
         simple prompts go to the small fast model, analytic/heavy ones to the largest.
         An explicit VIO_LLM_MODEL or a dashboard switch disables routing."""
         if not self.available:
-            self.last_error = self.reason or "no local model available"
-            return None
+            # WATCHDOG (senior review H6): if Ollama comes back after a failure,
+            # re-detect at most once a minute instead of staying dead forever.
+            if time.time() - getattr(self, "_last_detect", 0.0) > 60:
+                self._detect()
+            if not self.available:
+                self.last_error = self.reason or "no local model available"
+                return None
         use_model = self.model
         if (os.environ.get("VIO_MODEL_ROUTING", "").strip().lower() in _ROUTING_ON
                 and self.auto_picked and self.inventory
@@ -265,6 +271,16 @@ class LLM:
                                f"(after {self.last_ms/1000:.0f}s, limit "
                                f"{self.gen_timeout}s — raise VIO_LLM_TIMEOUT or use a "
                                f"smaller model)")
+            # WATCHDOG (H6): after 3 consecutive failures, re-detect — a dead/restarted
+            # Ollama flips Vio to honest lexical-only instead of hanging every question.
+            self._consecutive_failures = getattr(self, "_consecutive_failures", 0) + 1
+            if self._consecutive_failures >= 3:
+                self._detect()
+            try:
+                from guards import FAULTS
+                FAULTS.note("llm.generate", self.last_error)
+            except Exception:
+                pass
             return None
         self.last_ms = (time.time() - t0) * 1000.0
         self.total_ms += self.last_ms
@@ -288,6 +304,7 @@ class LLM:
             self.last_error = f"model returned empty text after {self.last_ms/1000:.1f}s"
             return None
         self.last_error = ""
+        self._consecutive_failures = 0          # watchdog: a success resets the streak
         self.calls += 1
         self.usage_counts["calls"] += 1
         self.usage_counts["prompt_tokens"] += int((out or {}).get("prompt_eval_count") or 0)

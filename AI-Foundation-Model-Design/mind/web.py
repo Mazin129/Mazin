@@ -21,6 +21,7 @@ mind_memory.json / knowledge.json / skills.json next to this file.
 
 import json
 import os
+import guards
 import subprocess
 import sys
 import time
@@ -49,6 +50,7 @@ _SESSIONS = set()                                   # valid session ids (memory;
 _LOGIN_FAILS = {"n": 0, "until": 0.0}               # simple brute-force throttle
 
 MIND = Mind()
+_ASK_GATE = guards.AskGate(int(os.environ.get("VIO_MAX_CONCURRENT_ASK", "2")))
 _last_activity = time.time()          # for idle-time consolidation (§14 "sleep")
 AGENT = SolveAgent(MIND)
 
@@ -1017,7 +1019,16 @@ class H(BaseHTTPRequestHandler):
             else:
                 self._s(404, "{}")
         elif path == "/api/telemetry":
-            self._s(200, json.dumps(MIND.telemetry(), ensure_ascii=False))
+            try:
+                _FAULT_SNAP = guards.FAULTS.snapshot()
+            except Exception:
+                _FAULT_SNAP = {}
+            _tel = MIND.telemetry()
+            try:
+                _tel["faults"] = guards.FAULTS.snapshot()
+            except Exception:
+                pass
+            self._s(200, json.dumps(_tel, ensure_ascii=False))
         elif path == "/api/train_all/status":
             self._s(200, json.dumps(train_all_status(), ensure_ascii=False))
         elif path == "/api/improve":
@@ -1141,12 +1152,24 @@ class H(BaseHTTPRequestHandler):
             self._s(413, '{"answer":"That is too large."}'); return
 
         if self.path == "/api/ask":
-            msg = (body.get("message") or "").strip()
-            r = reply(MIND, msg)
-            # talk.py's own fast paths (greeting/identity/time/skills) are deterministic
-            r.setdefault("confidence", 0.9 if r.get("verified") else 0.4)
-            _append_history(msg, r)                       # persist the turn for history
-            self._s(200, json.dumps(r, ensure_ascii=False))
+            # ASK GATE (senior review H4): bound concurrent generations — a locked
+            # browser tab used to queue unbounded slow LLM answers. Cap via
+            # VIO_MAX_CONCURRENT_ASK (default 2).
+            if not _ASK_GATE.acquire():
+                self._s(429, json.dumps(
+                    {"error": "Vio is busy — another question is still being answered. "
+                              "Try again in a moment."},
+                    ensure_ascii=False))
+                return
+            try:
+                msg = (body.get("message") or "").strip()
+                r = reply(MIND, msg)
+                # talk.py's own fast paths (greeting/identity/time/skills) are deterministic
+                r.setdefault("confidence", 0.9 if r.get("verified") else 0.4)
+                _append_history(msg, r)                   # persist the turn for history
+                self._s(200, json.dumps(r, ensure_ascii=False))
+            finally:
+                _ASK_GATE.release()
 
         elif self.path == "/api/feedback":
             msg = MIND.feedback(bool(body.get("good")))

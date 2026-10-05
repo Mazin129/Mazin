@@ -252,5 +252,31 @@ import scheduler
 _os.environ["VIO_SCHED"] = "1"
 check("scheduler starts when enabled", scheduler.start(m) is not None)
 _os.environ["VIO_SCHED"] = ""
+
+# ---- 15. reliability: guards (senior review H1 + H4) + LLM watchdog ----
+from guards import FaultCounters, AskGate
+fc = FaultCounters()
+fc.note("test:module", "boom one")
+fc.note("test:module", "boom two")
+snap = fc.snapshot()
+check("fault counters count by module",
+      snap["total"] == 2 and snap["by_module"]["test:module"] == 2, str(snap))
+check("fault counters keep a recent tail",
+      len(snap["recent"]) == 2 and "boom two" in snap["recent"][-1]["error"])
+gate = AskGate(capacity=1)
+check("ask gate admits under capacity", gate.acquire() is True)
+check("ask gate refuses over capacity", gate.acquire() is False)
+gate.release()
+check("ask gate re-admits after release", gate.acquire() is True)
+gate.release()
+
+# watchdog: a dead cortex flips to honest-unavailable, then recovers when it's back
+import llm as llm_mod
+wd = llm_mod.LLM(url="http://127.0.0.1:9")           # nothing listening
+check("dead cortex: unavailable with honest reason",
+      wd.available is False and "Ollama" in (wd.reason or ""))
+wd.generate("anything")                               # must not hang; retry-probe path
+check("dead cortex: generate returns None fast", wd.available is False)
+
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

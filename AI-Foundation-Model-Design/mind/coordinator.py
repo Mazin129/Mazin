@@ -165,6 +165,11 @@ class Coordinator:
                 return self.research(q, board)
         except Exception as e:
             board.log.append(("coordinator", need, f"failed: {type(e).__name__}"))
+            try:
+                from guards import FAULTS
+                FAULTS.note(f"coordinator:{need}", str(e))
+            except Exception:
+                pass
         return None
 
     def research(self, q, board):

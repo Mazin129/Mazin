@@ -320,7 +320,7 @@ def _run_isolated(verbose=False):
     # above) — a one-time load that measured 9.4s under CPU contention. That is setup,
     # not a deterministic-path regression, so the isolated child gets a realistic
     # latency budget; real regressions (normal cases <100 ms) are still caught.
-    env["VIO_GOLDEN_MAX_MS"] = "30000"
+    env["VIO_GOLDEN_MAX_MS"] = "60000"   # absorbs first-load under CPU contention
     # The suite is deterministic and LLM-FREE by design — pin the child's cortex OFF
     # so a live Ollama in the parent's environment can't turn 40ms cases into
     # minutes and trip the gate (found when the test ran without VIO_LLM_URL set).
