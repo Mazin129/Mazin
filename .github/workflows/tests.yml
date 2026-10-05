@@ -33,11 +33,14 @@ jobs:
 
       - name: Syntax check every module
         working-directory: AI-Foundation-Model-Design/mind
-        run: python -c "
+        run: |
+          python - <<'PY'
           import ast, glob
           files = [f for f in glob.glob('**/*.py', recursive=True) if 'vendor' not in f]
-          [ast.parse(open(f, encoding='utf-8').read()) for f in files]
-          print(f'{len(files)} modules parse')"
+          for f in files:
+              ast.parse(open(f, encoding='utf-8').read())
+          print(f'{len(files)} modules parse')
+          PY
 
       - name: Golden gate (correctness + safety + latency)
         working-directory: AI-Foundation-Model-Design/mind
