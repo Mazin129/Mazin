@@ -565,6 +565,28 @@ def answer_off_topic(q, ans, context=None):
     return True
 
 
+# interview-style questions ("describe your experience with…", "tell me about a
+# time…") — a persona answer, not a knowledge lookup (answer quality: these need a
+# first-person structured model answer, grounded on validated knowledge only).
+_INTERVIEW = re.compile(
+    r"\b(describe|tell me about|walk me through|explain)\s+(your|the)\s+experience\b|"
+    r"\byour\s+experience\s+(with|in|developing|building|managing)\b|"
+    r"\btell me about a time\b|\bhow (would|do) you (handle|approach|manage)\b|"
+    r"\bwhat('?s| is) your (approach|experience|background)\b", re.I)
+
+INTERVIEW_SYSTEM = (
+    "You are a senior network & security engineer answering an INTERVIEW question. "
+    "Write a first-person MODEL ANSWER the candidate can adapt: confident, structured "
+    "(context → your approach → concrete procedures/technologies → outcomes/metrics), "
+    "with real terminology. Ground every technical claim on the validated facts given; "
+    "invent no employers, projects or numbers — use placeholders where personal detail "
+    "would go. Do not mention being an AI.")
+
+
+def is_interview_question(q):
+    return bool(_INTERVIEW.search(q or ""))
+
+
 class DomainAgent(Agent):
     intent = None            # compiled regex — the query shape this expert owns
     system = ""              # domain system prompt
@@ -620,7 +642,10 @@ class DomainAgent(Agent):
         budget = int(os.environ.get("VIO_LLM_MAX_TOKENS", "3072"))
         # each expert reasons its own task through step by step (thinking models)
         think = getattr(self.mind, "_think_for", lambda _q: True)(q)
-        ans = llm.generate(prompt, system=self.system, max_tokens=budget, think=think)
+        # INTERVIEW MODE (answer quality): persona/model-answer prompt instead of the
+        # technical-expert prompt, grounded on validated knowledge only.
+        system = INTERVIEW_SYSTEM if ctx.get("interview") else self.system
+        ans = llm.generate(prompt, system=system, max_tokens=budget, think=think)
         if not ans:
             return None
         # ANTI-DRIFT GATE (answer quality): an expert answer that ignores the
@@ -709,6 +734,12 @@ class ExpertAgent(DomainAgent):
     def score(self, q, ctx):
         if not self._fires(q):
             return 0.0
+        # INTERVIEW questions fire the expert even without analytic verbs —
+        # "Describe your experience with developing security policies…" has no
+        # how/why/attack term, but it is exactly what the domain expert (in
+        # interview mode) should answer. The TOOL gate below still applies.
+        if is_interview_question(q or ""):
+            return self.base_score
         if not self._ANALYTIC.search(q or ""):
             return 0.0                         # definition/lookup → grounded retrieval
         # EXACT TOOLS WIN FIRST (the architecture's stated rule): a question the brain

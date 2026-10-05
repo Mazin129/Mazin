@@ -3900,7 +3900,8 @@ class Mind:
         if exact is not None:
             return exact
         if getattr(self, "master", None) is not None:
-            res = self.master.handle(q)
+            from agents import is_interview_question
+            res = self.master.handle(q, {"interview": is_interview_question(q)})
             if res is not None:
                 return res.as_dict()
         return self._ask_core(q)
