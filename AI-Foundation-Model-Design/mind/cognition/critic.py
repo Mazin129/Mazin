@@ -96,6 +96,8 @@ def review(q, result, conf, mind):
                 conf2 = _score({"answer": answer2, "how": "retrieval", "verified": True}, ev2)
                 if conf2 > conf + 0.05:
                     result = {"answer": answer2, "how": "retrieval", "verified": True,
+                              "team": result.get("team", ""),       # keep the coordinator story
+                              "task": result.get("task", {}),
                               "trace": trace + ["self-critic: replaced weak LLM answer "
                                                 "with grounded retrieval"]}
                     conf = conf2

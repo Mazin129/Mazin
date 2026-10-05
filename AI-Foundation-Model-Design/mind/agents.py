@@ -529,13 +529,17 @@ class KnowledgeAgent(Agent):
 # retrieved facts; without a local LLM it self-skips (falls back to the base path),
 # so it can never regress existing behaviour.
 # --------------------------------------------------------------------------- #
-def answer_off_topic(q, ans):
+def answer_off_topic(q, ans, context=None):
     """True when an expert answer ignores the question's distinctive terms — the
     anti-drift quality gate (prompt §10: verify the answer addresses the question).
-    Uses the two rarest content words of the question (longest two as a cheap
-    rarity proxy); a short or generic reply that never mentions either is flagged.
-    Deliberately conservative: only flags when the question HAS extractable terms
-    and the answer is substantive enough to have addressed them."""
+
+    Two escape hatches keep a good answer from being falsely flagged:
+      · the answer mentions one of the question's key terms, OR
+      · the answer paraphrases the GROUNDING it was given (`context`) — an expert
+        that answers "clamp TCP MSS" to a large-packet problem shares no question
+        words, but it is working the evidence it was handed, which is on-topic.
+    Flagged only when it misses the question terms AND shares almost nothing with
+    the grounding — that is genuine drift."""
     q = (q or "").strip()
     a = (ans or "").strip()
     if len(a) < 40:
@@ -547,11 +551,18 @@ def answer_off_topic(q, ans):
                "explain describe tell show give please using use used a an i we you it "
                "its if on of in to".split())
     words = [w for w in re.findall(r"[a-z0-9][a-z0-9-]{2,}", q.lower()) if w not in STOP]
-    if len(words) < 2:
-        return False
-    key = sorted(set(words), key=len, reverse=True)[:2]
     al = a.lower()
-    return not any(k in al or k[:5] in al for k in key)
+    if len(words) >= 2:
+        key = sorted(set(words), key=len, reverse=True)[:2]
+        if any(k in al or k[:5] in al for k in key):
+            return False                      # addresses the question's key terms
+    if context:                               # paraphrasing the grounding is on-topic
+        ctx_words = set(re.findall(r"[a-z0-9][a-z0-9-]{2,}",
+                                   " ".join(c for c in context if c).lower())) - STOP
+        ans_words = set(re.findall(r"[a-z0-9][a-z0-9-]{2,}", al))
+        if ans_words and ctx_words:
+            return len(ans_words & ctx_words) / len(ans_words) < 0.25
+    return True
 
 
 class DomainAgent(Agent):
@@ -613,10 +624,12 @@ class DomainAgent(Agent):
         if not ans:
             return None
         # ANTI-DRIFT GATE (answer quality): an expert answer that ignores the
-        # question's distinctive terms is probably about something else. It is kept
-        # (the user still sees it) but marked unverified with a visible note — never
-        # silently passed off as a real expert answer.
-        drift = answer_off_topic(q, ans)
+        # question's distinctive terms AND shares nothing with its grounding is
+        # probably about something else. It is kept (the user still sees it) but
+        # marked unverified with a visible note — never silently passed off as a
+        # real expert answer. Grounding-aware: paraphrasing the handed evidence
+        # counts as on-topic (see answer_off_topic).
+        drift = answer_off_topic(q, ans, context=(board_val + board_unval))
         # publish the evidence this expert used, so the quality gate can cite it and
         # decide 'verified' correctly (a security answer standing only on unvalidated
         # web notes is NOT verified).
